@@ -32,7 +32,11 @@ func openStoreFromCWD() (*store.Store, error) {
 // whether server mode is configured at all — when false the caller falls back
 // to the repository-local store.
 func openServerModeCache() (*store.Store, bool, error) {
-	cfg, err := remote.LoadConfig(remote.OSEnv, remote.DefaultConfigPath())
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, false, nil
+	}
+	cfg, err := remote.LoadConfigForCWD(remote.OSEnv, cwd)
 	if err != nil || !cfg.Enabled() || cfg.Validate() != nil {
 		return nil, false, nil
 	}

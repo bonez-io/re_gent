@@ -176,8 +176,8 @@ func (r *Recorder) markLooseObject(h store.Hash) {
 // serverConfigFor resolves server-mode configuration for a hook invocation.
 // Any error (bad URL, unparsable config file) disables server mode rather than
 // failing the turn; the reason is returned so the caller can log it.
-func serverConfigFor(env remote.Env, configPath string) (remote.Config, bool, error) {
-	cfg, err := remote.LoadConfig(env, configPath)
+func serverConfigFor(env remote.Env, cwd string) (remote.Config, bool, error) {
+	cfg, err := remote.LoadConfigForCWD(env, cwd)
 	if err != nil {
 		return remote.Config{}, false, err
 	}

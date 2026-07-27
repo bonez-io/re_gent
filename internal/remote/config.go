@@ -91,9 +91,13 @@ func ValidateRepoID(repo string) error {
 	return nil
 }
 
-// fileConfig is the on-disk shape of ~/.regent/config.toml. Only the [server]
-// table is read here; other tables (e.g. [auth]) are ignored so this file can
-// be shared with other re_gent features.
+// fileConfig is the on-disk shape of a re_gent config.toml. Three tables are
+// recognised so that the files written by different commands all resolve:
+//   - [server]: the operator escape hatch and historical shape.
+//   - [remote]: the per-repo binding written by `rgt connect` into the repo's
+//     own .regent/config.toml (url + repo_id, which is inherently per-repo).
+//   - [auth]:   the per-user credentials written by `rgt login` into
+//     ~/.regent/config.toml (server_url + token).
 type fileConfig struct {
 	Server struct {
 		URL     string `toml:"url"`
@@ -101,6 +105,14 @@ type fileConfig struct {
 		Token   string `toml:"token"`
 		Timeout string `toml:"timeout"`
 	} `toml:"server"`
+	Remote struct {
+		URL    string `toml:"url"`
+		RepoID string `toml:"repo_id"`
+	} `toml:"remote"`
+	Auth struct {
+		ServerURL string `toml:"server_url"`
+		Token     string `toml:"token"`
+	} `toml:"auth"`
 }
 
 // Env is a lookup function with the shape of os.LookupEnv. Tests inject a map
@@ -110,20 +122,84 @@ type Env func(string) (string, bool)
 // OSEnv reads the real process environment.
 func OSEnv(key string) (string, bool) { return os.LookupEnv(key) }
 
-// LoadConfig resolves server-mode configuration. Environment variables win over
-// the config file so an operator can disable or redirect server mode for one
-// process without editing shared state.
+// LoadConfig resolves server-mode configuration from a single config file plus
+// environment variables. Environment variables win over the file so an operator
+// can disable or redirect server mode for one process without editing shared
+// state. All recognised tables ([server], [remote], [auth]) in the file are
+// honoured; see LoadConfigForCWD for the repo-aware resolver used by the hooks.
 //
 // A malformed config file is reported as an error but never panics; callers in
 // the hook path treat any error as "server mode unavailable" and fall back.
 func LoadConfig(env Env, configPath string) (Config, error) {
+	var cfg Config
+	if err := mergeFile(configPath, &cfg); err != nil {
+		return Config{}, err
+	}
+	if err := applyEnv(env, &cfg); err != nil {
+		return Config{}, err
+	}
+	cfg.ServerURL = strings.TrimRight(cfg.ServerURL, "/")
+	cfg.Timeout = clampTimeout(cfg.Timeout)
+	return cfg, nil
+}
+
+// LoadConfigForCWD resolves server-mode configuration for a working directory,
+// layering lowest-to-highest precedence:
+//
+//  1. the repo-local .regent/config.toml at or above cwd  ([remote] url+repo_id,
+//     written by `rgt connect`)
+//  2. the per-user ~/.regent/config.toml                  ([auth] token from
+//     `rgt login`; [server] operator overrides)
+//  3. environment variables
+//
+// This is what wires `rgt connect` (which writes a repo-local [remote] binding)
+// to server mode: repo_id is inherently per-repo, so it must come from the repo
+// rather than from shared global state, which also keeps multi-repo coherent.
+func LoadConfigForCWD(env Env, cwd string) (Config, error) {
+	var cfg Config
+	if p := RepoConfigPath(cwd); p != "" {
+		if err := mergeFile(p, &cfg); err != nil {
+			return Config{}, err
+		}
+	}
+	if g := DefaultConfigPath(); g != "" {
+		if err := mergeFile(g, &cfg); err != nil {
+			return Config{}, err
+		}
+	}
+	if err := applyEnv(env, &cfg); err != nil {
+		return Config{}, err
+	}
+	cfg.ServerURL = strings.TrimRight(cfg.ServerURL, "/")
+	cfg.Timeout = clampTimeout(cfg.Timeout)
+	return cfg, nil
+}
+
+// RepoConfigPath returns the path to the nearest .regent/config.toml at or above
+// cwd, or "" when no re_gent repository is found. It lets server-mode resolution
+// pick up the per-repo [remote] binding that `rgt connect` writes.
+func RepoConfigPath(cwd string) string {
+	dir := cwd
+	for dir != "" {
+		p := filepath.Join(dir, ".regent", "config.toml")
+		if info, err := os.Stat(p); err == nil && !info.IsDir() {
+			return p
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return ""
+}
+
+// applyEnv overlays REGENT_* environment variables onto cfg. Env values always
+// win over file values.
+func applyEnv(env Env, cfg *Config) error {
 	if env == nil {
 		env = OSEnv
 	}
-
-	var cfg Config
-	fileErr := loadFileConfig(configPath, &cfg)
-
 	if v, ok := env("REGENT_SERVER_URL"); ok {
 		cfg.ServerURL = strings.TrimSpace(v)
 	}
@@ -139,21 +215,18 @@ func LoadConfig(env Env, configPath string) (Config, error) {
 	if v, ok := env("REGENT_SERVER_TIMEOUT"); ok {
 		d, err := time.ParseDuration(strings.TrimSpace(v))
 		if err != nil {
-			return Config{}, fmt.Errorf("invalid REGENT_SERVER_TIMEOUT %q: %w", v, err)
+			return fmt.Errorf("invalid REGENT_SERVER_TIMEOUT %q: %w", v, err)
 		}
 		cfg.Timeout = d
 	}
-
-	cfg.ServerURL = strings.TrimRight(cfg.ServerURL, "/")
-	cfg.Timeout = clampTimeout(cfg.Timeout)
-
-	if fileErr != nil {
-		return Config{}, fileErr
-	}
-	return cfg, nil
+	return nil
 }
 
-func loadFileConfig(path string, cfg *Config) error {
+// mergeFile fills empty fields of cfg from a config file, honouring the
+// [server], [remote] and [auth] tables. Existing non-empty fields are left
+// untouched, so callers layer files by calling mergeFile in precedence order.
+// A missing file is not an error.
+func mergeFile(path string, cfg *Config) error {
 	if path == "" {
 		return nil
 	}
@@ -171,17 +244,31 @@ func loadFileConfig(path string, cfg *Config) error {
 		return fmt.Errorf("parse %s: %w", path, err)
 	}
 
-	cfg.ServerURL = strings.TrimSpace(fc.Server.URL)
-	cfg.RepoID = strings.TrimSpace(fc.Server.RepoID)
-	cfg.Token = strings.TrimSpace(fc.Server.Token)
-	if fc.Server.Timeout != "" {
-		d, err := time.ParseDuration(fc.Server.Timeout)
+	setIfEmpty(&cfg.ServerURL, fc.Server.URL, fc.Remote.URL, fc.Auth.ServerURL)
+	setIfEmpty(&cfg.RepoID, fc.Server.RepoID, fc.Remote.RepoID)
+	setIfEmpty(&cfg.Token, fc.Server.Token, fc.Auth.Token)
+	if cfg.Timeout == 0 && strings.TrimSpace(fc.Server.Timeout) != "" {
+		d, err := time.ParseDuration(strings.TrimSpace(fc.Server.Timeout))
 		if err != nil {
 			return fmt.Errorf("parse %s: invalid server.timeout %q: %w", path, fc.Server.Timeout, err)
 		}
 		cfg.Timeout = d
 	}
 	return nil
+}
+
+// setIfEmpty sets *dst to the first non-empty, trimmed candidate, but only when
+// *dst is currently empty. This is the primitive behind precedence layering.
+func setIfEmpty(dst *string, candidates ...string) {
+	if *dst != "" {
+		return
+	}
+	for _, c := range candidates {
+		if v := strings.TrimSpace(c); v != "" {
+			*dst = v
+			return
+		}
+	}
 }
 
 func clampTimeout(d time.Duration) time.Duration {
