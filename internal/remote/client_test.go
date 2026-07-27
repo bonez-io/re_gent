@@ -143,8 +143,8 @@ func TestClientRetriesServerErrorsButNotClientErrors(t *testing.T) {
 	if _, err := c.PutObject(context.Background(), []byte("payload")); err != nil {
 		t.Fatalf("PutObject should have retried through 5xx: %v", err)
 	}
-	if got := srv.Requests(http.MethodPost); got != 3 {
-		t.Fatalf("POST attempts = %d, want 3", got)
+	if got := srv.Requests(http.MethodPut); got != 3 {
+		t.Fatalf("PUT attempts = %d, want 3", got)
 	}
 
 	// A 401 is terminal: retrying a bad token only wastes the agent's turn.
@@ -155,8 +155,8 @@ func TestClientRetriesServerErrorsButNotClientErrors(t *testing.T) {
 	if _, err := c2.PutObject(context.Background(), []byte("payload")); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("error = %v, want ErrUnauthorized", err)
 	}
-	if got := srv2.Requests(http.MethodPost); got != 1 {
-		t.Fatalf("POST attempts = %d, want 1 (no retry on auth failure)", got)
+	if got := srv2.Requests(http.MethodPut); got != 1 {
+		t.Fatalf("PUT attempts = %d, want 1 (no retry on auth failure)", got)
 	}
 }
 

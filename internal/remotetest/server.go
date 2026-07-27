@@ -198,31 +198,33 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/"), "/", 4)
-	if len(parts) < 3 || parts[0] != "repos" {
+	// Route like the production server: the first path segment is the repo id,
+	// then the kind (objects|refs), then the remainder — NOT /repos/{repo}/….
+	parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/"), "/", 3)
+	if len(parts) < 2 {
 		http.NotFound(w, r)
 		return
 	}
-	kind, rest := parts[2], ""
-	if len(parts) == 4 {
-		rest = parts[3]
+	kind, rest := parts[1], ""
+	if len(parts) == 3 {
+		rest = parts[2]
 	}
 
 	switch {
-	case kind == "objects" && r.Method == http.MethodPost:
-		s.postObject(w, r)
+	case kind == "objects" && r.Method == http.MethodPut:
+		s.putObject(w, r, store.Hash(rest))
 	case kind == "objects" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
 		s.getObject(w, store.Hash(rest))
 	case kind == "refs" && r.Method == http.MethodGet:
 		s.getRef(w, rest)
-	case kind == "refs" && r.Method == http.MethodPut:
-		s.putRef(w, r, rest)
+	case kind == "refs" && r.Method == http.MethodPost:
+		s.postRef(w, r, rest)
 	default:
 		http.NotFound(w, r)
 	}
 }
 
-func (s *Server) postObject(w http.ResponseWriter, r *http.Request) {
+func (s *Server) putObject(w http.ResponseWriter, r *http.Request, hash store.Hash) {
 	data, err := io.ReadAll(io.LimitReader(r.Body, maxObjectSize+1))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "read body")
@@ -232,13 +234,22 @@ func (s *Server) postObject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusRequestEntityTooLarge, "object too large")
 		return
 	}
+	// Like the production server: the body must hash to the address in the URL.
+	if got := store.HashBytes(data); got != hash {
+		writeError(w, http.StatusBadRequest, "content hash mismatch")
+		return
+	}
 
-	h := store.HashBytes(data)
 	s.mu.Lock()
-	s.objects[h] = data
+	_, existed := s.objects[hash]
+	s.objects[hash] = data
 	s.mu.Unlock()
 
-	writeJSON(w, http.StatusCreated, map[string]string{"hash": string(h)})
+	if existed {
+		w.WriteHeader(http.StatusOK)
+	} else {
+		w.WriteHeader(http.StatusCreated)
+	}
 }
 
 func (s *Server) getObject(w http.ResponseWriter, h store.Hash) {
@@ -264,10 +275,10 @@ func (s *Server) getRef(w http.ResponseWriter, name string) {
 	writeJSON(w, http.StatusOK, map[string]string{"hash": string(h)})
 }
 
-func (s *Server) putRef(w http.ResponseWriter, r *http.Request, name string) {
+func (s *Server) postRef(w http.ResponseWriter, r *http.Request, name string) {
 	var req struct {
-		Expected string `json:"expected"`
-		New      string `json:"new"`
+		Old string `json:"old"`
+		New string `json:"new"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -285,7 +296,7 @@ func (s *Server) putRef(w http.ResponseWriter, r *http.Request, name string) {
 	}
 
 	current := s.refs[name]
-	if string(current) != req.Expected {
+	if string(current) != req.Old {
 		writeError(w, http.StatusConflict, "ref was modified concurrently")
 		return
 	}
