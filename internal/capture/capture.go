@@ -102,7 +102,7 @@ func Open(cwd string) (*Recorder, bool, error) {
 		return nil, false, fmt.Errorf("cwd is required")
 	}
 
-	cfg, enabled, cfgErr := serverConfigFor(remote.OSEnv, remote.DefaultConfigPath())
+	cfg, enabled, cfgErr := serverConfigFor(remote.OSEnv, cwd)
 	if cfgErr != nil {
 		logServerModeFallback(cfg, cfgErr)
 	}
