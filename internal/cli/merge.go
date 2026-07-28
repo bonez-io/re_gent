@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,9 +9,17 @@ import (
 
 	"github.com/regent-vcs/regent/internal/capture"
 	"github.com/regent-vcs/regent/internal/collab"
+	"github.com/regent-vcs/regent/internal/remote"
 	"github.com/regent-vcs/regent/internal/store"
 	"github.com/spf13/cobra"
 )
+
+// errServerModeMergeUnsupported is returned when merge is attempted on a repo
+// connected to a server. Merge has no server-delivery path yet, so running it
+// against the disposable local cache would silently lose the result.
+var errServerModeMergeUnsupported = errors.New(
+	"merge is not yet supported in server mode: the merge would be written to the local cache without reaching the server.\n" +
+		"Merge before connecting the repo to a server (or merge server-side).")
 
 // MergeCmd returns the `rgt merge` command.
 func MergeCmd() *cobra.Command {
@@ -40,7 +49,15 @@ writing any step.`,
 }
 
 func runMerge(cwd, refA, refB string) error {
-	s, err := openMergeStore(cwd)
+	// Server mode delivers capture through the spool/push path; merge has no
+	// such path yet. Opening the disposable local cache and advancing a ref
+	// there would silently lose the merge (it never reaches the server), so
+	// refuse rather than pretend it worked.
+	if cfg, cfgErr := remote.LoadConfigForCWD(remote.OSEnv, cwd); cfgErr == nil && cfg.Enabled() {
+		return errServerModeMergeUnsupported
+	}
+
+	s, err := store.Open(filepath.Join(cwd, ".regent"))
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}
@@ -117,16 +134,6 @@ func writeMergeStep(s *store.Store, tipA, tipB store.Hash) (mergeHash store.Hash
 	}
 
 	return mergeHash, canonRef, nil
-}
-
-// openMergeStore opens the store for a merge, honouring server mode: when the
-// repo is connected to a server the session refs live in the machine-local
-// cache rather than a repo-local .regent/ directory.
-func openMergeStore(cwd string) (*store.Store, error) {
-	if s, ok, err := openServerModeCache(); ok {
-		return s, err
-	}
-	return store.Open(filepath.Join(cwd, ".regent"))
 }
 
 // resolveRef accepts either a raw step hash or a session ID and returns the

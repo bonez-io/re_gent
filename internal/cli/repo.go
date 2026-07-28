@@ -17,28 +17,36 @@ import (
 // A broken or absent configuration degrades to the local store, so a stray
 // environment variable can never make a normal local repository unreadable.
 func openStoreFromCWD() (*store.Store, error) {
-	if s, ok, err := openServerModeCache(); ok {
-		return s, err
-	}
-
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil, err
 	}
+	s, ok, err := openServerModeCache(cwd)
+	if ok {
+		return s, err
+	}
+	if err != nil {
+		// Configured-but-broken (malformed/unreadable config) must be visible,
+		// not silently degraded to an empty local store for a server-mode repo.
+		fmt.Fprintf(os.Stderr, "warning: server-mode config could not be loaded, using local store: %v\n", err)
+	}
 	return store.OpenFromDir(cwd)
 }
 
-// openServerModeCache opens the server-mode cache store. The bool reports
-// whether server mode is configured at all — when false the caller falls back
-// to the repository-local store.
-func openServerModeCache() (*store.Store, bool, error) {
-	cwd, err := os.Getwd()
+// openServerModeCache opens the server-mode cache store for cwd. The bool
+// reports whether server mode is configured at all — when false with a nil
+// error the caller falls back to the repository-local store; a non-nil error
+// means server mode is configured but unusable and must not be swallowed.
+func openServerModeCache(cwd string) (*store.Store, bool, error) {
+	cfg, err := remote.LoadConfigForCWD(remote.OSEnv, cwd)
 	if err != nil {
+		return nil, false, err
+	}
+	if !cfg.Enabled() {
 		return nil, false, nil
 	}
-	cfg, err := remote.LoadConfigForCWD(remote.OSEnv, cwd)
-	if err != nil || !cfg.Enabled() || cfg.Validate() != nil {
-		return nil, false, nil
+	if err := cfg.Validate(); err != nil {
+		return nil, false, err
 	}
 
 	cacheDir, err := remote.CacheDirFor(cfg)

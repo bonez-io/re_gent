@@ -182,7 +182,14 @@ func RepoConfigPath(cwd string) string {
 	dir := cwd
 	for dir != "" {
 		p := filepath.Join(dir, ".regent", "config.toml")
-		if info, err := os.Stat(p); err == nil && !info.IsDir() {
+		info, err := os.Stat(p)
+		switch {
+		case err == nil && !info.IsDir():
+			return p
+		case err != nil && !os.IsNotExist(err):
+			// A permission/IO error is not "no config here": return the path so
+			// the caller's read surfaces the real error instead of silently
+			// treating the repo as disconnected from its server.
 			return p
 		}
 		parent := filepath.Dir(dir)

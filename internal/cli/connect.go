@@ -206,5 +206,22 @@ func deriveRepoID(projectRoot string) string {
 	if id == "" {
 		return "repo"
 	}
+	if reservedRepoIDs[id] {
+		// A folder literally named e.g. "repos"/"aux"/"nul" derives an id the
+		// server rejects as reserved; suffix it so connect doesn't 400.
+		return id + "-repo"
+	}
 	return id
+}
+
+// reservedRepoIDs mirrors the server's reserved set (internal/server/server.go):
+// the "repos" registry path plus Windows reserved device names. A derived id
+// that lands on one of these would be rejected by the server, so deriveRepoID
+// steers around them.
+var reservedRepoIDs = map[string]bool{
+	"repos": true, "con": true, "prn": true, "aux": true, "nul": true,
+	"com1": true, "com2": true, "com3": true, "com4": true, "com5": true,
+	"com6": true, "com7": true, "com8": true, "com9": true,
+	"lpt1": true, "lpt2": true, "lpt3": true, "lpt4": true, "lpt5": true,
+	"lpt6": true, "lpt7": true, "lpt8": true, "lpt9": true,
 }
