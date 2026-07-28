@@ -65,7 +65,7 @@ EOF
 printf '{"session_id":"claude-manual","cwd":"%s","last_assistant_message":"done"}' "$PWD" \
   | "$RGT" message-hook assistant
 
-"$RGT" log --session claude_code:claude-manual
+"$RGT" log --session claude_code--claude-manual
 "$RGT" sessions
 ```
 
@@ -102,8 +102,8 @@ EOF
 printf '{"hook_event_name":"Stop","session_id":"codex-manual","turn_id":"turn-1","cwd":"%s","last_assistant_message":"done"}' "$PWD" \
   | "$RGT" codex-hook
 
-"$RGT" log --session codex_cli:codex-manual --json
-HASH=$("$RGT" log --session codex_cli:codex-manual --oneline | awk 'NR==1 {print $1}')
+"$RGT" log --session codex_cli--codex-manual --json
+HASH=$("$RGT" log --session codex_cli--codex-manual --oneline | awk 'NR==1 {print $1}')
 "$RGT" show "$HASH"
 ```
 
@@ -117,7 +117,7 @@ printf '{"hook_event_name":"UserPromptSubmit","session_id":"codex-manual","turn_
 printf '{"hook_event_name":"Stop","session_id":"codex-manual","turn_id":"turn-2","cwd":"%s","last_assistant_message":"ok"}' "$PWD" \
   | "$RGT" codex-hook
 
-"$RGT" log --session codex_cli:codex-manual
+"$RGT" log --session codex_cli--codex-manual
 ```
 
 Expected result: no new step is created, and the no-tool messages do not attach to later tool-using turns.

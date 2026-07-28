@@ -40,7 +40,7 @@ writing any step.`,
 }
 
 func runMerge(cwd, refA, refB string) error {
-	s, err := store.Open(filepath.Join(cwd, ".regent"))
+	s, err := openMergeStore(cwd)
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}
@@ -117,6 +117,16 @@ func writeMergeStep(s *store.Store, tipA, tipB store.Hash) (mergeHash store.Hash
 	}
 
 	return mergeHash, canonRef, nil
+}
+
+// openMergeStore opens the store for a merge, honouring server mode: when the
+// repo is connected to a server the session refs live in the machine-local
+// cache rather than a repo-local .regent/ directory.
+func openMergeStore(cwd string) (*store.Store, error) {
+	if s, ok, err := openServerModeCache(); ok {
+		return s, err
+	}
+	return store.Open(filepath.Join(cwd, ".regent"))
 }
 
 // resolveRef accepts either a raw step hash or a session ID and returns the
