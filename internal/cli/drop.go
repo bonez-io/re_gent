@@ -2,14 +2,15 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/regent-vcs/regent/internal/capture"
-	"github.com/regent-vcs/regent/internal/collab"
 	"github.com/regent-vcs/regent/internal/ignore"
 	"github.com/regent-vcs/regent/internal/index"
 	"github.com/regent-vcs/regent/internal/remote"
@@ -99,11 +100,14 @@ func runDrop(cwd, sessionRef string, dryRun bool) error {
 	}
 
 	// 4. Reverse-apply the session's contribution (git-revert-style 3-way).
-	reverted, conflicts := revertSession(baseTree, tipTree, currentTree)
-	if len(conflicts) > 0 {
-		printDropConflicts(conflicts)
-		// TODO: interactive conflict resolution. For now drop aborts cleanly.
-		return fmt.Errorf("%d conflict(s): another session changed files this drop would revert — resolve them first", len(conflicts))
+	reverted, err := revertSession(baseTree, tipTree, currentTree)
+	if err != nil {
+		var dc *dropConflicts
+		if errors.As(err, &dc) {
+			printDropConflicts(dc.paths)
+			// TODO: interactive conflict resolution. For now drop aborts cleanly.
+		}
+		return err
 	}
 
 	d := computeRewindDiff(currentTree, reverted)
@@ -128,22 +132,28 @@ func runDrop(cwd, sessionRef string, dryRun bool) error {
 	// write (e.g. the target session's own Stop hook advancing it), so doing it
 	// first keeps disk and refs consistent: a lost CAS aborts with the workspace
 	// untouched instead of leaving reverted files behind an un-advanced ref.
-	if _, err := writeDropStep(s, idx, tip, tipStep, reverted); err != nil {
+	dropHash, err := writeDropStep(s, idx, tip, tipStep, reverted)
+	if err != nil {
 		return fmt.Errorf("record drop step (workspace not modified): %w", err)
 	}
 
 	fmt.Printf("%s rgt rewind %s\n\n", style.Label("Undo with:"), undoStepHash)
 
-	// 7. Apply the revert to disk (write-before-delete; the reliable step).
+	// 7. Apply the revert to disk (write-before-delete; the reliable step). If
+	// it fails, roll the session ref back to its old tip so the DAG never claims
+	// a revert the workspace didn't actually receive.
 	if err := applyRewindToWorkspace(s, cwd, d); err != nil {
-		return fmt.Errorf("apply drop (run the undo above to recover): %w", err)
+		if rbErr := s.UpdateRef("sessions/"+sessionID, dropHash, tip); rbErr != nil {
+			return fmt.Errorf("apply drop failed AND ref rollback failed — run the undo above to restore files: apply=%v; rollback=%w", err, rbErr)
+		}
+		return fmt.Errorf("apply drop (ref rolled back; run the undo above to restore files): %w", err)
 	}
 
 	fmt.Printf("%s %d added, %d modified, %d deleted (dropped session %s)\n",
 		style.Success("Drop complete:"),
 		len(d.adds), len(d.modifies), len(d.deletes), sessionID)
 
-	// 7. In server mode, deliver the dropped session ref + undo checkpoint ref
+	// 8. In server mode, deliver the dropped session ref + undo checkpoint ref
 	// to the server (no-op in local mode).
 	if err := deliverDropToServer(s, cwd, "sessions/"+sessionID, undoStepHash); err != nil {
 		return fmt.Errorf("deliver drop to server: %w", err)
@@ -175,24 +185,43 @@ func sessionBaseTree(s *store.Store, sessionID string) (*store.Tree, error) {
 
 	var baseTree store.Hash
 	baseTS := int64(-1)
-	for _, tip := range refs {
+	for refName, tip := range refs {
+		// Skip synthetic checkpoint refs (rewind/drop undo points): they record
+		// a PRE-change tree, not a real workspace state a session built on, so
+		// selecting one as a base yields a stale/incorrect result.
+		if strings.HasPrefix(refName, "rewind--") {
+			continue
+		}
 		for cur := tip; cur != ""; {
 			st, err := s.ReadStep(cur)
 			if err != nil {
-				break
+				// A genuine object-store failure (corrupt blob, or an object not
+				// hydrated into a partial server-mode cache) is never a normal
+				// end-of-chain. Fail loudly rather than compute a wrong base.
+				return nil, fmt.Errorf("read step %s while resolving base (run 'rgt sync --pull' if the server-mode cache is incomplete): %w", cur, err)
 			}
-			// Steps of the target session are never before its own start, so
-			// the firstTS filter naturally excludes them.
-			if st.TimestampNanos < firstTS && st.TimestampNanos > baseTS {
-				baseTS = st.TimestampNanos
-				baseTree = st.Tree
+			if st.TimestampNanos < firstTS {
+				// Newest step in this chain before the target started; deeper
+				// ancestors are only older. Tie-break by tree hash so the choice
+				// is deterministic across independent session chains.
+				if st.TimestampNanos > baseTS ||
+					(st.TimestampNanos == baseTS && st.Tree > baseTree) {
+					baseTS = st.TimestampNanos
+					baseTree = st.Tree
+				}
+				break
 			}
 			cur = st.Parent
 		}
 	}
 
 	if baseTree == "" {
-		return &store.Tree{}, nil
+		// Nothing recorded precedes this session — it is the earliest. Its
+		// snapshot includes any files that pre-existed capture, so reverting
+		// would clear the workspace; refuse rather than wipe it.
+		return nil, fmt.Errorf(
+			"cannot drop %q: it is the earliest recorded session, so its snapshot includes files that predate capture and reverting it would clear the workspace.\nUse 'rgt rewind <step>' to restore a specific earlier state instead",
+			sessionID)
 	}
 	return s.ReadTree(baseTree)
 }
@@ -223,14 +252,26 @@ func sessionFirstStepTime(s *store.Store, sessionID string) (int64, error) {
 	return min, nil
 }
 
+// dropConflicts is the error revertSession returns when another session changed
+// a file the drop would revert. Callers detect it with errors.As. Using a
+// single (tree, error) return — mutually exclusive by construction — avoids the
+// "ignored the second value" footgun of returning a bare conflict slice.
+type dropConflicts struct {
+	paths []string
+}
+
+func (e *dropConflicts) Error() string {
+	return fmt.Sprintf("%d conflict(s): another session changed files this drop would revert — resolve them first", len(e.paths))
+}
+
 // revertSession computes the workspace tree with the target session's
 // contribution reversed. For every path the session changed (base != tip):
 //   - if the current workspace still holds the session's value, revert it to
 //     the base value (delete if the base had no such file);
 //   - if the current value already equals the base value, it's already
 //     reverted — a no-op;
-//   - otherwise another session changed it afterward: a conflict.
-func revertSession(base, tip, current *store.Tree) (*store.Tree, []collab.Conflict) {
+//   - otherwise another session changed it afterward: a *dropConflicts error.
+func revertSession(base, tip, current *store.Tree) (*store.Tree, error) {
 	baseM := entryMap(base)
 	tipM := entryMap(tip)
 	curM := entryMap(current)
@@ -248,39 +289,35 @@ func revertSession(base, tip, current *store.Tree) (*store.Tree, []collab.Confli
 		changed[p] = struct{}{}
 	}
 
-	var conflicts []collab.Conflict
+	var conflicts []string
 	for p := range changed {
-		be, bok := baseM[p]
-		te, tok := tipM[p]
-		baseBlob, tipBlob := blobOf(be, bok), blobOf(te, tok)
+		// A missing key yields the zero TreeEntry, whose Blob is "" — exactly
+		// the "absent" sentinel, so no ok-flag helper is needed.
+		be := baseM[p]
+		baseBlob, tipBlob := be.Blob, tipM[p].Blob
 		if baseBlob == tipBlob {
 			continue // the session did not change this path
 		}
-		ce, cok := curM[p]
-		curBlob := blobOf(ce, cok)
+		curBlob := curM[p].Blob
 
 		switch {
 		case curBlob == baseBlob:
 			// already at base value — nothing to do
 		case curBlob == tipBlob:
 			// safe to revert to the base value
-			if bok {
+			if baseBlob != "" {
 				result[p] = be
 			} else {
 				delete(result, p)
 			}
 		default:
-			conflicts = append(conflicts, collab.Conflict{
-				Path:       p,
-				BaseBlob:   baseBlob,
-				OursBlob:   curBlob,
-				TheirsBlob: tipBlob,
-			})
+			conflicts = append(conflicts, p)
 		}
 	}
 
 	if len(conflicts) > 0 {
-		return nil, conflicts
+		sort.Strings(conflicts)
+		return nil, &dropConflicts{paths: conflicts}
 	}
 	return treeFromMap(result), nil
 }
@@ -306,17 +343,19 @@ func writeDropStep(s *store.Store, idx *index.DB, tip store.Hash, tipStep *store
 	if err != nil {
 		return "", fmt.Errorf("write drop step: %w", err)
 	}
-	_ = idx.IndexStep(dropHash, dropStep, reverted)
+	if err := idx.IndexStep(dropHash, dropStep, reverted); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: drop recorded but not indexed (log/show/sessions may omit it): %v\n", err)
+	}
 	if err := s.UpdateRef("sessions/"+tipStep.SessionID, tip, dropHash); err != nil {
 		return "", fmt.Errorf("advance session ref: %w", err)
 	}
 	return dropHash, nil
 }
 
-func printDropConflicts(conflicts []collab.Conflict) {
+func printDropConflicts(paths []string) {
 	fmt.Fprintln(os.Stderr, "CONFLICT: another session changed files this drop would revert — drop blocked")
-	for _, c := range conflicts {
-		fmt.Fprintf(os.Stderr, "  conflict: %s\n", c.Path)
+	for _, p := range paths {
+		fmt.Fprintf(os.Stderr, "  conflict: %s\n", p)
 	}
 }
 
@@ -326,13 +365,6 @@ func entryMap(t *store.Tree) map[string]store.TreeEntry {
 		m[e.Path] = e
 	}
 	return m
-}
-
-func blobOf(e store.TreeEntry, ok bool) store.Hash {
-	if !ok {
-		return ""
-	}
-	return e.Blob
 }
 
 func treeFromMap(m map[string]store.TreeEntry) *store.Tree {

@@ -242,3 +242,113 @@ func TestDrop_RecordsUndoCheckpoint(t *testing.T) {
 		t.Error("expected a rewind-- undo checkpoint session ref after a drop")
 	}
 }
+
+// turn records one captured turn chained on `parent` (the session's previous
+// step, or "" for its first), so tests can build multi-turn sessions.
+func (f *dropFixture) turn(t *testing.T, sessionID string, parent store.Hash, files map[string]string) store.Hash {
+	t.Helper()
+	f.ts++
+	st := &store.Step{Parent: parent, Tree: f.tree(t, files), SessionID: sessionID, Origin: "claude_code", TimestampNanos: f.ts}
+	h, err := f.s.WriteStep(st)
+	if err != nil {
+		t.Fatalf("write step: %v", err)
+	}
+	old, _ := f.s.ReadRef("sessions/" + sessionID)
+	if err := f.s.UpdateRef("sessions/"+sessionID, old, h); err != nil {
+		t.Fatalf("update ref: %v", err)
+	}
+	return h
+}
+
+// T1: dropping the earliest session is refused (its snapshot includes
+// pre-existing files, so reverting would clear the workspace).
+func TestDrop_RefusesEarliestSession(t *testing.T) {
+	f := newDropFixture(t)
+	f.session(t, "claude_code--A", map[string]string{"pre.txt": "existed", "a.txt": "A"})
+	f.writeWorkspace(t, map[string]string{"pre.txt": "existed", "a.txt": "A"})
+
+	if err := runDrop(f.dir, "claude_code--A", false); err == nil {
+		t.Fatal("expected refusal when dropping the earliest recorded session")
+	}
+	if v, ok := readFile(t, f.dir, "pre.txt"); !ok || v != "existed" {
+		t.Errorf("pre.txt = %q,%v; refusing must not touch the workspace", v, ok)
+	}
+}
+
+// T2: a rewind-- checkpoint ref (holding a PRE-change tree) must NOT be chosen
+// as a session's base.
+func TestDrop_IgnoresRewindCheckpointAsBase(t *testing.T) {
+	f := newDropFixture(t)
+	f.session(t, "claude_code--A", map[string]string{"x.txt": "A"})
+	// Synthetic checkpoint with a STALE tree, timestamped between A and B so a
+	// naive "most recent before B" scan would wrongly prefer it.
+	f.session(t, "rewind--999", map[string]string{"x.txt": "STALE"})
+	f.session(t, "claude_code--B", map[string]string{"x.txt": "A", "b.txt": "B"})
+	f.writeWorkspace(t, map[string]string{"x.txt": "A", "b.txt": "B"})
+
+	if err := runDrop(f.dir, "claude_code--B", false); err != nil {
+		t.Fatalf("drop B: %v", err)
+	}
+	if v, ok := readFile(t, f.dir, "x.txt"); !ok || v != "A" {
+		t.Errorf("x.txt = %q,%v; want A (rewind checkpoint must not be the base)", v, ok)
+	}
+	if _, ok := readFile(t, f.dir, "b.txt"); ok {
+		t.Error("b.txt should have been removed")
+	}
+}
+
+// T5: a multi-turn session — sessionFirstStepTime must find the EARLIEST turn,
+// so the whole session's contribution (both turns) is reverted.
+func TestDrop_MultiTurnSession(t *testing.T) {
+	f := newDropFixture(t)
+	f.session(t, "claude_code--A", map[string]string{"keep.txt": "A"})
+	t1 := f.turn(t, "claude_code--B", "", map[string]string{"keep.txt": "A", "b1.txt": "1"})
+	f.turn(t, "claude_code--B", t1, map[string]string{"keep.txt": "A", "b1.txt": "1", "b2.txt": "2"})
+	f.writeWorkspace(t, map[string]string{"keep.txt": "A", "b1.txt": "1", "b2.txt": "2"})
+
+	if err := runDrop(f.dir, "claude_code--B", false); err != nil {
+		t.Fatalf("drop B: %v", err)
+	}
+	if _, ok := readFile(t, f.dir, "b1.txt"); ok {
+		t.Error("b1.txt (B turn 1) should be removed")
+	}
+	if _, ok := readFile(t, f.dir, "b2.txt"); ok {
+		t.Error("b2.txt (B turn 2) should be removed")
+	}
+	if v, ok := readFile(t, f.dir, "keep.txt"); !ok || v != "A" {
+		t.Errorf("keep.txt = %q,%v; want A", v, ok)
+	}
+}
+
+// T6: after a drop, the session's new tip is a drop step parented on the old
+// tip, tagged TurnID "drop", preserving lineage.
+func TestDrop_DropStepMetadata(t *testing.T) {
+	f := newDropFixture(t)
+	f.session(t, "claude_code--A", map[string]string{"keep.txt": "A"})
+	oldTip := f.session(t, "claude_code--B", map[string]string{"keep.txt": "A", "drop.txt": "B"})
+	f.writeWorkspace(t, map[string]string{"keep.txt": "A", "drop.txt": "B"})
+
+	if err := runDrop(f.dir, "claude_code--B", false); err != nil {
+		t.Fatalf("drop B: %v", err)
+	}
+	newTip, err := f.s.ReadRef("sessions/claude_code--B")
+	if err != nil {
+		t.Fatalf("read ref: %v", err)
+	}
+	if newTip == oldTip {
+		t.Fatal("session ref was not advanced to a drop step")
+	}
+	step, err := f.s.ReadStep(newTip)
+	if err != nil {
+		t.Fatalf("read drop step: %v", err)
+	}
+	if step.Parent != oldTip {
+		t.Errorf("drop step Parent = %s; want old tip %s", step.Parent, oldTip)
+	}
+	if step.TurnID != "drop" {
+		t.Errorf("drop step TurnID = %q; want \"drop\"", step.TurnID)
+	}
+	if step.SessionID != "claude_code--B" {
+		t.Errorf("drop step SessionID = %q; want claude_code--B", step.SessionID)
+	}
+}

@@ -8,8 +8,8 @@ import (
 	"github.com/regent-vcs/regent/internal/store"
 )
 
-// openStoreFromCWD resolves the object store the read commands (log, show,
-// blame, sessions, status, cat) should read from.
+// openStoreFromCWD resolves the object store commands operate on (read commands
+// log/show/blame/sessions/status/cat, and workspace commands rewind/drop).
 //
 // Server mode wins when it is configured, using the same precedence as
 // capture.Open: once the server is the source of truth the repository has no
