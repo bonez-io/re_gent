@@ -21,6 +21,14 @@ func openStoreFromCWD() (*store.Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	return openStoreForCWD(cwd)
+}
+
+// openStoreForCWD resolves the store for an explicit working directory: server
+// mode wins when configured, otherwise the repository-local store. Keeping the
+// resolver cwd-scoped lets callers that already know their directory avoid
+// depending on the process working directory.
+func openStoreForCWD(cwd string) (*store.Store, error) {
 	s, ok, err := openServerModeCache(cwd)
 	if ok {
 		return s, err
