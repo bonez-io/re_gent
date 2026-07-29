@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/regent-vcs/regent/internal/config"
 	"github.com/regent-vcs/regent/internal/remote"
@@ -42,7 +43,11 @@ func PushCmd() *cobra.Command {
 
 			// Transport via the RE-14 server-mode push path (canonical after
 			// the cutover). runSync with default options performs a push.
-			cfg, err := remote.LoadConfig(remote.OSEnv, remote.DefaultConfigPath())
+			cwd, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			cfg, err := remote.LoadConfigForCWD(remote.OSEnv, cwd)
 			if err != nil {
 				return err
 			}

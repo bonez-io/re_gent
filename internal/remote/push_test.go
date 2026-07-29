@@ -148,7 +148,7 @@ func TestPushUploadsOnlyTheDelta(t *testing.T) {
 	if _, err := Push(context.Background(), f.cache, f.cli, f.spool, testRef); err != nil {
 		t.Fatalf("first push: %v", err)
 	}
-	firstUploads := f.srv.Requests("POST")
+	firstUploads := f.srv.Requests("PUT")
 
 	// Only a.txt changes; big.txt must not be re-uploaded.
 	f.addStep(t, map[string]string{"a.txt": "two", "big.txt": "unchanged"}, "second")
@@ -161,8 +161,8 @@ func TestPushUploadsOnlyTheDelta(t *testing.T) {
 	if res.Objects != 5 {
 		t.Fatalf("delta push uploaded %d objects, want 5 (unchanged file must be skipped)", res.Objects)
 	}
-	if f.srv.Requests("POST") != firstUploads+5 {
-		t.Fatalf("unexpected upload count: %d", f.srv.Requests("POST")-firstUploads)
+	if f.srv.Requests("PUT") != firstUploads+5 {
+		t.Fatalf("unexpected upload count: %d", f.srv.Requests("PUT")-firstUploads)
 	}
 }
 

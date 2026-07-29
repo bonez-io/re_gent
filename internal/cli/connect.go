@@ -147,7 +147,8 @@ func registerRepo(serverURL, token, projectRoot string, client *http.Client) (st
 		client = http.DefaultClient
 	}
 
-	body, _ := json.Marshal(map[string]string{"path": projectRoot})
+	repoID := deriveRepoID(projectRoot)
+	body, _ := json.Marshal(map[string]string{"repo_id": repoID})
 	req, err := http.NewRequest(http.MethodPost, serverURL+"/repos", bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("build request: %w", err)
@@ -181,4 +182,46 @@ func registerRepo(serverURL, token, projectRoot string, client *http.Client) (st
 		return "", fmt.Errorf("server returned empty repo_id")
 	}
 	return result.RepoID, nil
+}
+
+// deriveRepoID turns a project directory into a server-legal repo id: lowercase,
+// characters restricted to [a-z0-9._-], starting with an alphanumeric, max 64
+// bytes. Mirrors the server's repoIDRE (^[a-z0-9][a-z0-9._-]{0,63}$) so a repo
+// registers under a stable, human-readable name derived from its folder.
+func deriveRepoID(projectRoot string) string {
+	base := strings.ToLower(filepath.Base(projectRoot))
+	var b strings.Builder
+	for _, r := range base {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	id := strings.TrimLeft(b.String(), "._-")
+	if len(id) > 64 {
+		id = id[:64]
+	}
+	if id == "" {
+		return "repo"
+	}
+	if reservedRepoIDs[id] {
+		// A folder literally named e.g. "repos"/"aux"/"nul" derives an id the
+		// server rejects as reserved; suffix it so connect doesn't 400.
+		return id + "-repo"
+	}
+	return id
+}
+
+// reservedRepoIDs mirrors the server's reserved set (internal/server/server.go):
+// the "repos" registry path plus Windows reserved device names. A derived id
+// that lands on one of these would be rejected by the server, so deriveRepoID
+// steers around them.
+var reservedRepoIDs = map[string]bool{
+	"repos": true, "con": true, "prn": true, "aux": true, "nul": true,
+	"com1": true, "com2": true, "com3": true, "com4": true, "com5": true,
+	"com6": true, "com7": true, "com8": true, "com9": true,
+	"lpt1": true, "lpt2": true, "lpt3": true, "lpt4": true, "lpt5": true,
+	"lpt6": true, "lpt7": true, "lpt8": true, "lpt9": true,
 }

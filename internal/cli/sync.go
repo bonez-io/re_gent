@@ -47,7 +47,11 @@ func SyncCmd() *cobra.Command {
 			if len(args) == 1 {
 				opts.ref = args[0]
 			}
-			cfg, err := remote.LoadConfig(remote.OSEnv, remote.DefaultConfigPath())
+			cwd, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			cfg, err := remote.LoadConfigForCWD(remote.OSEnv, cwd)
 			if err != nil {
 				return err
 			}
