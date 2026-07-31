@@ -24,6 +24,7 @@ type serveParams struct {
 	Addr          string
 	DataDir       string
 	MaxObjectSize int64
+	AuthToken     string
 }
 
 // ServeCmd creates the serve command: one server, many repos.
@@ -48,6 +49,8 @@ func ServeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&p.Addr, "addr", p.Addr, "address to listen on")
 	cmd.Flags().StringVar(&p.DataDir, "data", "", "directory holding served repos (default ~/.regent-server)")
 	cmd.Flags().Int64Var(&p.MaxObjectSize, "max-object-size", p.MaxObjectSize, "maximum accepted object size in bytes")
+	cmd.Flags().StringVar(&p.AuthToken, "auth-token", "",
+		"require 'Authorization: Bearer <token>' on every request (also read from env REGENT_SERVER_TOKEN); use a long random value; empty leaves the server open")
 
 	return cmd
 }
@@ -70,7 +73,15 @@ func runServe(ctx context.Context, p serveParams) error {
 	if err != nil {
 		return err
 	}
-	srv, err := server.New(dataDir, server.WithMaxObjectBytes(p.MaxObjectSize))
+	// Flag wins over env so a single process can be overridden without editing
+	// shared state; empty leaves the server open (local-dev default).
+	token := p.AuthToken
+	if token == "" {
+		token = os.Getenv("REGENT_SERVER_TOKEN")
+	}
+	srv, err := server.New(dataDir,
+		server.WithMaxObjectBytes(p.MaxObjectSize),
+		server.WithAuthToken(token))
 	if err != nil {
 		return err
 	}
@@ -89,8 +100,12 @@ func runServe(ctx context.Context, p serveParams) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%s serving %d repo(s) from %s on http://%s\n",
-		style.Brand("re_gent"), len(repos), dataDir, ln.Addr())
+	authStatus := "open (no auth — set --auth-token to require a bearer token)"
+	if token != "" {
+		authStatus = "bearer-token auth enabled"
+	}
+	fmt.Printf("%s serving %d repo(s) from %s on http://%s — %s\n",
+		style.Brand("re_gent"), len(repos), dataDir, ln.Addr(), authStatus)
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- httpSrv.Serve(ln) }()

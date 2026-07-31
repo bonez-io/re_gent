@@ -56,6 +56,65 @@ func createRepo(t *testing.T, ts *httptest.Server, repoID string) int {
 	return resp.StatusCode
 }
 
+// TestBearerTokenAuth verifies a configured auth token gates every endpoint:
+// requests with a missing or wrong bearer token are 401, and a correct token
+// passes the gate (200 on a real endpoint).
+func TestBearerTokenAuth(t *testing.T) {
+	const token = "s3cr3t-token"
+	_, _, ts := newTestServer(t, WithAuthToken(token))
+
+	do := func(method, path, auth string) int {
+		t.Helper()
+		req, err := http.NewRequest(method, ts.URL+path, nil)
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		if auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s %s: %v", method, path, err)
+		}
+		defer resp.Body.Close()
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return resp.StatusCode
+	}
+
+	fullHash := strings.Repeat("a", 64)
+	for _, path := range []string{"/repos", "/alpha/objects/" + fullHash, "/alpha/refs"} {
+		if got := do(http.MethodGet, path, ""); got != http.StatusUnauthorized {
+			t.Errorf("no-auth GET %s = %d, want 401", path, got)
+		}
+		if got := do(http.MethodGet, path, "Bearer wrong-token"); got != http.StatusUnauthorized {
+			t.Errorf("wrong-token GET %s = %d, want 401", path, got)
+		}
+		// A correct token must get PAST the auth gate (any status but 401).
+		if got := do(http.MethodGet, path, "Bearer "+token); got == http.StatusUnauthorized {
+			t.Errorf("correct-token GET %s = 401, want to pass auth", path)
+		}
+	}
+
+	if got := do(http.MethodGet, "/repos", "Bearer "+token); got != http.StatusOK {
+		t.Errorf("correct-token GET /repos = %d, want 200", got)
+	}
+}
+
+// TestNoAuthTokenStaysOpen verifies the server is fully open when no token is
+// configured — the backwards-compatible local-dev default.
+func TestNoAuthTokenStaysOpen(t *testing.T) {
+	_, _, ts := newTestServer(t)
+	resp, err := http.Get(ts.URL + "/repos")
+	if err != nil {
+		t.Fatalf("GET /repos: %v", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("open server GET /repos = %d, want 200", resp.StatusCode)
+	}
+}
+
 // putObject uploads data to repo and returns (status, hash).
 func putObject(t *testing.T, ts *httptest.Server, repo string, data []byte) (int, store.Hash) {
 	t.Helper()

@@ -20,6 +20,7 @@
 package server
 
 import (
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -82,6 +83,7 @@ var (
 type Server struct {
 	dataDir        string
 	maxObjectBytes int64
+	authToken      string
 	logger         *log.Logger
 
 	mu    sync.Mutex
@@ -103,6 +105,13 @@ func WithMaxObjectBytes(n int64) Option {
 // WithLogger sets the logger used for server-side failures. Nil disables logging.
 func WithLogger(l *log.Logger) Option {
 	return func(s *Server) { s.logger = l }
+}
+
+// WithAuthToken enables bearer-token authentication. When token is non-empty,
+// every request must present "Authorization: Bearer <token>" or receive 401.
+// An empty token (the default) leaves the server open — the local-dev behavior.
+func WithAuthToken(token string) Option {
+	return func(s *Server) { s.authToken = token }
 }
 
 // New creates a Server persisting repo data under dataDir, which is created if
@@ -218,12 +227,38 @@ func (s *Server) openRepo(repoID string, create bool) (*store.Store, error) {
 	return st, nil
 }
 
+// authorized reports whether the request may proceed. When no auth token is
+// configured the server is open (local-dev default); otherwise every request
+// must carry a matching "Authorization: Bearer <token>" header. The comparison
+// is constant-time so a wrong token cannot be recovered by timing the response.
+func (s *Server) authorized(r *http.Request) bool {
+	if s.authToken == "" {
+		return true
+	}
+	// The auth-scheme token is case-insensitive per RFC 7235 §2.1, so match the
+	// "Bearer " prefix without regard to case; the secret itself is still
+	// compared in constant time.
+	const prefix = "bearer "
+	h := r.Header.Get("Authorization")
+	if len(h) < len(prefix) || !strings.EqualFold(h[:len(prefix)], prefix) {
+		return false
+	}
+	got := h[len(prefix):]
+	return subtle.ConstantTimeCompare([]byte(got), []byte(s.authToken)) == 1
+}
+
 // ServeHTTP implements http.Handler.
 //
 // Routing is done by hand rather than with http.ServeMux because the mux
 // rewrites "a/../b" and "./a" before a handler ever sees them, which would hide
 // traversal attempts from validation.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if !s.authorized(r) {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		httpError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
 	segs, err := pathSegments(r.URL.EscapedPath())
 	if err != nil {
 		httpError(w, http.StatusBadRequest, err.Error())
