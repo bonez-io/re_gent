@@ -75,6 +75,68 @@ func TestConnect_WritesRemoteConfig(t *testing.T) {
 	}
 }
 
+// TestConnect_WithTokenSkipsLogin verifies `connect --token` stores the token
+// and registers the repo in one shot, with no prior `rgt login`.
+func TestConnect_WithTokenSkipsLogin(t *testing.T) {
+	srv := newTestServer(t, http.StatusOK, "myrepo")
+	root := t.TempDir()
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	// No token written beforehand — connect --token must persist it itself.
+
+	const token = "connect-token-0123456789" // >= 16 chars (config.CheckAuth)
+	if err := runConnect(connectParams{
+		serverURL:   srv.URL,
+		projectRoot: root,
+		token:       token,
+		configPath:  cfgPath,
+		httpClient:  srv.Client(),
+	}); err != nil {
+		t.Fatalf("runConnect: %v", err)
+	}
+
+	// The token was stored globally, exactly as `rgt login` would.
+	gcfg, err := config.LoadFrom(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if gcfg.Auth.Token != token {
+		t.Errorf("stored token: got %q, want %q", gcfg.Auth.Token, token)
+	}
+
+	// The repo registered and its remote config was written.
+	s, err := store.Open(filepath.Join(root, ".regent"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	rc, err := s.ReadRepoConfig()
+	if err != nil {
+		t.Fatalf("ReadRepoConfig: %v", err)
+	}
+	if rc.Remote.URL != srv.URL || rc.Remote.RepoID != "myrepo" {
+		t.Errorf("remote: got {%q, %q}, want {%q, %q}",
+			rc.Remote.URL, rc.Remote.RepoID, srv.URL, "myrepo")
+	}
+}
+
+// TestConnect_ShortTokenRejected verifies an invalid (too short) --token fails
+// before any registration happens.
+func TestConnect_ShortTokenRejected(t *testing.T) {
+	srv := newTestServer(t, http.StatusOK, "myrepo")
+	root := t.TempDir()
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+
+	err := runConnect(connectParams{
+		serverURL:   srv.URL,
+		projectRoot: root,
+		token:       "short", // < 16 chars
+		configPath:  cfgPath,
+		httpClient:  srv.Client(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid --token") {
+		t.Fatalf("want invalid --token error, got %v", err)
+	}
+}
+
 func TestConnect_InstallsClaudeHooks(t *testing.T) {
 	srv := newTestServer(t, http.StatusCreated, "repo-hooks")
 	root := t.TempDir()
