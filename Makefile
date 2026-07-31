@@ -1,4 +1,4 @@
-.PHONY: help build test test-race test-cover lint fmt clean install
+.PHONY: help build test test-race test-cover lint fmt clean install server server-down server-logs
 
 # Default target
 help:
@@ -12,6 +12,11 @@ help:
 	@echo "  make fmt        - Format code with gofmt"
 	@echo "  make clean      - Remove build artifacts"
 	@echo "  make install    - Install rgt to GOPATH/bin"
+	@echo ""
+	@echo "  Self-hosted server (Docker):"
+	@echo "  make server      - Build & start the server (docker compose up -d)"
+	@echo "  make server-down - Stop the server"
+	@echo "  make server-logs - Follow server logs"
 	@echo ""
 
 # Version stamping (mirrors .goreleaser.yaml ldflags). Falls back gracefully
@@ -50,3 +55,21 @@ clean:
 
 install:
 	go install ./cmd/rgt
+
+# --- Self-hosted server (Docker) -------------------------------------------
+# Start the object/ref server in a container. Set REGENT_SERVER_TOKEN to require
+# bearer-token auth (recommended for anything network-reachable):
+#   REGENT_SERVER_TOKEN=$(openssl rand -hex 32) make server
+server:
+	docker compose up -d --build
+	@echo ""
+	@echo "re_gent server is up on http://localhost:$${REGENT_PORT:-7654} (health: /healthz)."
+	@echo "Connect a repo to it:"
+	@echo "  rgt connect http://localhost:$${REGENT_PORT:-7654}"
+	@echo "If REGENT_SERVER_TOKEN is set, run 'rgt login http://localhost:$${REGENT_PORT:-7654}' first."
+
+server-down:
+	docker compose down
+
+server-logs:
+	docker compose logs -f
