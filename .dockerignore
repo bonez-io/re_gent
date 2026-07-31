@@ -1,0 +1,28 @@
+# Keep the Docker build context small and reproducible.
+# Only Go sources + go.mod/go.sum are needed to build ./cmd/rgt.
+.git
+.github
+.gitignore
+.dockerignore
+Dockerfile
+
+# Docs / meta — not needed to build the binary.
+docs
+wiki
+assets
+examples
+*.md
+.claude
+.agents
+.goreleaser.yaml
+.golangci.yml
+.coderabbit.yaml
+
+# Local scratch / integration dirs.
+test
+demo
+symphony
+feature-tracker
+
+# Prebuilt local binary (rebuilt inside the image).
+rgt

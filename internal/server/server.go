@@ -253,6 +253,16 @@ func (s *Server) authorized(r *http.Request) bool {
 // rewrites "a/../b" and "./a" before a handler ever sees them, which would hide
 // traversal attempts from validation.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Health check is intentionally unauthenticated (and matched before the auth
+	// gate) so container and orchestrator probes succeed even when a token is
+	// configured. The exemption is scoped to exactly "/healthz".
+	if r.URL.Path == "/healthz" {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "ok")
+		return
+	}
+
 	if !s.authorized(r) {
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		httpError(w, http.StatusUnauthorized, "unauthorized")

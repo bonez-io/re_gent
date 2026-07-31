@@ -115,6 +115,36 @@ func TestNoAuthTokenStaysOpen(t *testing.T) {
 	}
 }
 
+// TestHealthzIsUnauthenticated verifies /healthz returns 200 "ok" without auth
+// even when a token is configured, while other paths still require the token.
+func TestHealthzIsUnauthenticated(t *testing.T) {
+	_, _, ts := newTestServer(t, WithAuthToken("s3cr3t-token"))
+
+	resp, err := http.Get(ts.URL + "/healthz")
+	if err != nil {
+		t.Fatalf("GET /healthz: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /healthz = %d, want 200", resp.StatusCode)
+	}
+	if string(body) != "ok" {
+		t.Errorf("GET /healthz body = %q, want \"ok\"", body)
+	}
+
+	// A normal endpoint must still require the token.
+	resp2, err := http.Get(ts.URL + "/repos")
+	if err != nil {
+		t.Fatalf("GET /repos: %v", err)
+	}
+	defer resp2.Body.Close()
+	_, _ = io.Copy(io.Discard, resp2.Body)
+	if resp2.StatusCode != http.StatusUnauthorized {
+		t.Errorf("GET /repos without auth = %d, want 401", resp2.StatusCode)
+	}
+}
+
 // putObject uploads data to repo and returns (status, hash).
 func putObject(t *testing.T, ts *httptest.Server, repo string, data []byte) (int, store.Hash) {
 	t.Helper()
