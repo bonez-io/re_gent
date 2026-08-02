@@ -102,6 +102,95 @@ func TestRecorder_CodexTurnCreatesOneStep(t *testing.T) {
 	}
 }
 
+// TestRecorder_StepPersistsConversationBlob asserts a recorded turn attaches a
+// content-addressed conversation blob to its step and that the blob carries the
+// user prompt text, so the conversation survives being pushed to a server that
+// has no SQLite index.
+func TestRecorder_StepPersistsConversationBlob(t *testing.T) {
+	root := t.TempDir()
+	if _, err := store.Init(root); err != nil {
+		t.Fatalf("init store: %v", err)
+	}
+
+	recorder, ok, err := Open(root)
+	if err != nil {
+		t.Fatalf("open recorder: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected initialized recorder")
+	}
+	defer func() { _ = recorder.Close() }()
+
+	meta := SessionMetadata{SessionID: "conv-session", Origin: OriginCodexCLI, Model: "gpt-5.5"}
+	sessionID := canonicalSessionID(OriginCodexCLI, meta.SessionID)
+
+	if err := recorder.UpsertSession(meta); err != nil {
+		t.Fatalf("upsert session: %v", err)
+	}
+	const prompt = "write hello.txt with a greeting"
+	if err := recorder.RecordUserPrompt(UserPrompt{SessionMetadata: meta, TurnID: "turn-1", Prompt: prompt}); err != nil {
+		t.Fatalf("record prompt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "hello.txt"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if err := recorder.RecordToolUse(ToolUse{
+		SessionMetadata: meta,
+		TurnID:          "turn-1",
+		ToolName:        "write",
+		ToolUseID:       "call_1",
+		ToolInput:       json.RawMessage(`{"file_path":"hello.txt","content":"hello\n"}`),
+		ToolResponse:    json.RawMessage(`{"ok":true}`),
+	}); err != nil {
+		t.Fatalf("record tool: %v", err)
+	}
+	if err := recorder.RecordAssistantAndFinalize(AssistantResponse{
+		SessionMetadata:      meta,
+		TurnID:               "turn-1",
+		LastAssistantMessage: "all done",
+	}); err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+
+	steps, err := recorder.Index.ListSteps(sessionID, 10)
+	if err != nil {
+		t.Fatalf("list steps: %v", err)
+	}
+	if len(steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(steps))
+	}
+
+	step, err := recorder.Store.ReadStep(steps[0].Hash)
+	if err != nil {
+		t.Fatalf("read step: %v", err)
+	}
+	if step.Conversation == "" {
+		t.Fatal("expected step to carry a non-empty Conversation hash")
+	}
+
+	data, err := recorder.Store.ReadBlob(step.Conversation)
+	if err != nil {
+		t.Fatalf("read conversation blob: %v", err)
+	}
+	var entries []conversationEntry
+	if err := json.Unmarshal(data, &entries); err != nil {
+		t.Fatalf("unmarshal conversation blob: %v", err)
+	}
+
+	var foundPrompt bool
+	for _, e := range entries {
+		if e.Type == "tool_call" || e.Type == "tool_result" {
+			t.Fatalf("conversation blob must not contain tool messages, got %q", e.Type)
+		}
+		if e.Type == "user" && e.Text == prompt {
+			foundPrompt = true
+		}
+	}
+	if !foundPrompt {
+		t.Fatalf("conversation blob missing the user prompt; entries = %#v", entries)
+	}
+}
+
 func TestRecorder_PiTurnCreatesOneStep(t *testing.T) {
 	root := t.TempDir()
 	if _, err := store.Init(root); err != nil {

@@ -606,6 +606,14 @@ func (r *Recorder) createStepForTurn(session SessionMetadata, scope turnScope) (
 		if haveUsage {
 			r.attachUsage(step, parentHash, cumulativeUsage)
 		}
+		// Persist the turn's conversation as a content-addressed blob so it
+		// travels with the step to a server that has no SQLite index. A failure
+		// here is logged, never fatal: capture must not break the agent's turn.
+		if convHash, cerr := conversationBlob(r.Store, messages); cerr != nil {
+			LogHookError(r.Store.Root, fmt.Sprintf("conversation blob for turn %q: %v", scope.id, cerr))
+		} else {
+			step.Conversation = convHash
+		}
 
 		stepHash, err := r.Store.WriteStep(step)
 		if err != nil {
@@ -815,6 +823,41 @@ func causesFromMessages(messages []index.Message) []store.Cause {
 		causes = append(causes, cause)
 	}
 	return causes
+}
+
+// conversationEntry is one user/assistant/reasoning message preserved in a
+// step's conversation blob.
+type conversationEntry struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+	TS   int64  `json:"ts,omitempty"`
+}
+
+// conversationBlob content-addresses the turn's conversation — the user prompt
+// and the assistant/reasoning narration — and returns its hash. Tool calls and
+// results are skipped because they already travel with the step as Causes. It
+// returns an empty hash and writes nothing when the turn has no such messages,
+// which keeps steps without conversation text byte-identical.
+func conversationBlob(s *store.Store, messages []index.Message) (store.Hash, error) {
+	var entries []conversationEntry
+	for _, msg := range messages {
+		switch msg.MessageType {
+		case "user", "assistant", "reasoning":
+			entries = append(entries, conversationEntry{
+				Type: msg.MessageType,
+				Text: msg.ContentText,
+				TS:   msg.Timestamp,
+			})
+		}
+	}
+	if len(entries) == 0 {
+		return "", nil
+	}
+	data, err := json.Marshal(entries)
+	if err != nil {
+		return "", fmt.Errorf("marshal conversation: %w", err)
+	}
+	return s.WriteBlob(data)
 }
 
 // marshalStep serializes a step to the same JSON format that WriteStep uses,

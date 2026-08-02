@@ -86,20 +86,25 @@ func clampedSub(a, b int64) int64 {
 
 // Step is the equivalent of a git commit
 type Step struct {
-	Parent          Hash     `json:"parent,omitempty"`
-	SecondaryParent Hash     `json:"secondary_parent,omitempty"` // merge second parent
-	Tree            Hash     `json:"tree"`
-	Transcript      Hash     `json:"transcript,omitempty"`
-	Config          Hash     `json:"config,omitempty"` // system prompt + tools + memory hash
-	Cause           Cause    `json:"cause,omitempty"`  // DEPRECATED: use Causes instead (kept for backward compat)
-	Causes          []Cause  `json:"causes,omitempty"` // Multiple tools in one conversation turn
-	SessionID       string   `json:"session_id"`
-	Origin          string   `json:"origin,omitempty"`
-	TurnID          string   `json:"turn_id,omitempty"`
-	AgentID         string   `json:"agent_id,omitempty"`
-	Author          Author   `json:"author,omitempty"` // human who initiated this step
-	TimestampNanos  int64    `json:"ts"`
-	Effects         []Effect `json:"effects,omitempty"`
+	Parent          Hash `json:"parent,omitempty"`
+	SecondaryParent Hash `json:"secondary_parent,omitempty"` // merge second parent
+	Tree            Hash `json:"tree"`
+	Transcript      Hash `json:"transcript,omitempty"`
+	// Conversation is a content-addressed blob holding the turn's conversation
+	// (the user prompt plus assistant/reasoning text) so it survives being
+	// pushed to a server that has no local SQLite index to reconstruct it from.
+	// omitempty keeps steps written before this field existed byte-identical.
+	Conversation   Hash     `json:"conversation,omitempty"`
+	Config         Hash     `json:"config,omitempty"` // system prompt + tools + memory hash
+	Cause          Cause    `json:"cause,omitempty"`  // DEPRECATED: use Causes instead (kept for backward compat)
+	Causes         []Cause  `json:"causes,omitempty"` // Multiple tools in one conversation turn
+	SessionID      string   `json:"session_id"`
+	Origin         string   `json:"origin,omitempty"`
+	TurnID         string   `json:"turn_id,omitempty"`
+	AgentID        string   `json:"agent_id,omitempty"`
+	Author         Author   `json:"author,omitempty"` // human who initiated this step
+	TimestampNanos int64    `json:"ts"`
+	Effects        []Effect `json:"effects,omitempty"`
 
 	// Usage is the API usage attributed to this step: the delta between the
 	// transcript's totals now and the totals recorded on the parent step.

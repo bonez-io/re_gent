@@ -246,6 +246,9 @@ func stepObjects(cache *store.Store, step *store.Step, base store.Hash, seen map
 	if step.Transcript != "" {
 		out = append(out, step.Transcript)
 	}
+	if step.Conversation != "" {
+		out = append(out, step.Conversation)
+	}
 
 	return out, nil
 }
