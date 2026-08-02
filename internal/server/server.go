@@ -291,6 +291,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch {
+	case len(segs) >= 2 && segs[1] == "api":
+		s.handleAPI(w, r, repoID, segs)
 	case len(segs) == 3 && segs[1] == "objects":
 		s.handleObject(w, r, repoID, store.Hash(segs[2]))
 	case len(segs) == 2 && segs[1] == "refs":
