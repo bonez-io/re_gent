@@ -43,13 +43,22 @@ type conversationEntry struct {
 	TS   int64  `json:"ts,omitempty"`
 }
 
+// authorJSON is the human who initiated a session, surfaced so the viewer can
+// attribute each session in a shared team timeline. Omitted entirely when the
+// session's steps carry no author (older data, or a host with no git identity).
+type authorJSON struct {
+	Name  string `json:"name,omitempty"`
+	Email string `json:"email,omitempty"`
+}
+
 // sessionSummary is one entry in the GET /api/sessions response.
 type sessionSummary struct {
-	SessionID    string `json:"session_id"`
-	AgentID      string `json:"agent_id"`
-	StepCount    int    `json:"step_count"`
-	LastActivity string `json:"last_activity"`
-	Title        string `json:"title"`
+	SessionID    string      `json:"session_id"`
+	AgentID      string      `json:"agent_id"`
+	StepCount    int         `json:"step_count"`
+	LastActivity string      `json:"last_activity"`
+	Title        string      `json:"title"`
+	Author       *authorJSON `json:"author,omitempty"`
 }
 
 // sessionsResponse is the GET /api/sessions envelope.
@@ -177,8 +186,25 @@ func (s *Server) summarizeSession(st *store.Store, repoID, sessionID string, tip
 		StepCount:    len(steps),
 		LastActivity: rfc3339FromNanos(tipStep.TimestampNanos),
 		Title:        s.firstUserPrompt(st, repoID, steps[len(steps)-1]),
+		Author:       sessionAuthor(steps),
 	}
 	return summary, true
+}
+
+// sessionAuthor returns the human who ran a session: the first non-empty author
+// across the walked steps (newest first), so a tip step captured before a git
+// identity was set still resolves to whoever ran the earlier work. Returns nil
+// when no step carries an author, which the summary then omits.
+func sessionAuthor(steps []*store.Step) *authorJSON {
+	for _, step := range steps {
+		if step == nil {
+			continue
+		}
+		if step.Author.Name != "" || step.Author.Email != "" {
+			return &authorJSON{Name: step.Author.Name, Email: step.Author.Email}
+		}
+	}
+	return nil
 }
 
 // firstUserPrompt reads a step's conversation blob and returns the text of its

@@ -115,6 +115,101 @@ func TestAPISessionsReconstructsTitleAndMetadata(t *testing.T) {
 	}
 }
 
+// TestAPISessionsIncludesAuthor asserts /api/sessions surfaces the human author
+// (name + email) captured on a session's steps, so the viewer can attribute each
+// session in a shared team timeline. The tip step has no author of its own, so
+// this also exercises the fall-back to the first non-empty author in the walk.
+func TestAPISessionsIncludesAuthor(t *testing.T) {
+	_, _, ts := newTestServer(t)
+	const repo = "alpha"
+	const sessionID = "claude_code--authsess"
+	const wantName = "Ada Lovelace"
+	const wantEmail = "ada@team.dev"
+
+	// Earliest step carries the author (as every captured step normally would).
+	rootTS := time.Date(2026, 8, 2, 10, 0, 0, 0, time.UTC).UnixNano()
+	rootStep := store.Step{
+		Tree:           "deadbeef",
+		SessionID:      sessionID,
+		Origin:         "claude_code",
+		Author:         store.Author{Name: wantName, Email: wantEmail},
+		TimestampNanos: rootTS,
+	}
+	rootHash := putStep(t, ts, repo, rootStep)
+
+	// Tip step has NO author — the summary must fall back to the root's author.
+	tipTS := time.Date(2026, 8, 2, 11, 0, 0, 0, time.UTC).UnixNano()
+	tipStep := store.Step{
+		Tree:           "cafebabe",
+		Parent:         rootHash,
+		SessionID:      sessionID,
+		Origin:         "claude_code",
+		TimestampNanos: tipTS,
+	}
+	tipHash := putStep(t, ts, repo, tipStep)
+
+	if code, _ := postRef(t, ts, repo, "sessions/"+sessionID, "", string(tipHash)); code != http.StatusOK {
+		t.Fatalf("set session ref: status %d", code)
+	}
+
+	status, body := getAPI(t, ts, "/"+repo+"/api/sessions", "")
+	if status != http.StatusOK {
+		t.Fatalf("GET /api/sessions: status %d, body %s", status, body)
+	}
+	var got sessionsResponse
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("decode sessions: %v (body %s)", err, body)
+	}
+	if len(got.Sessions) != 1 {
+		t.Fatalf("sessions=%d, want 1 (body %s)", len(got.Sessions), body)
+	}
+	sess := got.Sessions[0]
+	if sess.Author == nil {
+		t.Fatalf("author is nil, want name=%q email=%q (body %s)", wantName, wantEmail, body)
+	}
+	if sess.Author.Name != wantName {
+		t.Errorf("author.name = %q, want %q", sess.Author.Name, wantName)
+	}
+	if sess.Author.Email != wantEmail {
+		t.Errorf("author.email = %q, want %q", sess.Author.Email, wantEmail)
+	}
+}
+
+// TestAPISessionsOmitsEmptyAuthor asserts a session whose steps carry no author
+// (older data, or a host with no git identity) omits the author field entirely
+// rather than emitting an empty object the viewer would have to special-case.
+func TestAPISessionsOmitsEmptyAuthor(t *testing.T) {
+	_, _, ts := newTestServer(t)
+	const repo = "alpha"
+	const sessionID = "claude_code--noauthor"
+
+	step := store.Step{
+		Tree:           "deadbeef",
+		SessionID:      sessionID,
+		Origin:         "claude_code",
+		TimestampNanos: time.Date(2026, 8, 2, 10, 0, 0, 0, time.UTC).UnixNano(),
+	}
+	h := putStep(t, ts, repo, step)
+	if code, _ := postRef(t, ts, repo, "sessions/"+sessionID, "", string(h)); code != http.StatusOK {
+		t.Fatalf("set session ref: status %d", code)
+	}
+
+	status, body := getAPI(t, ts, "/"+repo+"/api/sessions", "")
+	if status != http.StatusOK {
+		t.Fatalf("GET /api/sessions: status %d, body %s", status, body)
+	}
+	var got sessionsResponse
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("decode sessions: %v (body %s)", err, body)
+	}
+	if len(got.Sessions) != 1 {
+		t.Fatalf("sessions=%d, want 1 (body %s)", len(got.Sessions), body)
+	}
+	if got.Sessions[0].Author != nil {
+		t.Errorf("author = %+v, want nil for an author-less session", got.Sessions[0].Author)
+	}
+}
+
 // TestAPILogReconstructsStepShape builds a one-step session whose step has a
 // Write cause and a conversation blob, then asserts /api/log returns the step
 // with the right messages, files, causes, and args.
