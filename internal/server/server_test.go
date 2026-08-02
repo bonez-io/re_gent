@@ -1124,3 +1124,63 @@ func TestHandlerListRefs(t *testing.T) {
 		t.Errorf("expected ref s1=%s, got %s", h, lr.Refs["s1"])
 	}
 }
+
+// TestInstallEndpoint verifies GET /install serves the personalized shell
+// installer WITHOUT auth even when a token is configured: it must mention this
+// server's host and the client env var REGENT_TOKEN, and never require a token.
+func TestInstallEndpoint(t *testing.T) {
+	const token = "s3cr3t-token"
+	_, _, ts := newTestServer(t, WithAuthToken(token))
+
+	for _, path := range []string{"/install", "/install.sh"} {
+		resp, err := http.Get(ts.URL + path) // no Authorization header
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s (no auth) = %d, want 200", path, resp.StatusCode)
+		}
+		script := string(body)
+		// httptest.Server listens on 127.0.0.1:<port>; the script must target
+		// THIS server via its Host header.
+		host := strings.TrimPrefix(ts.URL, "http://")
+		if !strings.Contains(script, host) {
+			t.Errorf("GET %s body does not mention server host %q", path, host)
+		}
+		if !strings.Contains(script, "REGENT_TOKEN") {
+			t.Errorf("GET %s body does not mention REGENT_TOKEN", path)
+		}
+		if !strings.Contains(script, "/bin/rgt") {
+			t.Errorf("GET %s body does not reference the /bin/rgt download route", path)
+		}
+	}
+}
+
+// TestBinaryEndpoint verifies GET /bin/rgt serves a non-empty body WITHOUT auth
+// even when a token is configured. In tests os.Executable() is the test binary,
+// which is fine: we only assert 200 + non-empty.
+func TestBinaryEndpoint(t *testing.T) {
+	const token = "s3cr3t-token"
+	_, _, ts := newTestServer(t, WithAuthToken(token))
+
+	resp, err := http.Get(ts.URL + "/bin/rgt") // no Authorization header
+	if err != nil {
+		t.Fatalf("GET /bin/rgt: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /bin/rgt (no auth) = %d, want 200", resp.StatusCode)
+	}
+	n, err := io.Copy(io.Discard, resp.Body)
+	if err != nil {
+		t.Fatalf("read /bin/rgt body: %v", err)
+	}
+	if n == 0 {
+		t.Errorf("GET /bin/rgt returned an empty body")
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "application/octet-stream" {
+		t.Errorf("GET /bin/rgt Content-Type = %q, want application/octet-stream", ct)
+	}
+}

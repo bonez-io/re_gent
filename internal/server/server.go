@@ -263,6 +263,20 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The onboarding endpoints are intentionally unauthenticated (and matched
+	// before the auth gate, like /healthz): they expose the open-source binary
+	// and a bootstrap script that carries no secret, never any repo data. This
+	// is what makes `curl -fsSL http://<server>/install | sh` a one-paste
+	// onboarding with no token required. See install.go.
+	switch r.URL.Path {
+	case "/install", "/install.sh":
+		s.handleInstallScript(w, r)
+		return
+	case "/bin/rgt":
+		s.handleBinary(w, r)
+		return
+	}
+
 	if !s.authorized(r) {
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		httpError(w, http.StatusUnauthorized, "unauthorized")

@@ -93,21 +93,47 @@ Best for teams on VS Code Dev Containers / GitHub Codespaces / a shared dev box.
 
 ### 2) One-line installer — one paste (plain local laptops)
 
-Host [`install.sh`](./install.sh) on your team server (the planned `GET /install`
-endpoint) and share:
+Your running `rgt serve` instance **hosts the installer for you** at `GET /install`
+(implemented in `internal/server/install.go`). Just share:
 
 ```sh
-curl -fsSL https://YOUR-TEAM-SERVER/install | sh
+curl -fsSL http://YOUR-TEAM-SERVER/install | sh
 ```
 
-It installs `rgt`, verifies it is on PATH, and prints the final step:
+**No Go toolchain required.** The server personalizes the script with its own
+address, and the script:
+
+1. Downloads the `rgt` binary from `<server>/bin/rgt` (the server's own running
+   executable) into `~/.local/bin` — or `/usr/local/bin` if writable — then
+   `chmod +x` and verifies it runs. This is dependency-free for teammates on the
+   **same OS/arch as the server** (a Linux server + Linux devcontainers, or a
+   macOS team + macOS host — the common case).
+2. **Falls back** to `go install github.com/regent-vcs/regent/cmd/rgt@latest`
+   only if that binary can't exec here (OS/arch mismatch) and Go is present;
+   otherwise it prints a clear manual instruction.
+3. Prints the final step:
 
 ```sh
 export REGENT_TOKEN=<the-team-token>
 ```
 
+Both `GET /install` and `GET /bin/rgt` are **unauthenticated** (like `/healthz`):
+they expose the open-source tool and a token-free script, never repo data. Repo
+endpoints still require the bearer token.
+
+> **OS/arch caveat:** `/bin/rgt` serves the server's *own* binary, so it only
+> runs directly on teammates matching the server's OS/arch. Cross-platform
+> teammates hit the `go install` fallback (needs Go). For a fully binary-only
+> cross-platform rollout, publish per-platform release binaries later.
+
 It writes no config — the repo's committed `.regent/config.toml` already handles
-the server wiring. It is idempotent and safe to re-run.
+the server wiring. If a teammate isn't inside a pre-wired repo, the script tells
+them to run `rgt connect http://YOUR-TEAM-SERVER --token $REGENT_TOKEN`. It is
+idempotent and safe to re-run.
+
+The standalone [`install.sh`](./install.sh) in this directory is a **source-only
+fallback** (installs via `go install`, needs Go) for when you are not serving
+from a live instance. Prefer the server-hosted `/install` above.
 
 ## Attribution
 

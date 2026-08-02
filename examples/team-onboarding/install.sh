@@ -1,15 +1,27 @@
 #!/bin/sh
 # re_gent one-line installer — the "one paste" onboarding path for plain laptops.
 #
-#   curl -fsSL https://YOUR-TEAM-SERVER/install | sh
+# RECOMMENDED: your `rgt serve` instance hosts this script and a prebuilt binary
+# for you, so teammates need NO Go toolchain. Share this exact line (the server
+# personalizes the script with its own address):
 #
-# What it does:
-#   1. Installs the `rgt` binary (go install; see TODO for a binary fallback).
-#   2. Verifies `rgt` is on PATH.
+#   curl -fsSL http://YOUR-TEAM-SERVER/install | sh
+#
+# That server-hosted script (see internal/server/install.go, GET /install):
+#   1. Downloads the `rgt` binary from <server>/bin/rgt into ~/.local/bin (or
+#      /usr/local/bin), chmod +x, and verifies it runs — zero dependencies when
+#      the teammate is on the same OS/arch as the server (the common case).
+#   2. Falls back to `go install` only if that binary can't exec here and Go is
+#      present; otherwise prints a clear manual instruction.
 #   3. Prints the one remaining manual step: export the team token.
 #
-# It does NOT write any config: the repo's committed .regent/config.toml already
-# wires capture to the team server. It does NOT touch the token (a secret).
+# This standalone copy is the SOURCE-ONLY fallback: use it when you are not
+# fetching from a live server (no prebuilt binary available). It installs via
+# `go install`, so it needs Go. Prefer the server-hosted `/install` above.
+#
+# It writes no config: the repo's committed .regent/config.toml already wires
+# capture to the team server. It does NOT touch the token (a secret). The
+# CLIENT env var is REGENT_TOKEN (the server side uses REGENT_SERVER_TOKEN).
 #
 # Idempotent and safe to re-run.
 set -eu
@@ -19,7 +31,7 @@ RGT_MODULE="github.com/regent-vcs/regent/cmd/rgt@latest"
 info() { printf '  %s\n' "$*"; }
 warn() { printf '  ! %s\n' "$*" >&2; }
 
-printf '\n== re_gent installer ==\n\n'
+printf '\n== re_gent installer (source fallback) ==\n\n'
 
 # ---------------------------------------------------------------------------
 # 1. Install rgt (skip if already present so re-runs are cheap and idempotent).
@@ -31,15 +43,10 @@ else
     info "Installing rgt from source via 'go install'..."
     go install "$RGT_MODULE"
   else
-    # TODO(team): no public prebuilt release exists yet. When one does, replace
-    # this branch with a download, e.g.:
-    #   os=$(uname -s | tr '[:upper:]' '[:lower:]'); arch=$(uname -m)
-    #   url="https://YOUR-TEAM-SERVER/dist/rgt-${os}-${arch}"
-    #   curl -fsSL "$url" -o "$HOME/.local/bin/rgt" && chmod +x "$HOME/.local/bin/rgt"
-    # Alternatively copy the binary your team built from the shared dev box.
-    warn "Go is not installed and no prebuilt binary source is configured yet."
-    warn "Install Go (https://go.dev/dl/) and re-run, or ask your team for a"
-    warn "prebuilt rgt binary and place it on your PATH. See the TODO in this script."
+    warn "Go is not installed, and this standalone script builds from source."
+    warn "Use the server-hosted installer instead — it ships a prebuilt binary:"
+    warn "  curl -fsSL http://YOUR-TEAM-SERVER/install | sh"
+    warn "Or install Go (https://go.dev/dl/) and re-run this script."
     exit 1
   fi
 fi
@@ -69,7 +76,7 @@ if ! command -v rgt >/dev/null 2>&1; then
 fi
 
 info "rgt is ready: $(command -v rgt)"
-rgt --version 2>/dev/null || true
+rgt version 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
 # 3. Final manual step: the shared team token (a secret, never committed).
