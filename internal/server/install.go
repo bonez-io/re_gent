@@ -1,9 +1,11 @@
 package server
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"text/template"
 )
@@ -67,13 +69,30 @@ else
   installed=0
 
   # -------------------------------------------------------------------------
-  # 2. Primary path: download the prebuilt binary this server is running.
-  #    Works with zero external dependencies when the teammate is on the same
-  #    OS/arch as the server (the common case: a Linux server + Linux
-  #    devcontainers, or a macOS team + macOS host).
+  # 2. Primary path: download the prebuilt binary matching THIS machine's
+  #    OS/arch. We detect it with uname and ask the server for the right build;
+  #    the server serves a per-platform binary when it has one, else its own.
   # -------------------------------------------------------------------------
-  info "Downloading rgt from ${BASE_URL}/bin/rgt ..."
-  if curl -fsSL "${BASE_URL}/bin/rgt" -o "$TARGET.tmp"; then
+  OS="$(uname -s 2>/dev/null || echo unknown)"
+  ARCH="$(uname -m 2>/dev/null || echo unknown)"
+  case "$OS" in
+    Darwin) GOOS=darwin ;;
+    Linux) GOOS=linux ;;
+    MINGW*|MSYS*|CYGWIN*|Windows_NT) GOOS=windows ;;
+    *) GOOS="" ;;
+  esac
+  case "$ARCH" in
+    x86_64|amd64) GOARCH=amd64 ;;
+    arm64|aarch64) GOARCH=arm64 ;;
+    *) GOARCH="" ;;
+  esac
+  BIN_URL="${BASE_URL}/bin/rgt"
+  if [ -n "$GOOS" ] && [ -n "$GOARCH" ]; then
+    BIN_URL="${BASE_URL}/bin/rgt?os=${GOOS}&arch=${GOARCH}"
+  fi
+
+  info "Downloading rgt (${GOOS:-?}/${GOARCH:-?}) from ${BASE_URL}/bin/rgt ..."
+  if curl -fsSL "$BIN_URL" -o "$TARGET.tmp"; then
     chmod +x "$TARGET.tmp"
     # Verify the downloaded binary actually executes on this OS/arch before
     # committing it; a mismatch fails here and falls through to the fallback.
@@ -201,45 +220,106 @@ func (s *Server) handleInstallScript(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleBinary serves the server's OWN running executable so a teammate on the
-// same OS/arch gets a dependency-free binary. It is unauthenticated and serves
-// exactly one fixed path (os.Executable()), never a client-supplied path, so
-// there is no traversal surface.
+// binaryTargets is the allow-list of client platforms GET /bin/rgt can serve a
+// prebuilt binary for, mapping each {GOOS, GOARCH} to its on-disk filename in
+// the binaries dir. Filenames come ONLY from this table, never from request
+// input, so a client-supplied os/arch can never escape the binaries dir.
+var binaryTargets = map[[2]string]string{
+	{"darwin", "amd64"}:  "rgt_darwin_amd64",
+	{"darwin", "arm64"}:  "rgt_darwin_arm64",
+	{"linux", "amd64"}:   "rgt_linux_amd64",
+	{"linux", "arm64"}:   "rgt_linux_arm64",
+	{"windows", "amd64"}: "rgt_windows_amd64.exe",
+}
+
+// downloadFilename is the name the client saves the binary as (Windows keeps
+// its .exe suffix; every other platform gets plain "rgt").
+func downloadFilename(goos string) string {
+	if goos == "windows" {
+		return "rgt.exe"
+	}
+	return "rgt"
+}
+
+// handleBinary serves a runnable rgt binary for the requesting teammate's
+// platform. The platform is taken from the ?os=&arch= query (which the install
+// script fills from `uname`), defaulting to the SERVER's own platform when
+// absent (backward compatible with the original fixed behavior). Resolution:
+//
+//  1. a prebuilt binary from the configured binaries dir (any platform), else
+//  2. the server's OWN executable when the request matches the server's
+//     platform, else
+//  3. a 404 so the install script falls back to building from source.
+//
+// It is unauthenticated (like /install) and never opens a client-supplied path
+// — the only filenames used come from the binaryTargets allow-list.
 func (s *Server) handleBinary(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		methodNotAllowed(w, http.MethodGet, http.MethodHead)
 		return
 	}
 
-	exe, err := os.Executable()
-	if err != nil {
-		s.logf("locate own executable: %v", err)
-		httpError(w, http.StatusInternalServerError, "server binary unavailable")
-		return
+	goos := r.URL.Query().Get("os")
+	goarch := r.URL.Query().Get("arch")
+	if goos == "" && goarch == "" {
+		goos, goarch = runtime.GOOS, runtime.GOARCH
 	}
-	// Resolve symlinks so we serve the real file (and can stat/open it).
-	if resolved, rerr := filepath.EvalSymlinks(exe); rerr == nil {
-		exe = resolved
-	}
-
-	f, err := os.Open(exe)
-	if err != nil {
-		s.logf("open own executable %q: %v", exe, err)
-		httpError(w, http.StatusInternalServerError, "server binary unavailable")
-		return
-	}
-	defer f.Close()
-
-	fi, err := f.Stat()
-	if err != nil {
-		s.logf("stat own executable %q: %v", exe, err)
-		httpError(w, http.StatusInternalServerError, "server binary unavailable")
+	filename, ok := binaryTargets[[2]string{goos, goarch}]
+	if !ok {
+		httpError(w, http.StatusBadRequest, fmt.Sprintf("unsupported os/arch %q/%q", goos, goarch))
 		return
 	}
 
+	// 1. Prefer a prebuilt binary for the requested platform.
+	if s.binariesDir != "" {
+		path := filepath.Join(s.binariesDir, filename)
+		if f, err := os.Open(path); err == nil {
+			defer f.Close()
+			if fi, ferr := f.Stat(); ferr == nil && !fi.IsDir() {
+				s.serveBinaryFile(w, r, f, fi, downloadFilename(goos))
+				return
+			}
+		}
+	}
+
+	// 2. Fall back to the server's own executable, but only for a request that
+	//    matches the server's platform — handing a Linux binary to a macOS
+	//    teammate is worse than a clean 404 that triggers the source fallback.
+	if goos == runtime.GOOS && goarch == runtime.GOARCH {
+		exe, err := os.Executable()
+		if err != nil {
+			s.logf("locate own executable: %v", err)
+			httpError(w, http.StatusInternalServerError, "server binary unavailable")
+			return
+		}
+		if resolved, rerr := filepath.EvalSymlinks(exe); rerr == nil {
+			exe = resolved
+		}
+		f, err := os.Open(exe)
+		if err != nil {
+			s.logf("open own executable %q: %v", exe, err)
+			httpError(w, http.StatusInternalServerError, "server binary unavailable")
+			return
+		}
+		defer f.Close()
+		fi, err := f.Stat()
+		if err != nil {
+			s.logf("stat own executable %q: %v", exe, err)
+			httpError(w, http.StatusInternalServerError, "server binary unavailable")
+			return
+		}
+		s.serveBinaryFile(w, r, f, fi, downloadFilename(goos))
+		return
+	}
+
+	// 3. No prebuilt binary for a cross-platform request.
+	httpError(w, http.StatusNotFound, fmt.Sprintf("no prebuilt rgt for %s/%s; the installer will build from source", goos, goarch))
+}
+
+// serveBinaryFile streams an open binary with download headers. http.ServeContent
+// sets Content-Length and handles Range/HEAD correctly rather than buffering.
+func (s *Server) serveBinaryFile(w http.ResponseWriter, r *http.Request, f *os.File, fi os.FileInfo, name string) {
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", `attachment; filename="rgt"`)
-	// http.ServeContent sets Content-Length and handles Range/HEAD correctly,
-	// streaming the file rather than buffering it.
-	http.ServeContent(w, r, "rgt", fi.ModTime(), f)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename=%q`, name))
+	http.ServeContent(w, r, name, fi.ModTime(), f)
 }

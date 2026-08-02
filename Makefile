@@ -1,4 +1,4 @@
-.PHONY: help build test test-race test-cover lint fmt clean install server server-down server-logs
+.PHONY: help build release-binaries test test-race test-cover lint fmt clean install server server-down server-logs
 
 # Default target
 help:
@@ -32,6 +32,20 @@ LDFLAGS := -X github.com/regent-vcs/regent/internal/cli.Version=$(VERSION) \
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o rgt ./cmd/rgt
+
+# Cross-compile per-OS/arch binaries into dist/binaries so a non-Docker host can
+# point `rgt serve --binaries-dir dist/binaries` (or REGENT_BINARIES_DIR) at
+# them and /install can hand every teammate a runnable binary.
+RELEASE_TARGETS := darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64
+release-binaries:
+	@mkdir -p dist/binaries
+	@for t in $(RELEASE_TARGETS); do \
+		os=$${t%/*}; arch=$${t#*/}; ext=""; [ "$$os" = windows ] && ext=".exe"; \
+		echo "  building rgt_$${os}_$${arch}$${ext}"; \
+		GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" \
+			-o dist/binaries/rgt_$${os}_$${arch}$${ext} ./cmd/rgt || exit 1; \
+	done
+	@echo "per-OS binaries in dist/binaries/"
 
 test:
 	go test ./...

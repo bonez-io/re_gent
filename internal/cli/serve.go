@@ -25,6 +25,7 @@ type serveParams struct {
 	DataDir       string
 	MaxObjectSize int64
 	AuthToken     string
+	BinariesDir   string
 }
 
 // ServeCmd creates the serve command: one server, many repos.
@@ -51,6 +52,8 @@ func ServeCmd() *cobra.Command {
 	cmd.Flags().Int64Var(&p.MaxObjectSize, "max-object-size", p.MaxObjectSize, "maximum accepted object size in bytes")
 	cmd.Flags().StringVar(&p.AuthToken, "auth-token", "",
 		"require 'Authorization: Bearer <token>' on every request (also read from env REGENT_SERVER_TOKEN); use a long random value; empty leaves the server open")
+	cmd.Flags().StringVar(&p.BinariesDir, "binaries-dir", "",
+		"directory of prebuilt per-OS rgt binaries (rgt_<os>_<arch>[.exe]) served by /install (also read from env REGENT_BINARIES_DIR); empty serves only the server's own binary")
 
 	return cmd
 }
@@ -79,9 +82,14 @@ func runServe(ctx context.Context, p serveParams) error {
 	if token == "" {
 		token = os.Getenv("REGENT_SERVER_TOKEN")
 	}
+	binariesDir := p.BinariesDir
+	if binariesDir == "" {
+		binariesDir = os.Getenv("REGENT_BINARIES_DIR")
+	}
 	srv, err := server.New(dataDir,
 		server.WithMaxObjectBytes(p.MaxObjectSize),
-		server.WithAuthToken(token))
+		server.WithAuthToken(token),
+		server.WithBinariesDir(binariesDir))
 	if err != nil {
 		return err
 	}

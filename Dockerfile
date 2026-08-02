@@ -12,6 +12,16 @@ COPY . .
 # Static, CGO-free binary (matches .goreleaser.yaml: CGO_ENABLED=0).
 RUN CGO_ENABLED=0 go build -trimpath -o /out/rgt ./cmd/rgt
 
+# Cross-compile per-OS/arch binaries so /install can hand every teammate a
+# runnable rgt, not only those matching the server's platform. Served from
+# REGENT_BINARIES_DIR below.
+RUN set -eu; mkdir -p /out/binaries; \
+    for t in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64; do \
+      os="${t%/*}"; arch="${t#*/}"; ext=""; [ "$os" = windows ] && ext=".exe"; \
+      GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -trimpath \
+        -o "/out/binaries/rgt_${os}_${arch}${ext}" ./cmd/rgt; \
+    done
+
 # --- runtime stage ---------------------------------------------------------
 FROM alpine:3
 # wget powers the HEALTHCHECK; ca-certificates for any outbound TLS.
@@ -21,6 +31,9 @@ RUN apk add --no-cache wget ca-certificates \
  && chown regent /data
 
 COPY --from=build /out/rgt /usr/local/bin/rgt
+# Prebuilt per-OS/arch binaries served by /install (see REGENT_BINARIES_DIR).
+COPY --from=build /out/binaries /binaries
+ENV REGENT_BINARIES_DIR=/binaries
 
 # Served repos live here; a volume keeps them across container churn.
 VOLUME /data

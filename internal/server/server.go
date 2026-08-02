@@ -84,6 +84,7 @@ type Server struct {
 	dataDir        string
 	maxObjectBytes int64
 	authToken      string
+	binariesDir    string
 	logger         *log.Logger
 
 	mu    sync.Mutex
@@ -112,6 +113,14 @@ func WithLogger(l *log.Logger) Option {
 // An empty token (the default) leaves the server open — the local-dev behavior.
 func WithAuthToken(token string) Option {
 	return func(s *Server) { s.authToken = token }
+}
+
+// WithBinariesDir points GET /bin/rgt at a directory of prebuilt, per-OS/arch
+// rgt binaries (named rgt_<goos>_<goarch>[.exe]) so a teammate on any platform
+// can download a runnable binary — not just teammates matching the server's OS.
+// Empty (the default) means the server only serves its own running executable.
+func WithBinariesDir(dir string) Option {
+	return func(s *Server) { s.binariesDir = dir }
 }
 
 // New creates a Server persisting repo data under dataDir, which is created if
