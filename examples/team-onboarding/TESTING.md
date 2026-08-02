@@ -11,13 +11,20 @@ go build -o /tmp/rgt ./cmd/rgt
 export PATH="/tmp:$PATH"   # so `rgt` resolves to the build under test
 ```
 
-## 1. Start a server with a token
+## 1. Start a server (open — the default)
+
+The default is OPEN (no auth), which is how you'd run it on a private
+network/VPN. No token to set:
 
 ```sh
-export REGENT_SERVER_TOKEN=test-team-token-123   # server reads this
 rgt serve --addr 127.0.0.1:7654 &
 curl -fsS http://127.0.0.1:7654/healthz && echo " <- server up"
 ```
+
+> Optional — testing a public/token-protected server instead? Export a token
+> before starting: `export REGENT_SERVER_TOKEN=test-team-token-123` (the server
+> reads this). Then add `-H "Authorization: Bearer $REGENT_SERVER_TOKEN"` to the
+> curl calls below, and set the matching client token in step 3.
 
 ## 2. Make a test repo from the template
 
@@ -35,16 +42,18 @@ cp -R /path/to/re_gent_headless/examples/team-onboarding/project-template/. .
 ```
 
 Register the repo id with the server (or let the first push create it, depending
-on your server build):
+on your server build). On an open server no auth header is needed:
 
 ```sh
 curl -fsS -X POST http://127.0.0.1:7654/repos \
-  -H "Authorization: Bearer $REGENT_SERVER_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"repo_id":"regent-kit-test"}'
 ```
 
-## 3. Set the client token
+## 3. Set the client token (only for a token-protected server)
+
+On the default open server there is nothing to set — skip to step 4. Only if you
+started the server with `REGENT_SERVER_TOKEN` in step 1:
 
 ```sh
 export REGENT_TOKEN=test-team-token-123   # CLIENT reads this (same value)
@@ -69,8 +78,8 @@ Point the regent-viewer at the server (server-client mode) and open the repo, or
 hit the read API directly:
 
 ```sh
-curl -fsS http://127.0.0.1:7654/regent-kit-test/api/sessions \
-  -H "Authorization: Bearer $REGENT_SERVER_TOKEN"
+curl -fsS http://127.0.0.1:7654/regent-kit-test/api/sessions
+# token server: add -H "Authorization: Bearer $REGENT_SERVER_TOKEN"
 ```
 
 You should see the session, grouped by git author, with the step you just made.
@@ -85,5 +94,7 @@ rm -rf /tmp/regent-kit-test
 ## Devcontainer smoke test
 
 Open `project-template/` (copied into a repo) in VS Code → "Reopen in Container".
-`postCreateCommand` runs `go install .../rgt@latest && rgt --version`. Set a local
+`postCreateCommand` runs `go install .../rgt@latest && rgt --version`. On the
+default open server that is the whole setup. Only for a token-protected server:
+uncomment the `containerEnv` block in `devcontainer.json` and set a local
 `REGENT_TOKEN` in your host env first so `${localEnv:REGENT_TOKEN}` forwards it.

@@ -13,15 +13,18 @@
 #      the teammate is on the same OS/arch as the server (the common case).
 #   2. Falls back to `go install` only if that binary can't exec here and Go is
 #      present; otherwise prints a clear manual instruction.
-#   3. Prints the one remaining manual step: export the team token.
+#   3. For an open server (the default, on a private network) it just confirms
+#      you're wired up; for a public/token server it prints the export step.
 #
 # This standalone copy is the SOURCE-ONLY fallback: use it when you are not
 # fetching from a live server (no prebuilt binary available). It installs via
 # `go install`, so it needs Go. Prefer the server-hosted `/install` above.
 #
 # It writes no config: the repo's committed .regent/config.toml already wires
-# capture to the team server. It does NOT touch the token (a secret). The
-# CLIENT env var is REGENT_TOKEN (the server side uses REGENT_SERVER_TOKEN).
+# capture to the team server. The default server is OPEN (no auth) on a private
+# network, so no token is needed. A token is OPTIONAL and only for a public
+# server: the CLIENT env var is REGENT_TOKEN (the server side uses
+# REGENT_SERVER_TOKEN).
 #
 # Idempotent and safe to re-run.
 set -eu
@@ -79,19 +82,17 @@ info "rgt is ready: $(command -v rgt)"
 rgt version 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
-# 3. Final manual step: the shared team token (a secret, never committed).
+# 3. You're wired up. Server wiring is already handled by the repo's committed
+#    .regent/config.toml (url + repo_id) — nothing else to configure.
+#
+#    The default server is OPEN (no auth) on a private network, so there is no
+#    token to set. A token is OPTIONAL and only for a public/token-protected
+#    server (a secret, never committed).
 # ---------------------------------------------------------------------------
-printf '\n== One step left ==\n\n'
-if [ -n "${REGENT_TOKEN:-}" ]; then
-  info "REGENT_TOKEN is already set — you're done. Run an agent turn in the repo."
-else
-  info "Export the shared team token, then start working in the repo:"
-  info ""
-  info "  export REGENT_TOKEN=<the-team-token>"
-  info ""
-  info "Add that line to your shell profile (~/.zshrc, ~/.bashrc) to persist it."
-fi
-info ""
+printf '\n== You are done ==\n\n'
 info "Server wiring is already handled by the repo's committed .regent/config.toml"
-info "(url + repo_id). Nothing else to configure."
+info "(url + repo_id). Start an agent turn in the repo."
+info ""
+info "Optional — only if your team's server is PUBLIC and requires a token:"
+info "  export REGENT_TOKEN=<the-team-token>   # add to ~/.zshrc / ~/.bashrc to persist"
 printf '\n'

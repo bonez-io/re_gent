@@ -19,18 +19,22 @@
   // swap this for a download step (see ../../install.sh for the same TODO).
   "postCreateCommand": "go install github.com/regent-vcs/regent/cmd/rgt@latest && rgt --version",
 
-  // The shared team token is a SECRET and is never committed. Deliver it as a
-  // Codespaces secret (Repo/Org Settings -> Secrets -> Codespaces) or, for a
-  // local Dev Container, as a host env var. Name the secret REGENT_TOKEN.
+  // OPTIONAL — only if your team's server requires a token.
   //
-  // In Codespaces a secret named REGENT_TOKEN is injected automatically. The
-  // line below additionally forwards it from the host for local Dev Containers.
-  // NOTE: the CLIENT reads REGENT_TOKEN (the server process itself reads
-  // REGENT_SERVER_TOKEN — different var, same shared secret value). Teammates
-  // run the client, so REGENT_TOKEN is what matters here.
-  "containerEnv": {
-    "REGENT_TOKEN": "${localEnv:REGENT_TOKEN}"
-  },
+  // The default setup is an OPEN server on a private network (VPN/Tailscale/LAN):
+  // no token, no secrets, and this zero-step path needs nothing below. Opening
+  // the repo in the container is the whole setup.
+  //
+  // If (and only if) your server is PUBLIC and token-protected, deliver the
+  // shared team token as a Codespaces secret named REGENT_TOKEN (Repo/Org
+  // Settings -> Secrets -> Codespaces) — Codespaces injects it automatically —
+  // and, for a local Dev Container, uncomment the block below to forward it from
+  // your host env. NOTE: the CLIENT reads REGENT_TOKEN (the server process reads
+  // REGENT_SERVER_TOKEN — different var, same shared secret value).
+  //
+  // "containerEnv": {
+  //   "REGENT_TOKEN": "${localEnv:REGENT_TOKEN}"
+  // },
 
   "customizations": {
     "vscode": {

@@ -1,10 +1,13 @@
 # One-command re_gent server.
 #
-#   REGENT_SERVER_TOKEN=$(openssl rand -hex 32) docker compose up -d --build
+#   docker compose up -d --build
 #   # or: make server
 #
-# Set REGENT_SERVER_TOKEN (env or a .env file next to this file) to require
-# bearer-token auth. Leave it unset only for local/trusted networks.
+# Default is OPEN (no auth) — fine on a private network (VPN/Tailscale/LAN).
+# Set REGENT_SERVER_TOKEN (env or a .env file next to this file) ONLY if the
+# server is publicly reachable, to require bearer-token auth:
+#
+#   REGENT_SERVER_TOKEN=$(openssl rand -hex 32) docker compose up -d --build
 services:
   server:
     build: .

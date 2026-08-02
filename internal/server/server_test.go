@@ -1126,35 +1126,51 @@ func TestHandlerListRefs(t *testing.T) {
 }
 
 // TestInstallEndpoint verifies GET /install serves the personalized shell
-// installer WITHOUT auth even when a token is configured: it must mention this
-// server's host and the client env var REGENT_TOKEN, and never require a token.
+// installer WITHOUT auth (like /healthz): it always targets this server's host
+// and references /bin/rgt. The token step is conditional on how the server was
+// started — a token server's script mentions REGENT_TOKEN, an OPEN server's does
+// NOT (no token, no secrets on a private network).
 func TestInstallEndpoint(t *testing.T) {
 	const token = "s3cr3t-token"
-	_, _, ts := newTestServer(t, WithAuthToken(token))
 
-	for _, path := range []string{"/install", "/install.sh"} {
-		resp, err := http.Get(ts.URL + path) // no Authorization header
-		if err != nil {
-			t.Fatalf("GET %s: %v", path, err)
-		}
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("GET %s (no auth) = %d, want 200", path, resp.StatusCode)
-		}
-		script := string(body)
-		// httptest.Server listens on 127.0.0.1:<port>; the script must target
-		// THIS server via its Host header.
-		host := strings.TrimPrefix(ts.URL, "http://")
-		if !strings.Contains(script, host) {
-			t.Errorf("GET %s body does not mention server host %q", path, host)
-		}
-		if !strings.Contains(script, "REGENT_TOKEN") {
-			t.Errorf("GET %s body does not mention REGENT_TOKEN", path)
-		}
-		if !strings.Contains(script, "/bin/rgt") {
-			t.Errorf("GET %s body does not reference the /bin/rgt download route", path)
-		}
+	cases := []struct {
+		name      string
+		opts      []Option
+		wantToken bool // whether the served script should mention REGENT_TOKEN
+	}{
+		{name: "token server", opts: []Option{WithAuthToken(token)}, wantToken: true},
+		{name: "open server", opts: nil, wantToken: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, ts := newTestServer(t, tc.opts...)
+
+			for _, path := range []string{"/install", "/install.sh"} {
+				resp, err := http.Get(ts.URL + path) // no Authorization header
+				if err != nil {
+					t.Fatalf("GET %s: %v", path, err)
+				}
+				body, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if resp.StatusCode != http.StatusOK {
+					t.Fatalf("GET %s (no auth) = %d, want 200", path, resp.StatusCode)
+				}
+				script := string(body)
+				// httptest.Server listens on 127.0.0.1:<port>; the script must
+				// target THIS server via its Host header.
+				host := strings.TrimPrefix(ts.URL, "http://")
+				if !strings.Contains(script, host) {
+					t.Errorf("GET %s body does not mention server host %q", path, host)
+				}
+				if got := strings.Contains(script, "REGENT_TOKEN"); got != tc.wantToken {
+					t.Errorf("GET %s: mentions REGENT_TOKEN = %v, want %v", path, got, tc.wantToken)
+				}
+				if !strings.Contains(script, "/bin/rgt") {
+					t.Errorf("GET %s body does not reference the /bin/rgt download route", path)
+				}
+			}
+		})
 	}
 }
 

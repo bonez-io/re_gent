@@ -15,6 +15,8 @@ help:
 	@echo ""
 	@echo "  Self-hosted server (Docker):"
 	@echo "  make server      - Build & start the server (docker compose up -d)"
+	@echo "                     Runs open (no auth) — fine on a private network/VPN."
+	@echo "                     Set REGENT_SERVER_TOKEN=… only if the server is public."
 	@echo "  make server-down - Stop the server"
 	@echo "  make server-logs - Follow server logs"
 	@echo ""
@@ -57,16 +59,17 @@ install:
 	go install ./cmd/rgt
 
 # --- Self-hosted server (Docker) -------------------------------------------
-# Start the object/ref server in a container. Set REGENT_SERVER_TOKEN to require
-# bearer-token auth (recommended for anything network-reachable):
+# Start the object/ref server in a container. Runs OPEN (no auth) by default,
+# which is fine on a private network/VPN. Set REGENT_SERVER_TOKEN to require
+# bearer-token auth ONLY if the server is publicly reachable:
 #   REGENT_SERVER_TOKEN=$(openssl rand -hex 32) make server
 server:
 	docker compose up -d --build
 	@echo ""
 	@echo "re_gent server is up on http://localhost:$${REGENT_PORT:-7654} (health: /healthz)."
+	@echo "Runs open (no auth) — fine on a private network/VPN. Set REGENT_SERVER_TOKEN=… only if the server is public."
 	@echo "Connect a repo to it:"
 	@echo "  rgt connect http://localhost:$${REGENT_PORT:-7654}"
-	@echo "If REGENT_SERVER_TOKEN is set, run 'rgt login http://localhost:$${REGENT_PORT:-7654}' first."
 
 server-down:
 	docker compose down
