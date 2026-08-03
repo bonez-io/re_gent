@@ -242,17 +242,15 @@ func downloadFilename(goos string) string {
 }
 
 // handleBinary serves a runnable rgt binary for the requesting teammate's
-// platform. The platform is taken from the ?os=&arch= query (which the install
-// script fills from `uname`), defaulting to the SERVER's own platform when
-// absent (backward compatible with the original fixed behavior). Resolution:
+// platform, taken from the ?os=&arch= query (filled by the install script's
+// `uname` detection) and defaulting to the server's own platform when absent.
+// Resolution order: (1) a prebuilt binary from the binaries dir matching the
+// request, (2) the server's own executable if the request matches the
+// server's platform, (3) a 404 so the installer falls back to source.
 //
-//  1. a prebuilt binary from the configured binaries dir (any platform), else
-//  2. the server's OWN executable when the request matches the server's
-//     platform, else
-//  3. a 404 so the install script falls back to building from source.
-//
-// It is unauthenticated (like /install) and never opens a client-supplied path
-// — the only filenames used come from the binaryTargets allow-list.
+// Unauthenticated like /install; the only filenames ever opened come from the
+// binaryTargets allow-list, so a client-supplied os/arch can never escape the
+// binaries dir.
 func (s *Server) handleBinary(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		methodNotAllowed(w, http.MethodGet, http.MethodHead)
