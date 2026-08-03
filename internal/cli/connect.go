@@ -163,6 +163,12 @@ func connectWireHooks(projectRoot string) error {
 		fmt.Fprintf(os.Stderr, "warning: backed up invalid hook config to %s\n", result.BackupPath)
 	}
 	fmt.Printf("  ✓ Claude Code hooks configured\n")
+	// Agents read their hook config at session startup, so a session that was
+	// already running when this ran won't capture until it is restarted. This
+	// is the single most common "why wasn't my change captured?" cause.
+	fmt.Printf("  ⚠ Restart any Claude Code / Codex session already open in this repo —\n")
+	fmt.Printf("    agents load hooks at startup, so a running session won't capture until\n")
+	fmt.Printf("    you restart it. (New sessions, and teammates who clone, are unaffected.)\n")
 	return nil
 }
 
