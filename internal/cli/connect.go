@@ -169,6 +169,9 @@ func connectWireHooks(projectRoot string) error {
 	fmt.Printf("  ⚠ Restart any Claude Code / Codex session already open in this repo —\n")
 	fmt.Printf("    agents load hooks at startup, so a running session won't capture until\n")
 	fmt.Printf("    you restart it. (New sessions, and teammates who clone, are unaffected.)\n")
+	fmt.Printf("  → To auto-wire teammates: commit .regent/config.toml and .claude/settings.json\n")
+	fmt.Printf("    (the rest of .regent/ is git-ignored). Then a clone + `rgt` installed is all\n")
+	fmt.Printf("    they need — no connect step.\n")
 	return nil
 }
 

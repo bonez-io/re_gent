@@ -720,9 +720,16 @@ func printManualInstructions(targets []agentTarget) {
 
 func createRegentGitignore(projectRoot string) error {
 	gitignorePath := filepath.Join(projectRoot, ".regent", ".gitignore")
-	content := `# re_gent temporary files
-*.backup
-log/
+	// .regent/ is machine-local VCS state (like .git/ itself) — the object
+	// store, index, refs, and logs must NOT be committed. The one exception is
+	// config.toml: committing it lets teammates who clone inherit the server
+	// wiring (url + repo_id) and capture automatically, without running connect.
+	// So: ignore everything, then un-ignore config.toml (and this file).
+	content := `# re_gent local state — do not commit (like .git/ itself).
+# Only config.toml is shared, so teammates inherit the server wiring on clone.
+*
+!.gitignore
+!config.toml
 `
 
 	return os.WriteFile(gitignorePath, []byte(content), 0o644)
