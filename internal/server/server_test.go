@@ -56,53 +56,9 @@ func createRepo(t *testing.T, ts *httptest.Server, repoID string) int {
 	return resp.StatusCode
 }
 
-// TestBearerTokenAuth verifies a configured auth token gates every endpoint:
-// requests with a missing or wrong bearer token are 401, and a correct token
-// passes the gate (200 on a real endpoint).
-func TestBearerTokenAuth(t *testing.T) {
-	const token = "s3cr3t-token"
-	_, _, ts := newTestServer(t, WithAuthToken(token))
-
-	do := func(method, path, auth string) int {
-		t.Helper()
-		req, err := http.NewRequest(method, ts.URL+path, nil)
-		if err != nil {
-			t.Fatalf("new request: %v", err)
-		}
-		if auth != "" {
-			req.Header.Set("Authorization", auth)
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatalf("%s %s: %v", method, path, err)
-		}
-		defer resp.Body.Close()
-		_, _ = io.Copy(io.Discard, resp.Body)
-		return resp.StatusCode
-	}
-
-	fullHash := strings.Repeat("a", 64)
-	for _, path := range []string{"/repos", "/alpha/objects/" + fullHash, "/alpha/refs"} {
-		if got := do(http.MethodGet, path, ""); got != http.StatusUnauthorized {
-			t.Errorf("no-auth GET %s = %d, want 401", path, got)
-		}
-		if got := do(http.MethodGet, path, "Bearer wrong-token"); got != http.StatusUnauthorized {
-			t.Errorf("wrong-token GET %s = %d, want 401", path, got)
-		}
-		// A correct token must get PAST the auth gate (any status but 401).
-		if got := do(http.MethodGet, path, "Bearer "+token); got == http.StatusUnauthorized {
-			t.Errorf("correct-token GET %s = 401, want to pass auth", path)
-		}
-	}
-
-	if got := do(http.MethodGet, "/repos", "Bearer "+token); got != http.StatusOK {
-		t.Errorf("correct-token GET /repos = %d, want 200", got)
-	}
-}
-
-// TestNoAuthTokenStaysOpen verifies the server is fully open when no token is
-// configured — the backwards-compatible local-dev default.
-func TestNoAuthTokenStaysOpen(t *testing.T) {
+// TestServerIsOpen verifies the server serves every endpoint without any auth —
+// it is always open.
+func TestServerIsOpen(t *testing.T) {
 	_, _, ts := newTestServer(t)
 	resp, err := http.Get(ts.URL + "/repos")
 	if err != nil {
@@ -115,10 +71,9 @@ func TestNoAuthTokenStaysOpen(t *testing.T) {
 	}
 }
 
-// TestHealthzIsUnauthenticated verifies /healthz returns 200 "ok" without auth
-// even when a token is configured, while other paths still require the token.
-func TestHealthzIsUnauthenticated(t *testing.T) {
-	_, _, ts := newTestServer(t, WithAuthToken("s3cr3t-token"))
+// TestHealthz verifies /healthz returns 200 "ok".
+func TestHealthz(t *testing.T) {
+	_, _, ts := newTestServer(t)
 
 	resp, err := http.Get(ts.URL + "/healthz")
 	if err != nil {
@@ -131,17 +86,6 @@ func TestHealthzIsUnauthenticated(t *testing.T) {
 	}
 	if string(body) != "ok" {
 		t.Errorf("GET /healthz body = %q, want \"ok\"", body)
-	}
-
-	// A normal endpoint must still require the token.
-	resp2, err := http.Get(ts.URL + "/repos")
-	if err != nil {
-		t.Fatalf("GET /repos: %v", err)
-	}
-	defer resp2.Body.Close()
-	_, _ = io.Copy(io.Discard, resp2.Body)
-	if resp2.StatusCode != http.StatusUnauthorized {
-		t.Errorf("GET /repos without auth = %d, want 401", resp2.StatusCode)
 	}
 }
 
@@ -1126,62 +1070,44 @@ func TestHandlerListRefs(t *testing.T) {
 }
 
 // TestInstallEndpoint verifies GET /install serves the personalized shell
-// installer WITHOUT auth (like /healthz): it always targets this server's host
-// and references /bin/rgt. The token step is conditional on how the server was
-// started — a token server's script mentions REGENT_TOKEN, an OPEN server's does
-// NOT (no token, no secrets on a private network).
+// installer: it always targets this server's host and references /bin/rgt. The
+// server is always open, so the script never mentions a token.
 func TestInstallEndpoint(t *testing.T) {
-	const token = "s3cr3t-token"
+	_, _, ts := newTestServer(t)
 
-	cases := []struct {
-		name      string
-		opts      []Option
-		wantToken bool // whether the served script should mention REGENT_TOKEN
-	}{
-		{name: "token server", opts: []Option{WithAuthToken(token)}, wantToken: true},
-		{name: "open server", opts: nil, wantToken: false},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, _, ts := newTestServer(t, tc.opts...)
-
-			for _, path := range []string{"/install", "/install.sh"} {
-				resp, err := http.Get(ts.URL + path) // no Authorization header
-				if err != nil {
-					t.Fatalf("GET %s: %v", path, err)
-				}
-				body, _ := io.ReadAll(resp.Body)
-				resp.Body.Close()
-				if resp.StatusCode != http.StatusOK {
-					t.Fatalf("GET %s (no auth) = %d, want 200", path, resp.StatusCode)
-				}
-				script := string(body)
-				// httptest.Server listens on 127.0.0.1:<port>; the script must
-				// target THIS server via its Host header.
-				host := strings.TrimPrefix(ts.URL, "http://")
-				if !strings.Contains(script, host) {
-					t.Errorf("GET %s body does not mention server host %q", path, host)
-				}
-				if got := strings.Contains(script, "REGENT_TOKEN"); got != tc.wantToken {
-					t.Errorf("GET %s: mentions REGENT_TOKEN = %v, want %v", path, got, tc.wantToken)
-				}
-				if !strings.Contains(script, "/bin/rgt") {
-					t.Errorf("GET %s body does not reference the /bin/rgt download route", path)
-				}
-			}
-		})
+	for _, path := range []string{"/install", "/install.sh"} {
+		resp, err := http.Get(ts.URL + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s = %d, want 200", path, resp.StatusCode)
+		}
+		script := string(body)
+		// httptest.Server listens on 127.0.0.1:<port>; the script must
+		// target THIS server via its Host header.
+		host := strings.TrimPrefix(ts.URL, "http://")
+		if !strings.Contains(script, host) {
+			t.Errorf("GET %s body does not mention server host %q", path, host)
+		}
+		if strings.Contains(script, "REGENT_TOKEN") {
+			t.Errorf("GET %s: open-server script must not mention REGENT_TOKEN", path)
+		}
+		if !strings.Contains(script, "/bin/rgt") {
+			t.Errorf("GET %s body does not reference the /bin/rgt download route", path)
+		}
 	}
 }
 
-// TestBinaryEndpoint verifies GET /bin/rgt serves a non-empty body WITHOUT auth
-// even when a token is configured. In tests os.Executable() is the test binary,
-// which is fine: we only assert 200 + non-empty.
+// TestBinaryEndpoint verifies GET /bin/rgt serves a non-empty body. In tests
+// os.Executable() is the test binary, which is fine: we only assert 200 +
+// non-empty.
 func TestBinaryEndpoint(t *testing.T) {
-	const token = "s3cr3t-token"
-	_, _, ts := newTestServer(t, WithAuthToken(token))
+	_, _, ts := newTestServer(t)
 
-	resp, err := http.Get(ts.URL + "/bin/rgt") // no Authorization header
+	resp, err := http.Get(ts.URL + "/bin/rgt")
 	if err != nil {
 		t.Fatalf("GET /bin/rgt: %v", err)
 	}

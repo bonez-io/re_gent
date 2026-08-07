@@ -23,14 +23,12 @@ var ErrNotSignedIn = fmt.Errorf("not signed in\n\nRun: rgt login <server-url>")
 type connectParams struct {
 	serverURL   string
 	projectRoot string
-	token       string // when set, stored globally before registering (one-shot connect)
 	configPath  string // global config path; "" means default
 	httpClient  *http.Client
 }
 
 // ConnectCmd returns the cobra command for `rgt connect`.
 func ConnectCmd() *cobra.Command {
-	var token string
 	cmd := &cobra.Command{
 		Use:   "connect <server-url>",
 		Short: "Register this repo with a re_gent server and wire Claude hooks",
@@ -53,37 +51,13 @@ merged rather than duplicated and existing config is preserved.`,
 			return runConnect(connectParams{
 				serverURL:   strings.TrimRight(args[0], "/"),
 				projectRoot: cwd,
-				token:       token,
 			})
 		},
 	}
-	cmd.Flags().StringVar(&token, "token", "",
-		"auth token to store before registering, so a separate 'rgt login' is not needed; use a long random value")
 	return cmd
 }
 
 func runConnect(p connectParams) error {
-	// 0. If a token was supplied, store it globally first — same as `rgt login` —
-	//    so a single `connect --token` both authenticates and registers.
-	if p.token != "" {
-		fmt.Println("  ! --token was passed on the command line; it may be saved in your shell history")
-		authCfg := &config.UserConfig{Auth: config.Auth{
-			ServerURL: p.serverURL,
-			Token:     strings.TrimSpace(p.token),
-		}}
-		if err := config.CheckAuth(authCfg); err != nil {
-			return fmt.Errorf("invalid --token: %w", err)
-		}
-		save := config.Save
-		if p.configPath != "" {
-			save = func(c *config.UserConfig) error { return config.SaveTo(p.configPath, c) }
-		}
-		if err := save(authCfg); err != nil {
-			return fmt.Errorf("store auth token: %w", err)
-		}
-		fmt.Printf("  ✓ Stored auth token for %s\n", p.serverURL)
-	}
-
 	// 1. Load global user config and verify the user is signed in.
 	var userCfg *config.UserConfig
 	var err error

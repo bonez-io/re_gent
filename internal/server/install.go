@@ -30,8 +30,7 @@ var installScriptTemplate = template.Must(template.New("install").Parse(`#!/bin/
 #
 #   curl -fsSL {{.BaseURL}}/install | sh
 #
-# It installs the ` + "`rgt`" + ` binary and verifies it runs{{if .AuthRequired}}, then prints the one
-# remaining manual step: exporting the shared team token{{end}}. It writes no config
+# It installs the ` + "`rgt`" + ` binary and verifies it runs. It writes no config
 # (the repo's committed .regent/config.toml handles server wiring) and never
 # embeds a token.
 set -eu
@@ -143,29 +142,9 @@ info "rgt is ready: $(command -v rgt)"
 rgt version 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
-# 5. You're wired up. This server is {{if .AuthRequired}}token-protected{{else}}open (no auth){{end}}.
+# 5. You're wired up. This server is open (no auth).
 # ---------------------------------------------------------------------------
-{{if .AuthRequired}}# This server requires a shared team token (a secret, never committed). The
-# CLIENT env var is REGENT_TOKEN (the server side uses REGENT_SERVER_TOKEN — do
-# not confuse the two).
-printf '\n== One step left ==\n\n'
-if [ -n "${REGENT_TOKEN:-}" ]; then
-  info "REGENT_TOKEN is already set — you're done. Run an agent turn in the repo."
-else
-  info "Export the shared team token, then start working in the repo:"
-  info ""
-  info "  export REGENT_TOKEN=<your-team-token>"
-  info ""
-  info "Add that line to your shell profile (~/.zshrc, ~/.bashrc) to persist it."
-fi
-info ""
-info "If you are inside a repo that already commits .regent/config.toml, the"
-info "server wiring (url + repo_id) is already handled — nothing else to do."
-info "Otherwise, wire this machine to the server yourself:"
-info ""
-info "  rgt connect {{.BaseURL}} --token \$REGENT_TOKEN"
-info ""
-{{else}}# This server is open (no auth) — no token, no secrets. Fine on a private
+# This server is open (no auth) — no token, no secrets. Fine on a private
 # network/VPN. Nothing left to export.
 printf '\n== You are done ==\n\n'
 info "If you are inside a repo that already commits .regent/config.toml, the"
@@ -174,16 +153,12 @@ info "Otherwise, wire this machine to the server yourself (no token needed):"
 info ""
 info "  rgt connect {{.BaseURL}}"
 info ""
-{{end}}printf '\n'
+printf '\n'
 `))
 
 // installData is the template context for installScriptTemplate.
 type installData struct {
 	BaseURL string
-	// AuthRequired is true when THIS server was started with an auth token, in
-	// which case the served script tells the teammate to export REGENT_TOKEN.
-	// When false the server is open (no auth) and the script mentions no token.
-	AuthRequired bool
 }
 
 // baseURL derives the scheme+host this request arrived on, with no trailing
@@ -213,7 +188,7 @@ func (s *Server) handleInstallScript(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
-	data := installData{BaseURL: baseURL(r), AuthRequired: s.authToken != ""}
+	data := installData{BaseURL: baseURL(r)}
 	if err := installScriptTemplate.Execute(w, data); err != nil {
 		s.logf("render install script: %v", err)
 		// The header is already written; nothing more can be sent safely.

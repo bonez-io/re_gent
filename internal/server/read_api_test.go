@@ -335,23 +335,3 @@ func TestAPIUnknownRepoIs404(t *testing.T) {
 		t.Fatalf("GET /ghost/api/sessions: status %d, want 404", status)
 	}
 }
-
-// TestAPIRequiresAuth verifies the new endpoints sit behind the bearer-token
-// gate: no token is 401, the right token gets past it.
-func TestAPIRequiresAuth(t *testing.T) {
-	const token = "s3cr3t-token"
-	_, _, ts := newTestServer(t, WithAuthToken(token))
-
-	for _, path := range []string{"/alpha/api/sessions", "/alpha/api/log?session=x"} {
-		if status, _ := getAPI(t, ts, path, ""); status != http.StatusUnauthorized {
-			t.Errorf("no-token GET %s = %d, want 401", path, status)
-		}
-		if status, _ := getAPI(t, ts, path, "wrong-token"); status != http.StatusUnauthorized {
-			t.Errorf("wrong-token GET %s = %d, want 401", path, status)
-		}
-		// Correct token must get past the auth gate (any status but 401).
-		if status, _ := getAPI(t, ts, path, token); status == http.StatusUnauthorized {
-			t.Errorf("correct-token GET %s = 401, want to pass auth", path)
-		}
-	}
-}
