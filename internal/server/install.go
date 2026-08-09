@@ -142,17 +142,33 @@ info "rgt is ready: $(command -v rgt)"
 rgt version 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
-# 5. You're wired up. This server is open (no auth).
+# 5. Wire the current project, so this one command is the whole setup.
 # ---------------------------------------------------------------------------
-# This server is open (no auth) — no token, no secrets. Fine on a private
-# network/VPN. Nothing left to export.
-printf '\n== You are done ==\n\n'
-info "If you are inside a repo that already commits .regent/config.toml, the"
-info "server wiring (url + repo_id) is already handled — just run an agent turn."
-info "Otherwise, wire this machine to the server yourself (no token needed):"
-info ""
-info "  rgt connect {{.BaseURL}}"
-info ""
+# Only when we are standing in a project: "curl | sh" inherits whatever
+# directory the teammate happened to be in, and connecting blindly would
+# scatter .regent/ into home directories. A .git entry is the marker (it is a
+# file, not a directory, inside worktrees and submodules). The server is open,
+# so no token is involved.
+if [ -e .git ]; then
+  info "Wiring this project to {{.BaseURL}} ..."
+  # A connect failure must not make a successful install look failed, so this
+  # is tolerated rather than fatal under 'set -e'.
+  if rgt connect "{{.BaseURL}}"; then
+    # connect already printed the restart warning and the commit-to-share hint,
+    # so repeating them here would only bury them.
+    printf '\n== You are done ==\n'
+  else
+    warn "Installed rgt, but could not wire this project. Retry inside it with:"
+    warn "  rgt connect {{.BaseURL}}"
+  fi
+else
+  printf '\n== rgt installed ==\n\n'
+  info "You are not in a project directory, so nothing was wired. Run this from"
+  info "inside your project to connect it (no token needed):"
+  info ""
+  info "  rgt connect {{.BaseURL}}"
+  info ""
+fi
 printf '\n'
 `))
 
