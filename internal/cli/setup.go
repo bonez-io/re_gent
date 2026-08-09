@@ -425,14 +425,33 @@ func (m pickerModel) current() *pickerEntry {
 	return &m.entries[m.cursor]
 }
 
+// bannerArt is the re_gent wordmark. Box-drawing glyphs rather than solid
+// blocks: they stay legible at any font weight and match the ✔/❯ already used
+// below, so the whole screen shares one character vocabulary.
+var bannerArt = []string{
+	`┬─┐ ┌─┐     ┌─┐ ┌─┐ ┌┐┌ ┌┬┐`,
+	`├┬┘ ├┤      │ ┬ ├┤  │││  │ `,
+	`┴└─ └─┘ ─── └─┘ └─┘ ┘└┘  ┴ `,
+}
+
+// banner renders the opening: a rule, the wordmark, the tagline, another rule.
+func banner() string {
+	rule := dim.Render(strings.Repeat("·", 62))
+	var b strings.Builder
+	b.WriteString(rule + "\n\n")
+	for _, line := range bannerArt {
+		b.WriteString("  " + accent.Render(line) + "\n")
+	}
+	b.WriteString("\n  " + dim.Render("version control for AI agents") +
+		"  " + dim.Render(Version) + "\n")
+	b.WriteString(rule + "\n")
+	return b.String()
+}
+
 func (m pickerModel) View() string {
 	var b strings.Builder
 
-	// Deliberately echoes the shape of a first-run welcome: title, rule, a
-	// plain-language heading, then the choices. No banner art — the name is the
-	// only branding here.
-	b.WriteString("\n" + accent.Render("Welcome to re_gent") + " " + dim.Render(Version) + "\n")
-	b.WriteString(dim.Render(strings.Repeat("·", 62)) + "\n\n")
+	b.WriteString("\n" + banner() + "\n")
 	b.WriteString("Let's get started.\n\n")
 	b.WriteString(heading.Render("Choose the projects to connect to your team server") + "\n")
 	b.WriteString(dim.Render("Space selects, enter connects. Run rgt again any time.") + "\n\n")
