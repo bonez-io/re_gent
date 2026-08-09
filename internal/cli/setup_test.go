@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -275,6 +276,54 @@ func TestPickerNothingOption(t *testing.T) {
 	}
 	if got := pm.picked(); len(got) != 0 {
 		t.Errorf("Nothing must override earlier ticks, got %v", got)
+	}
+}
+
+// TestReadAnswerAcceptsCarriageReturn is the fix for a prompt that appeared to
+// ignore input: a full-screen UI can return the terminal with ICRNL cleared, so
+// Enter arrives as \r. Waiting only for \n blocked forever while the keystroke
+// echoed, which looked exactly like a dead prompt.
+func TestReadAnswerAcceptsCarriageReturn(t *testing.T) {
+	cases := map[string]string{
+		"n\r":     "n",
+		"n\n":     "n",
+		"yes\r\n": "yes",
+		"\r":      "",
+	}
+	for in, want := range cases {
+		got, err := readAnswer(strings.NewReader(in))
+		if err != nil {
+			t.Errorf("readAnswer(%q): %v", in, err)
+		}
+		if got != want {
+			t.Errorf("readAnswer(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestOfferShareDeclinesOnCarriageReturn drives the actual prompt the way the
+// terminal delivers it after the picker exits.
+func TestOfferShareDeclinesOnCarriageReturn(t *testing.T) {
+	dir := gitRepo(t)
+	writeFile(t, dir, ".regent/config.toml", "[remote]\nurl = 'http://example.test'\n")
+
+	done := make(chan struct{})
+	go func() {
+		offerShare([]string{dir}, strings.NewReader("n\r"))
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("offerShare blocked on a carriage-return answer")
+	}
+
+	out, err := exec.Command("git", "-C", dir, "log", "--oneline", "-1").Output()
+	if err != nil {
+		t.Fatalf("git log: %v", err)
+	}
+	if strings.Contains(string(out), "Wire re_gent") {
+		t.Error("declining must not commit")
 	}
 }
 

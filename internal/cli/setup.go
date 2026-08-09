@@ -1,8 +1,8 @@
 package cli
 
 import (
-	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -188,7 +188,7 @@ func runSetup(serverURL string) error {
 	}
 
 	rememberServer(serverURL)
-	offerShare(wired, bufio.NewReader(ttyIn))
+	offerShare(wired, ttyIn)
 
 	fmt.Printf("\nDone. Open the viewer to watch turns arrive.\n")
 	fmt.Printf("Restart any Claude Code / Codex session already open in these projects —\n")
@@ -203,14 +203,18 @@ var sharedFiles = []string{".regent/config.toml", ".claude/settings.json"}
 // offerShare asks, per project, whether to commit the wiring so teammates get it
 // on clone. It never pushes: reaching a shared remote is the user's call, not a
 // side effect of a setup wizard.
-func offerShare(projects []string, in *bufio.Reader) {
+func offerShare(projects []string, in io.Reader) {
 	for _, p := range projects {
 		if !isDir(filepath.Join(p, ".git")) {
 			continue // not a git repo; nothing to share through
 		}
 		fmt.Printf("\nShare %s with your team? Commits %s (no push) [y/N]: ",
 			filepath.Base(p), strings.Join(sharedFiles, " and "))
-		answer, _ := in.ReadString('\n')
+		answer, err := readAnswer(in)
+		if err != nil && answer == "" {
+			fmt.Println("  skipped")
+			return // input closed; asking again would spin
+		}
 		if a := strings.ToLower(strings.TrimSpace(answer)); a != "y" && a != "yes" {
 			fmt.Println("  skipped")
 			continue
@@ -223,6 +227,32 @@ func offerShare(projects []string, in *bufio.Reader) {
 			continue
 		}
 		fmt.Printf("  ✓ committed — teammates who pull get the wiring automatically\n")
+	}
+}
+
+// readAnswer reads one typed line, ending at EITHER newline or carriage return.
+// That distinction is the whole point: a full-screen UI can hand the terminal
+// back with ICRNL cleared, so Enter arrives as \r. A reader waiting only for \n
+// then blocks forever while the keystroke echoes — indistinguishable, from the
+// outside, from a prompt that ignores input.
+func readAnswer(r io.Reader) (string, error) {
+	var line []byte
+	buf := make([]byte, 1)
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			switch c := buf[0]; c {
+			case '\n', '\r':
+				return string(line), nil
+			case 3, 4: // ctrl-c / ctrl-d: treat as declining
+				return "", io.EOF
+			default:
+				line = append(line, c)
+			}
+		}
+		if err != nil {
+			return string(line), err
+		}
 	}
 }
 
