@@ -69,9 +69,11 @@ func runConnect(p connectParams) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	if userCfg.Auth.Token == "" {
-		return ErrNotSignedIn
-	}
+	// A token is OPTIONAL: the default server is open, and requiring sign-in
+	// here broke the advertised onboarding ("install rgt, then rgt connect
+	// <server>") on every machine that had never run `rgt login`. Send a stored
+	// token when there is one and let a server that genuinely requires auth
+	// answer 401 — registerRepo turns that into ErrNotSignedIn.
 	token := userCfg.Auth.Token
 
 	// 2. Initialise .regent/ if it doesn't exist.
@@ -163,7 +165,11 @@ func registerRepo(serverURL, token, projectRoot string, client *http.Client) (st
 		return "", fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
+	// Only send Authorization when we actually have a token; a bare "Bearer "
+	// is malformed and a strict server would reject it.
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
