@@ -43,11 +43,16 @@ warn() { printf '  ! %s\n' "$*" >&2; }
 printf '\n== re_gent installer ==\n\n'
 
 # ---------------------------------------------------------------------------
-# 0. Idempotent: if a working rgt is already on PATH, skip the install.
+# 0. Always (re)install from THIS server rather than keeping whatever rgt is
+#    already on PATH. Skipping when one existed meant anyone who had installed
+#    before silently kept their old binary and never received a fix: re-running
+#    the installer appeared to work and changed nothing. Every version here
+#    reports "dev", so there is nothing meaningful to compare — downloading a
+#    few MB is the cheap, correct answer.
 # ---------------------------------------------------------------------------
-if command -v rgt >/dev/null 2>&1 && rgt version >/dev/null 2>&1; then
-  info "rgt already installed: $(command -v rgt)"
-else
+if command -v rgt >/dev/null 2>&1; then
+  info "Replacing existing rgt: $(command -v rgt)"
+fi
   # -------------------------------------------------------------------------
   # 1. Pick an install dir: prefer /usr/local/bin when writable, else
   #    ~/.local/bin (created if needed and added to PATH for this run).
@@ -128,7 +133,6 @@ else
       exit 1
     fi
   fi
-fi
 
 # ---------------------------------------------------------------------------
 # 4. Verify rgt is reachable and runs.
