@@ -1,13 +1,13 @@
 package cli
 
 import (
+	"bufio"
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // gitRepo makes a real repository with one commit, so HEAD exists.
@@ -94,57 +94,83 @@ func TestCommitWiringReportsNothingToCommit(t *testing.T) {
 	}
 }
 
-// TestPickerSelectsProjects drives the model the way a keyboard would: move to a
-// project, select it, confirm.
-func TestPickerSelectsProjects(t *testing.T) {
+// TestTTYPairOutputIsWritable reproduces the bug that made the picker look
+// frozen: the installer runs `rgt setup <url> < /dev/tty`, and a shell redirect
+// opens the terminal READ-ONLY. Handing that same handle back as the output
+// made every draw fail silently. Whatever ttyPair returns for output must
+// accept writes.
+func TestTTYPairOutputIsWritable(t *testing.T) {
+	// Stand in for the installer's read-only stdin.
+	ro, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("open devnull: %v", err)
+	}
+	defer ro.Close()
+
+	realStdin := os.Stdin
+	os.Stdin = ro
+	defer func() { os.Stdin = realStdin }()
+
+	in, out, cleanup, err := ttyPair()
+	if err != nil {
+		t.Skip("no controlling terminal in this environment")
+	}
+	defer cleanup()
+
+	if out == ro {
+		t.Fatal("output must never be the read-only stdin handed to us")
+	}
+	if _, err := out.Write(nil); err != nil {
+		t.Errorf("picker output handle must be writable, got: %v", err)
+	}
+	if in == nil {
+		t.Error("input handle must not be nil")
+	}
+}
+
+// TestTextPickerSelectsAndConnects drives the picker the way a person types:
+// tick a project by number, then "c".
+func TestTextPickerSelectsAndConnects(t *testing.T) {
 	root := t.TempDir()
 	mkProject(t, root, "alpha")
 	mkProject(t, root, "beta")
-	if err := os.MkdirAll(filepath.Join(root, "just-a-folder"), 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
 
-	m := newPickerModel(root)
+	var out bytes.Buffer
+	// Entries: 1) .. 2) alpha 3) beta -> "2" ticks alpha, "c" confirms.
+	got := runTextPicker(root, bufio.NewReader(strings.NewReader("2\nc\n")), &out)
 
-	// Entries: ".." then the two projects, then the plain folder.
-	if len(m.entries) != 4 {
-		t.Fatalf("want 4 entries (up, 2 projects, 1 folder), got %d: %+v", len(m.entries), m.entries)
-	}
-	if !m.entries[1].isProject || m.entries[1].label != "alpha" {
-		t.Errorf("projects should be listed first; entry[1] = %+v", m.entries[1])
-	}
-	if m.entries[3].isProject {
-		t.Errorf("a plain folder must not be selectable; entry[3] = %+v", m.entries[3])
-	}
-
-	press := func(model tea.Model, key string) tea.Model {
-		next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
-		return next
-	}
-	// Down to "alpha", select it, then continue.
-	down, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
-	sel := press(down, " ")
-	final := press(sel, "c")
-
-	got := final.(pickerModel).picked()
 	want := filepath.Join(root, "alpha")
 	if len(got) != 1 || got[0] != want {
 		t.Errorf("picked = %v, want [%s]", got, want)
 	}
+	if !strings.Contains(out.String(), "alpha") || !strings.Contains(out.String(), "beta") {
+		t.Errorf("both projects should be listed; got:\n%s", out.String())
+	}
 }
 
-// TestPickerQuitSelectsNothing: aborting must wire nothing, even if boxes were
-// ticked first.
-func TestPickerQuitSelectsNothing(t *testing.T) {
+// TestTextPickerQuitSelectsNothing: q must wire nothing even after ticking.
+func TestTextPickerQuitSelectsNothing(t *testing.T) {
 	root := t.TempDir()
 	mkProject(t, root, "alpha")
 
-	m := newPickerModel(root)
-	down, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
-	sel, _ := down.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(" ")})
-	quit, _ := sel.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
-
-	if got := quit.(pickerModel).picked(); len(got) != 0 {
+	var out bytes.Buffer
+	if got := runTextPicker(root, bufio.NewReader(strings.NewReader("2\nq\n")), &out); len(got) != 0 {
 		t.Errorf("quitting must select nothing, got %v", got)
+	}
+}
+
+// TestTextPickerBrowsesIntoFolders: choosing a plain folder navigates into it,
+// so projects nested under an org directory are reachable.
+func TestTextPickerBrowsesIntoFolders(t *testing.T) {
+	root := t.TempDir()
+	mkProject(t, root, "acme/web")
+
+	var out bytes.Buffer
+	// 1) .. 2) acme/ -> "2" enters acme, then 1) .. 2) web -> "2" ticks it.
+	got := runTextPicker(root, bufio.NewReader(strings.NewReader("2\n2\nc\n")), &out)
+
+	want := filepath.Join(root, "acme", "web")
+	if len(got) != 1 || got[0] != want {
+		t.Errorf("picked = %v, want [%s]", got, want)
 	}
 }

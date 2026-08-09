@@ -3,13 +3,14 @@ package cli
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
 )
 
@@ -28,16 +29,47 @@ func SetupCmd() *cobra.Command {
 	}
 }
 
-// openTTY returns a handle on the controlling terminal. stdin is not it under
-// `curl ... | sh` — there stdin is the script being read — so we open /dev/tty
-// directly, which still refers to the real terminal. The error case is a
-// genuine absence of any terminal (CI, cron), where the caller prints
-// instructions instead of waiting for input nobody can give.
-func openTTY() (*os.File, error) {
-	if interactive() {
-		return os.Stdin, nil
+// ttyPair returns the handles the interactive UI reads from and draws to, plus
+// a cleanup func. The error case is a genuine absence of any terminal (CI,
+// cron), where the caller prints instructions rather than waiting for input
+// nobody can give.
+//
+// Opening /dev/tty O_RDWR is deliberate and comes first. The installer invokes
+// `rgt setup <url> < /dev/tty`, and a shell `<` redirect opens the terminal
+// READ-ONLY: reusing that stdin as the output handle makes every draw fail, so
+// the picker never paints and looks frozen. stdin/stdout are only a fallback,
+// and even then output goes to stdout, never back at the input handle.
+func ttyPair() (in *os.File, out *os.File, cleanup func(), err error) {
+	var toClose []*os.File
+	cleanup = func() {
+		for _, f := range toClose {
+			_ = f.Close()
+		}
 	}
-	return os.OpenFile("/dev/tty", os.O_RDWR, 0)
+
+	// Read from stdin whenever it is already a terminal. Read-only is fine for
+	// reading, and it is the handle the TUI library drives most reliably — a
+	// separately-opened /dev/tty renders but never delivers keystrokes.
+	if interactive() {
+		in = os.Stdin
+	} else if f, e := os.OpenFile("/dev/tty", os.O_RDONLY, 0); e == nil {
+		in, toClose = f, append(toClose, f)
+	}
+
+	// Draw to stdout when it is a terminal, else to /dev/tty. Never back at the
+	// input handle: the installer runs this with `< /dev/tty`, whose read-only
+	// fd silently drops every write and leaves the picker looking frozen.
+	if term.IsTerminal(os.Stdout.Fd()) {
+		out = os.Stdout
+	} else if f, e := os.OpenFile("/dev/tty", os.O_WRONLY, 0); e == nil {
+		out, toClose = f, append(toClose, f)
+	}
+
+	if in == nil || out == nil {
+		cleanup()
+		return nil, nil, nil, fmt.Errorf("no controlling terminal")
+	}
+	return in, out, cleanup, nil
 }
 
 // defaultScanRoot picks where browsing starts: the current directory when it
@@ -67,20 +99,14 @@ func isDir(p string) bool {
 }
 
 func runSetup(serverURL string) error {
-	tty, err := openTTY()
+	ttyIn, ttyOut, cleanup, err := ttyPair()
 	if err != nil {
 		fmt.Printf("No terminal available, so nothing was wired.\n\nRun this inside a project:\n\n  rgt connect %s\n\n", serverURL)
 		return nil
 	}
-	if tty != os.Stdin {
-		defer tty.Close()
-	}
+	defer cleanup()
 
-	m, err := runPicker(defaultScanRoot(), tty)
-	if err != nil {
-		return err
-	}
-	picked := m.picked()
+	picked := runTextPicker(defaultScanRoot(), bufio.NewReader(ttyIn), ttyOut)
 	if len(picked) == 0 {
 		fmt.Println("Nothing selected — no projects were connected.")
 		return nil
@@ -101,7 +127,7 @@ func runSetup(serverURL string) error {
 		return fmt.Errorf("no projects were connected")
 	}
 
-	offerShare(wired, bufio.NewReader(tty))
+	offerShare(wired, bufio.NewReader(ttyIn))
 
 	fmt.Printf("\nDone. Open the viewer to watch turns arrive.\n")
 	fmt.Printf("Restart any Claude Code / Codex session already open in these projects —\n")
@@ -261,96 +287,72 @@ func (m *pickerModel) reload() {
 	m.entries = append(m.entries, folders...)
 }
 
-func (m pickerModel) Init() tea.Cmd { return nil }
+// runTextPicker lists projects and reads plain lines, deliberately not a
+// full-screen TUI. The keystroke-driven version rendered correctly but never
+// received input across every terminal configuration tried; a line-based prompt
+// reads from the same handle reliably, and works over SSH and in dumb terminals
+// where a raw-mode UI does not.
+func runTextPicker(root string, in *bufio.Reader, out io.Writer) []string {
+	m := newPickerModel(root)
 
-func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	key, ok := msg.(tea.KeyMsg)
-	if !ok {
-		return m, nil
-	}
-	switch key.String() {
-	case "ctrl+c", "q", "esc":
-		m.aborted = true
-		return m, tea.Quit
-	case "up", "k":
-		if m.cursor > 0 {
-			m.cursor--
+	for {
+		fmt.Fprintf(out, "\n  Connect projects to re_gent\n  %s\n\n", m.root)
+		if len(m.entries) == 0 {
+			fmt.Fprintf(out, "  (nothing here)\n")
 		}
-	case "down", "j":
-		if m.cursor < len(m.entries)-1 {
-			m.cursor++
-		}
-	case " ":
-		if e := m.current(); e != nil && e.isProject {
-			m.selected[e.path] = !m.selected[e.path]
-		}
-	case "enter", "right", "l":
-		// Enter opens a folder; on a project it means "this one, go".
-		if e := m.current(); e != nil {
-			if e.isUp || !e.isProject {
-				m.root = e.path
-				m.reload()
-				return m, nil
+		for i, e := range m.entries {
+			switch {
+			case e.isUp:
+				fmt.Fprintf(out, "  %2d) ..            (up one level)\n", i+1)
+			case e.isProject:
+				mark := " "
+				if m.selected[e.path] {
+					mark = "x"
+				}
+				fmt.Fprintf(out, "  %2d) [%s] %s\n", i+1, mark, e.label)
+			default:
+				fmt.Fprintf(out, "  %2d)     %s\n", i+1, e.label)
 			}
-			m.selected[e.path] = true
-			m.done = true
-			return m, tea.Quit
 		}
-	case "left", "h":
-		if parent := filepath.Dir(m.root); parent != m.root {
-			m.root = parent
-			m.reload()
+		fmt.Fprintf(out, "\n  %d selected\n", len(m.picked()))
+		fmt.Fprintf(out, "  number = open folder / tick project · a = all here · c = connect · q = quit\n> ")
+
+		line, err := in.ReadString('\n')
+		if err != nil && strings.TrimSpace(line) == "" {
+			return nil // input closed; treat as cancel rather than looping forever
 		}
-	case "c":
-		m.done = true
-		return m, tea.Quit
-	}
-	return m, nil
-}
-
-func (m pickerModel) current() *pickerEntry {
-	if m.cursor < 0 || m.cursor >= len(m.entries) {
-		return nil
-	}
-	return &m.entries[m.cursor]
-}
-
-func (m pickerModel) View() string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "\n  Connect projects to re_gent\n  %s\n\n", m.root)
-
-	if len(m.entries) == 0 {
-		b.WriteString("  (empty)\n")
-	}
-	for i, e := range m.entries {
-		cursor := "  "
-		if i == m.cursor {
-			cursor = "> "
-		}
-		switch {
-		case e.isUp, !e.isProject:
-			fmt.Fprintf(&b, "%s    %s\n", cursor, e.label)
+		switch cmd := strings.ToLower(strings.TrimSpace(line)); cmd {
+		case "q", "quit":
+			return nil
+		case "c", "":
+			return m.picked()
+		case "a", "all":
+			for _, e := range m.entries {
+				if e.isProject {
+					m.selected[e.path] = true
+				}
+			}
+			continue
 		default:
-			mark := " "
-			if m.selected[e.path] {
-				mark = "x"
+			picks, perr := parseSelection(cmd, len(m.entries))
+			if perr != nil || len(picks) == 0 {
+				fmt.Fprintf(out, "  ! %v\n", perr)
+				continue
 			}
-			fmt.Fprintf(&b, "%s[%s] %s\n", cursor, mark, e.label)
+			// A single entry that is a folder means "go there"; anything else
+			// toggles the projects named.
+			if len(picks) == 1 {
+				if e := m.entries[picks[0]]; e.isUp || !e.isProject {
+					m.root = e.path
+					m.reload()
+					continue
+				}
+			}
+			for _, i := range picks {
+				if e := m.entries[i]; e.isProject {
+					m.selected[e.path] = !m.selected[e.path]
+				}
+			}
 		}
 	}
-
-	fmt.Fprintf(&b, "\n  %d selected\n", len(m.picked()))
-	b.WriteString("  ↑↓ move · space select · enter open folder · c connect · q quit\n")
-	return b.String()
-}
-
-// runPicker drives the TUI on the given terminal.
-func runPicker(root string, tty *os.File) (pickerModel, error) {
-	p := tea.NewProgram(newPickerModel(root), tea.WithInput(tty), tea.WithOutput(tty))
-	out, err := p.Run()
-	if err != nil {
-		return pickerModel{}, fmt.Errorf("picker: %w", err)
-	}
-	m, _ := out.(pickerModel)
-	return m, nil
 }
