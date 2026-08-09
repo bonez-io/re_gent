@@ -48,10 +48,16 @@ merged rather than duplicated and existing config is preserved.`,
 			if err != nil {
 				return fmt.Errorf("get working directory: %w", err)
 			}
-			return runConnect(connectParams{
-				serverURL:   strings.TrimRight(args[0], "/"),
-				projectRoot: cwd,
-			})
+			serverURL := strings.TrimRight(args[0], "/")
+
+			// Standing inside a project (or one already wired) connects it —
+			// the common case, unchanged.
+			if isProjectDir(cwd) {
+				return runConnect(connectParams{serverURL: serverURL, projectRoot: cwd})
+			}
+			// Otherwise offer the projects below here, so wiring several does
+			// not mean cd-ing into each one and retyping the command.
+			return connectPicked(serverURL, cwd, cmd.OutOrStdout(), cmd.InOrStdin(), interactive())
 		},
 	}
 	return cmd
