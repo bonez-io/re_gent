@@ -149,24 +149,22 @@ rgt version 2>/dev/null || true
 # scatter .regent/ into home directories. A .git entry is the marker (it is a
 # file, not a directory, inside worktrees and submodules). The server is open,
 # so no token is involved.
-if [ -e .git ]; then
-  info "Wiring this project to {{.BaseURL}} ..."
-  # A connect failure must not make a successful install look failed, so this
-  # is tolerated rather than fatal under 'set -e'.
-  if rgt connect "{{.BaseURL}}"; then
-    # connect already printed the restart warning and the commit-to-share hint,
-    # so repeating them here would only bury them.
-    printf '\n== You are done ==\n'
-  else
-    warn "Installed rgt, but could not wire this project. Retry inside it with:"
-    warn "  rgt connect {{.BaseURL}}"
-  fi
+# Hand over to the interactive picker so choosing projects is part of the same
+# command. Redirecting from /dev/tty is what makes this possible at all: under
+# "curl | sh" stdin is the script being read, so the wizard would otherwise get
+# EOF instead of keystrokes. /dev/tty still refers to the real terminal.
+if [ -r /dev/tty ]; then
+  rgt setup "{{.BaseURL}}" < /dev/tty || {
+    warn "Setup did not finish. You can re-run it any time with:"
+    warn "  rgt setup {{.BaseURL}}"
+  }
 else
+  # No terminal at all (CI, a provisioning script): install only, and say what
+  # to run rather than guessing which project was meant.
   printf '\n== rgt installed ==\n\n'
-  info "You are not in a project directory, so nothing was wired. Run this from"
-  info "inside your project to connect it (no token needed):"
+  info "No terminal available, so no project was wired. Run this yourself:"
   info ""
-  info "  rgt connect {{.BaseURL}}"
+  info "  rgt setup {{.BaseURL}}"
   info ""
 fi
 printf '\n'

@@ -30,7 +30,8 @@ func fetchInstallScript(t *testing.T, baseURL string) string {
 // returns that stub's invocations, one per line. Because a working rgt is already
 // on PATH the script skips the download entirely, so this exercises the wiring
 // logic without touching the network.
-func runInstaller(t *testing.T, script, workDir string) string {
+// It returns the installer's combined output and the stub's invocations.
+func runInstaller(t *testing.T, script, workDir string) (string, string) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX sh installer")
@@ -65,42 +66,56 @@ func runInstaller(t *testing.T, script, workDir string) string {
 
 	logged, readErr := os.ReadFile(callLog)
 	if readErr != nil {
-		return "" // stub was never called
+		return string(out), "" // stub was never called
 	}
-	return string(logged)
+	return string(out), string(logged)
 }
 
-// TestInstallAutoConnectsInsideAProject is the one-command onboarding promise:
-// running the installer from inside a project must ALSO wire that project to the
-// server, so a teammate never runs a separate `rgt connect`.
-func TestInstallAutoConnectsInsideAProject(t *testing.T) {
+// hasTTY reports whether this test environment has a controlling terminal. The
+// installer's behaviour legitimately differs, so the assertion below follows it
+// rather than assuming a developer machine.
+func hasTTY() bool {
+	f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		return false
+	}
+	_ = f.Close()
+	return true
+}
+
+// TestInstallHandsOverToSetup is the one-command onboarding promise: installing
+// must lead straight into the project picker, so a teammate never runs a
+// separate connect step. With no terminal it must instead say what to run —
+// never silently wire nothing and never block on input nobody can give.
+func TestInstallHandsOverToSetup(t *testing.T) {
 	_, _, ts := newTestServer(t)
 	script := fetchInstallScript(t, ts.URL)
 
-	// A project is identified by its .git directory.
-	project := t.TempDir()
-	if err := os.Mkdir(filepath.Join(project, ".git"), 0o755); err != nil {
-		t.Fatalf("mkdir .git: %v", err)
-	}
+	out, calls := runInstaller(t, script, t.TempDir())
 
-	calls := runInstaller(t, script, project)
-	want := "connect " + ts.URL
-	if !strings.Contains(calls, want) {
-		t.Errorf("installer run inside a project should call %q; calls were:\n%s", want, calls)
+	if hasTTY() {
+		want := "setup " + ts.URL
+		if !strings.Contains(calls, want) {
+			t.Errorf("installer should hand over to %q; calls were:\n%s", want, calls)
+		}
+		return
+	}
+	if strings.Contains(calls, "setup ") {
+		t.Errorf("with no terminal the picker cannot run; calls were:\n%s", calls)
+	}
+	if !strings.Contains(out, "rgt setup "+ts.URL) {
+		t.Errorf("with no terminal the installer must print the command to run; output:\n%s", out)
 	}
 }
 
-// TestInstallDoesNotConnectOutsideAProject guards the other half: `curl | sh`
-// runs in whatever directory the teammate happens to be in. Connecting blindly
-// would scatter .regent/ into home directories, so a non-project directory must
-// install rgt and stop there.
-func TestInstallDoesNotConnectOutsideAProject(t *testing.T) {
+// TestInstallScriptReadsFromTTY pins the mechanism the picker depends on: under
+// `curl | sh` stdin is the script itself, so the wizard must be fed /dev/tty or
+// it receives EOF instead of keystrokes.
+func TestInstallScriptReadsFromTTY(t *testing.T) {
 	_, _, ts := newTestServer(t)
 	script := fetchInstallScript(t, ts.URL)
 
-	calls := runInstaller(t, script, t.TempDir()) // no .git
-
-	if strings.Contains(calls, "connect ") {
-		t.Errorf("installer must not connect outside a project; calls were:\n%s", calls)
+	if !strings.Contains(script, "< /dev/tty") {
+		t.Error("installer must run setup with stdin redirected from /dev/tty")
 	}
 }
