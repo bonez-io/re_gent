@@ -277,6 +277,7 @@ type pickerEntry struct {
 	label     string
 	isProject bool
 	isUp      bool
+	isNone    bool // the explicit "connect nothing" row
 	wired     bool // already connected; shown so nobody wires it twice
 }
 
@@ -287,6 +288,7 @@ type pickerModel struct {
 	selected map[string]bool // keyed by absolute path, so it survives navigation
 	done     bool
 	aborted  bool
+	hint     string // shown when a key could not do what was asked
 }
 
 // picked returns the chosen project paths in a stable order.
@@ -348,6 +350,9 @@ func (m *pickerModel) reload() {
 	sort.Slice(folders, func(i, j int) bool { return folders[i].label < folders[j].label })
 	m.entries = append(m.entries, projects...)
 	m.entries = append(m.entries, folders...)
+	// An explicit way out. Leaving without connecting should be a visible
+	// choice, not something you have to know a key for.
+	m.entries = append(m.entries, pickerEntry{label: "Nothing — don't connect anything", isNone: true})
 }
 
 // ---------------------------------------------------------------------------
@@ -359,6 +364,7 @@ var (
 	dim     = lipgloss.NewStyle().Foreground(lipgloss.Color("103"))
 	heading = lipgloss.NewStyle().Bold(true)
 	chosen  = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	warn    = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 )
 
 func (m pickerModel) Init() tea.Cmd { return nil }
@@ -373,14 +379,17 @@ func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.aborted = true
 		return m, tea.Quit
 	case "up", "k":
+		m.hint = ""
 		if m.cursor > 0 {
 			m.cursor--
 		}
 	case "down", "j":
+		m.hint = ""
 		if m.cursor < len(m.entries)-1 {
 			m.cursor++
 		}
 	case " ", "x":
+		m.hint = ""
 		if e := m.current(); e != nil && e.isProject {
 			m.selected[e.path] = !m.selected[e.path]
 		}
@@ -406,10 +415,23 @@ func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case "enter":
-		// Enter on a folder opens it; anywhere else it means "go".
-		if e := m.current(); e != nil && (e.isUp || !e.isProject) {
+		e := m.current()
+		switch {
+		case e == nil:
+			return m, nil
+		case e.isNone:
+			// Chose to connect nothing: leave without wiring anything.
+			m.aborted = true
+			return m, tea.Quit
+		case e.isUp || !e.isProject:
+			m.hint = ""
 			m.root = e.path
 			m.reload()
+			return m, nil
+		case len(m.picked()) == 0:
+			// Refuse to "confirm" an empty selection: silently connecting
+			// nothing looks identical to a broken key.
+			m.hint = "Nothing selected yet — press space to select a project, or choose \"Nothing\" to leave."
 			return m, nil
 		}
 		m.done = true
@@ -470,6 +492,8 @@ func (m pickerModel) View() string {
 		switch {
 		case e.isUp:
 			b.WriteString(cursor + dim.Render(num+" ..") + "\n")
+		case e.isNone:
+			b.WriteString(cursor + dim.Render(num+" "+e.label) + "\n")
 		case e.isProject:
 			label := num + " " + e.label
 			switch {
@@ -484,6 +508,9 @@ func (m pickerModel) View() string {
 		}
 	}
 
+	if m.hint != "" {
+		b.WriteString("\n  " + warn.Render(m.hint) + "\n")
+	}
 	b.WriteString("\n" + dim.Render(fmt.Sprintf("  %d selected  ·  ↑↓ move  ·  space select  ·  → open folder  ·  ← back  ·  q quit", len(m.picked()))) + "\n")
 	return b.String()
 }

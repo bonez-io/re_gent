@@ -215,6 +215,69 @@ func TestPickerMarksAlreadyConnected(t *testing.T) {
 	}
 }
 
+// TestPickerRefusesEnterWithNothingSelected: confirming an empty selection
+// would connect nothing and look exactly like a dead key, so enter must decline
+// and say what to press instead.
+func TestPickerRefusesEnterWithNothingSelected(t *testing.T) {
+	root := t.TempDir()
+	mkProject(t, root, "alpha")
+
+	var m tea.Model = newPickerModel(root)
+	m = press(m, down())  // onto alpha, nothing ticked
+	m = press(m, enter()) // must not confirm
+
+	pm := m.(pickerModel)
+	if pm.done {
+		t.Error("enter must not confirm an empty selection")
+	}
+	if len(pm.picked()) != 0 {
+		t.Errorf("nothing should be picked, got %v", pm.picked())
+	}
+	if pm.hint == "" || !strings.Contains(pm.View(), "space") {
+		t.Errorf("the picker should say how to select; view:\n%s", pm.View())
+	}
+
+	// Ticking then confirming still works.
+	m = press(m, key(" "))
+	m = press(m, enter())
+	if got := m.(pickerModel).picked(); len(got) != 1 {
+		t.Errorf("after selecting, enter should confirm; picked %v", got)
+	}
+}
+
+// TestPickerNothingOption: leaving without connecting is an explicit choice in
+// the list, not a key you have to already know.
+func TestPickerNothingOption(t *testing.T) {
+	root := t.TempDir()
+	mkProject(t, root, "alpha")
+
+	m := newPickerModel(root)
+	last := m.entries[len(m.entries)-1]
+	if !last.isNone {
+		t.Fatalf("last entry should be the opt-out, got %+v", last)
+	}
+	if !strings.Contains(m.View(), "Nothing") {
+		t.Errorf("the opt-out should be visible; view:\n%s", m.View())
+	}
+
+	// Select a project first, then choose Nothing: it must still wire nothing.
+	var tm tea.Model = m
+	tm = press(tm, down())
+	tm = press(tm, key(" "))
+	for i := 0; i < len(m.entries); i++ {
+		tm = press(tm, down()) // walk to the last row
+	}
+	tm = press(tm, enter())
+
+	pm := tm.(pickerModel)
+	if !pm.aborted {
+		t.Error("choosing Nothing should leave without connecting")
+	}
+	if got := pm.picked(); len(got) != 0 {
+		t.Errorf("Nothing must override earlier ticks, got %v", got)
+	}
+}
+
 // TestServerIsRemembered is what makes bare `rgt` work: the URL is stored after
 // setup, so later runs need no argument.
 func TestServerIsRemembered(t *testing.T) {
