@@ -36,6 +36,7 @@ func main() {
 	rootCmd.AddCommand(cli.PushCmd())
 	rootCmd.AddCommand(cli.ConnectCmd())
 	rootCmd.AddCommand(cli.SetupCmd())
+	rootCmd.AddCommand(cli.DisconnectCmd())
 	rootCmd.AddCommand(cli.LogCmd())
 	rootCmd.AddCommand(cli.StatusCmd())
 	rootCmd.AddCommand(cli.BlameCmd())

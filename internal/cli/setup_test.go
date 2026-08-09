@@ -211,8 +211,17 @@ func TestPickerMarksAlreadyConnected(t *testing.T) {
 			t.Error("beta is not connected and must not be marked")
 		}
 	}
-	if !strings.Contains(m.View(), "already connected") {
-		t.Errorf("view should say a project is already connected:\n%s", m.View())
+	if !strings.Contains(m.View(), "(connected)") {
+		t.Errorf("view should mark a connected project:\n%s", m.View())
+	}
+
+	// Marking a connected project means disconnect, and the view must say so
+	// rather than implying it will be connected again.
+	var tm tea.Model = m
+	tm = press(tm, down())
+	tm = press(tm, key(" "))
+	if v := tm.(pickerModel).View(); !strings.Contains(v, "disconnect") {
+		t.Errorf("marking a connected project should read as disconnect:\n%s", v)
 	}
 }
 

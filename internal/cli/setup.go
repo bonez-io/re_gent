@@ -172,19 +172,32 @@ func runSetup(serverURL string) error {
 		return nil
 	}
 
-	// Wire first, share second: sharing only makes sense for what actually got
-	// wired, and connect prints its own per-project progress.
+	// A selected project that is already connected means "disconnect it": the
+	// tick expresses the change you want, not a single fixed verb.
 	var wired []string
+	var unwired int
 	for _, p := range picked {
 		fmt.Printf("\n== %s ==\n", filepath.Base(p))
+		if isWired(p) {
+			if err := reportDisconnect(p); err != nil {
+				fmt.Printf("  ! %v\n", err)
+				continue
+			}
+			unwired++
+			continue
+		}
 		if err := runConnect(connectParams{serverURL: serverURL, projectRoot: p}); err != nil {
 			fmt.Printf("  ! %v\n", err)
 			continue
 		}
 		wired = append(wired, p)
 	}
+	if len(wired) == 0 && unwired == 0 {
+		return fmt.Errorf("nothing was changed")
+	}
 	if len(wired) == 0 {
-		return fmt.Errorf("no projects were connected")
+		fmt.Printf("\nDone. %d project(s) disconnected.\n", unwired)
+		return nil
 	}
 
 	rememberServer(serverURL)
@@ -461,7 +474,7 @@ func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case len(m.picked()) == 0:
 			// Refuse to "confirm" an empty selection: silently connecting
 			// nothing looks identical to a broken key.
-			m.hint = "Nothing selected yet — press space to select a project, or choose \"Nothing\" to leave."
+			m.hint = "Nothing marked yet — press space to mark a project, or choose \"Nothing\" to leave."
 			return m, nil
 		}
 		m.done = true
@@ -505,8 +518,8 @@ func (m pickerModel) View() string {
 
 	b.WriteString("\n" + banner() + "\n")
 	b.WriteString("Let's get started.\n\n")
-	b.WriteString(heading.Render("Choose the projects to connect to your team server") + "\n")
-	b.WriteString(dim.Render("Space selects, enter connects. Run rgt again any time.") + "\n\n")
+	b.WriteString(heading.Render("Connect or disconnect projects") + "\n")
+	b.WriteString(dim.Render("Space marks a project. Connected ones get disconnected. Run rgt any time.") + "\n\n")
 	b.WriteString(dim.Render("  "+shortPath(m.root)) + "\n\n")
 
 	if len(m.entries) == 0 {
@@ -527,10 +540,12 @@ func (m pickerModel) View() string {
 		case e.isProject:
 			label := num + " " + e.label
 			switch {
+			case m.selected[e.path] && e.wired:
+				label = warn.Render(label) + " " + warn.Render("✗ disconnect")
 			case m.selected[e.path]:
-				label = chosen.Render(label) + " " + chosen.Render("✔")
+				label = chosen.Render(label) + " " + chosen.Render("✔ connect")
 			case e.wired:
-				label += " " + dim.Render("(already connected)")
+				label += " " + dim.Render("(connected)")
 			}
 			b.WriteString(cursor + label + "\n")
 		default:
@@ -541,7 +556,7 @@ func (m pickerModel) View() string {
 	if m.hint != "" {
 		b.WriteString("\n  " + warn.Render(m.hint) + "\n")
 	}
-	b.WriteString("\n" + dim.Render(fmt.Sprintf("  %d selected  ·  ↑↓ move  ·  space select  ·  → open folder  ·  ← back  ·  q quit", len(m.picked()))) + "\n")
+	b.WriteString("\n" + dim.Render(fmt.Sprintf("  %d marked  ·  ↑↓ move  ·  space select  ·  → open folder  ·  ← back  ·  q quit", len(m.picked()))) + "\n")
 	return b.String()
 }
 
