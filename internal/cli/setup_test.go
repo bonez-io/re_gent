@@ -1,13 +1,13 @@
 package cli
 
 import (
-	"bufio"
-	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // gitRepo makes a real repository with one commit, so HEAD exists.
@@ -128,49 +128,114 @@ func TestTTYPairOutputIsWritable(t *testing.T) {
 	}
 }
 
-// TestTextPickerSelectsAndConnects drives the picker the way a person types:
-// tick a project by number, then "c".
-func TestTextPickerSelectsAndConnects(t *testing.T) {
+// press feeds one key to the model, the way a keyboard would.
+func press(m tea.Model, k tea.KeyMsg) tea.Model {
+	next, _ := m.Update(k)
+	return next
+}
+
+func key(r string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(r)} }
+func down() tea.KeyMsg        { return tea.KeyMsg{Type: tea.KeyDown} }
+func enter() tea.KeyMsg       { return tea.KeyMsg{Type: tea.KeyEnter} }
+func right() tea.KeyMsg       { return tea.KeyMsg{Type: tea.KeyRight} }
+
+// TestPickerSelectsWithArrowsAndSpace is the interaction the picker exists for:
+// move with arrows, tick with space, confirm with enter.
+func TestPickerSelectsWithArrowsAndSpace(t *testing.T) {
 	root := t.TempDir()
 	mkProject(t, root, "alpha")
 	mkProject(t, root, "beta")
 
-	var out bytes.Buffer
-	// Entries: 1) .. 2) alpha 3) beta -> "2" ticks alpha, "c" confirms.
-	got := runTextPicker(root, bufio.NewReader(strings.NewReader("2\nc\n")), &out)
+	var m tea.Model = newPickerModel(root)
+	m = press(m, down())   // onto alpha (entry 0 is "..")
+	m = press(m, key(" ")) // tick it
+	m = press(m, enter())  // connect
 
+	got := m.(pickerModel).picked()
 	want := filepath.Join(root, "alpha")
 	if len(got) != 1 || got[0] != want {
 		t.Errorf("picked = %v, want [%s]", got, want)
 	}
-	if !strings.Contains(out.String(), "alpha") || !strings.Contains(out.String(), "beta") {
-		t.Errorf("both projects should be listed; got:\n%s", out.String())
-	}
 }
 
-// TestTextPickerQuitSelectsNothing: q must wire nothing even after ticking.
-func TestTextPickerQuitSelectsNothing(t *testing.T) {
+// TestPickerQuitSelectsNothing: q must wire nothing even after ticking.
+func TestPickerQuitSelectsNothing(t *testing.T) {
 	root := t.TempDir()
 	mkProject(t, root, "alpha")
 
-	var out bytes.Buffer
-	if got := runTextPicker(root, bufio.NewReader(strings.NewReader("2\nq\n")), &out); len(got) != 0 {
+	var m tea.Model = newPickerModel(root)
+	m = press(m, down())
+	m = press(m, key(" "))
+	m = press(m, key("q"))
+
+	if got := m.(pickerModel).picked(); len(got) != 0 {
 		t.Errorf("quitting must select nothing, got %v", got)
 	}
 }
 
-// TestTextPickerBrowsesIntoFolders: choosing a plain folder navigates into it,
-// so projects nested under an org directory are reachable.
-func TestTextPickerBrowsesIntoFolders(t *testing.T) {
+// TestPickerBrowsesIntoFolders: → opens a plain folder, so projects nested under
+// an org directory are reachable without leaving the picker.
+func TestPickerBrowsesIntoFolders(t *testing.T) {
 	root := t.TempDir()
 	mkProject(t, root, "acme/web")
 
-	var out bytes.Buffer
-	// 1) .. 2) acme/ -> "2" enters acme, then 1) .. 2) web -> "2" ticks it.
-	got := runTextPicker(root, bufio.NewReader(strings.NewReader("2\n2\nc\n")), &out)
+	var m tea.Model = newPickerModel(root)
+	m = press(m, down())   // onto "acme/"
+	m = press(m, right())  // open it
+	m = press(m, down())   // onto "web"
+	m = press(m, key(" ")) // tick
+	m = press(m, enter())
 
+	got := m.(pickerModel).picked()
 	want := filepath.Join(root, "acme", "web")
 	if len(got) != 1 || got[0] != want {
 		t.Errorf("picked = %v, want [%s]", got, want)
+	}
+}
+
+// TestPickerMarksAlreadyConnected: a project that already points at a server is
+// labelled, so nobody wires it a second time wondering why nothing changed.
+func TestPickerMarksAlreadyConnected(t *testing.T) {
+	root := t.TempDir()
+	wired := mkProject(t, root, "alpha")
+	writeFile(t, wired, ".regent/config.toml", "[remote]\nurl = 'http://example.test'\n")
+	mkProject(t, root, "beta")
+
+	m := newPickerModel(root)
+	for _, e := range m.entries {
+		if e.label == "alpha" && !e.wired {
+			t.Error("alpha is connected and should be marked as such")
+		}
+		if e.label == "beta" && e.wired {
+			t.Error("beta is not connected and must not be marked")
+		}
+	}
+	if !strings.Contains(m.View(), "already connected") {
+		t.Errorf("view should say a project is already connected:\n%s", m.View())
+	}
+}
+
+// TestServerIsRemembered is what makes bare `rgt` work: the URL is stored after
+// setup, so later runs need no argument.
+func TestServerIsRemembered(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	if _, err := resolveServerURL(""); err == nil {
+		t.Error("with no server known yet, resolving must fail with guidance")
+	}
+
+	rememberServer("http://team.example:7654")
+
+	got, err := resolveServerURL("")
+	if err != nil {
+		t.Fatalf("after remembering, resolve should succeed: %v", err)
+	}
+	if got != "http://team.example:7654" {
+		t.Errorf("resolved %q, want the remembered server", got)
+	}
+
+	// An explicit argument still wins, and a trailing slash is normalised.
+	if got, _ := resolveServerURL("http://other.example:7654/"); got != "http://other.example:7654" {
+		t.Errorf("explicit arg should win and lose its trailing slash, got %q", got)
 	}
 }

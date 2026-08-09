@@ -14,6 +14,17 @@ func main() {
 		Short:   "re_gent - version control for AI agent activity",
 		Long:    "re_gent is a content-addressed version control system for AI agent activity.\nIt captures what an agent did, why, and lets you blame, log, and inspect steps across sessions.",
 		Version: cli.Version,
+		// Bare `rgt` is the front door once a server is known: offer to wire
+		// more projects rather than printing help nobody asked for.
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := cli.RunDefaultSetup(); err != nil {
+				// No server yet: help is the useful answer, not an error dump.
+				_ = cmd.Help()
+				return nil
+			}
+			return nil
+		},
 	}
 	// Make `rgt --version` print the same line as `rgt version`.
 	rootCmd.SetVersionTemplate(cli.VersionString() + "\n")

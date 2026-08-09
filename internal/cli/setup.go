@@ -3,14 +3,16 @@ package cli
 import (
 	"bufio"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/term"
+	"github.com/regent-vcs/regent/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -19,14 +21,63 @@ import (
 // re-run at any time.
 func SetupCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:          "setup <server-url>",
-		Short:        "Pick projects to connect to a re_gent server",
-		Args:         cobra.ExactArgs(1),
+		Use:   "setup [server-url]",
+		Short: "Pick projects to connect to a re_gent server",
+		Long: "Opens a picker of the projects on this machine and wires the ones you\n" +
+			"choose. The server URL is remembered after the first run, so later runs\n" +
+			"need no argument — `rgt` on its own does the same thing.",
+		Args:         cobra.MaximumNArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSetup(strings.TrimRight(args[0], "/"))
+			explicit := ""
+			if len(args) == 1 {
+				explicit = args[0]
+			}
+			url, err := resolveServerURL(explicit)
+			if err != nil {
+				return err
+			}
+			return runSetup(url)
 		},
 	}
+}
+
+// resolveServerURL prefers an explicit argument and otherwise falls back to the
+// server remembered from a previous run, so repeat use needs no URL.
+func resolveServerURL(explicit string) (string, error) {
+	if explicit != "" {
+		return strings.TrimRight(explicit, "/"), nil
+	}
+	cfg, err := config.Load()
+	if err == nil && cfg.Server.URL != "" {
+		return strings.TrimRight(cfg.Server.URL, "/"), nil
+	}
+	return "", fmt.Errorf("no server known yet\n\nRun it once with your team server:\n\n  rgt setup <server-url>")
+}
+
+// rememberServer stores the server so later runs need no URL. A failure here is
+// not worth interrupting a successful setup over — it only costs one argument
+// next time.
+func rememberServer(url string) {
+	cfg, err := config.Load()
+	if err != nil {
+		return
+	}
+	if cfg.Server.URL == url {
+		return
+	}
+	cfg.Server.URL = url
+	_ = config.Save(cfg)
+}
+
+// RunDefaultSetup is what bare `rgt` does: offer to wire more projects into the
+// server this machine already knows.
+func RunDefaultSetup() error {
+	url, err := resolveServerURL("")
+	if err != nil {
+		return err
+	}
+	return runSetup(url)
 }
 
 // ttyPair returns the handles the interactive UI reads from and draws to, plus
@@ -93,6 +144,12 @@ func defaultScanRoot() string {
 	return home
 }
 
+// isWired reports whether a project already points at a server.
+func isWired(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, ".regent", "config.toml"))
+	return err == nil
+}
+
 func isDir(p string) bool {
 	fi, err := os.Stat(p)
 	return err == nil && fi.IsDir()
@@ -106,7 +163,10 @@ func runSetup(serverURL string) error {
 	}
 	defer cleanup()
 
-	picked := runTextPicker(defaultScanRoot(), bufio.NewReader(ttyIn), ttyOut)
+	picked, err := runPicker(defaultScanRoot(), ttyIn, ttyOut)
+	if err != nil {
+		return err
+	}
 	if len(picked) == 0 {
 		fmt.Println("Nothing selected — no projects were connected.")
 		return nil
@@ -127,6 +187,7 @@ func runSetup(serverURL string) error {
 		return fmt.Errorf("no projects were connected")
 	}
 
+	rememberServer(serverURL)
 	offerShare(wired, bufio.NewReader(ttyIn))
 
 	fmt.Printf("\nDone. Open the viewer to watch turns arrive.\n")
@@ -216,6 +277,7 @@ type pickerEntry struct {
 	label     string
 	isProject bool
 	isUp      bool
+	wired     bool // already connected; shown so nobody wires it twice
 }
 
 type pickerModel struct {
@@ -260,7 +322,8 @@ func (m *pickerModel) reload() {
 	}
 	if isProjectDir(m.root) {
 		m.entries = append(m.entries, pickerEntry{
-			path: m.root, label: filepath.Base(m.root) + "  (this folder)", isProject: true,
+			path: m.root, label: filepath.Base(m.root) + "  (this folder)",
+			isProject: true, wired: isWired(m.root),
 		})
 	}
 
@@ -276,7 +339,7 @@ func (m *pickerModel) reload() {
 		}
 		full := filepath.Join(m.root, name)
 		if isProjectDir(full) {
-			projects = append(projects, pickerEntry{path: full, label: name, isProject: true})
+			projects = append(projects, pickerEntry{path: full, label: name, isProject: true, wired: isWired(full)})
 		} else {
 			folders = append(folders, pickerEntry{path: full, label: name + "/"})
 		}
@@ -287,72 +350,141 @@ func (m *pickerModel) reload() {
 	m.entries = append(m.entries, folders...)
 }
 
-// runTextPicker lists projects and reads plain lines, deliberately not a
-// full-screen TUI. The keystroke-driven version rendered correctly but never
-// received input across every terminal configuration tried; a line-based prompt
-// reads from the same handle reliably, and works over SSH and in dumb terminals
-// where a raw-mode UI does not.
-func runTextPicker(root string, in *bufio.Reader, out io.Writer) []string {
-	m := newPickerModel(root)
+// ---------------------------------------------------------------------------
+// Arrow-key picker
+// ---------------------------------------------------------------------------
 
-	for {
-		fmt.Fprintf(out, "\n  Connect projects to re_gent\n  %s\n\n", m.root)
-		if len(m.entries) == 0 {
-			fmt.Fprintf(out, "  (nothing here)\n")
+var (
+	accent  = lipgloss.NewStyle().Foreground(lipgloss.Color("141")).Bold(true)
+	dim     = lipgloss.NewStyle().Foreground(lipgloss.Color("103"))
+	heading = lipgloss.NewStyle().Bold(true)
+	chosen  = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+)
+
+func (m pickerModel) Init() tea.Cmd { return nil }
+
+func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	key, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+	switch key.String() {
+	case "ctrl+c", "q", "esc":
+		m.aborted = true
+		return m, tea.Quit
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
 		}
-		for i, e := range m.entries {
+	case "down", "j":
+		if m.cursor < len(m.entries)-1 {
+			m.cursor++
+		}
+	case " ", "x":
+		if e := m.current(); e != nil && e.isProject {
+			m.selected[e.path] = !m.selected[e.path]
+		}
+	case "right", "l":
+		// Open a folder. On a project this would be ambiguous, so it selects.
+		if e := m.current(); e != nil {
+			if e.isUp || !e.isProject {
+				m.root = e.path
+				m.reload()
+			} else {
+				m.selected[e.path] = true
+			}
+		}
+	case "left", "h":
+		if parent := filepath.Dir(m.root); parent != m.root {
+			m.root = parent
+			m.reload()
+		}
+	case "a":
+		for _, e := range m.entries {
+			if e.isProject {
+				m.selected[e.path] = true
+			}
+		}
+	case "enter":
+		// Enter on a folder opens it; anywhere else it means "go".
+		if e := m.current(); e != nil && (e.isUp || !e.isProject) {
+			m.root = e.path
+			m.reload()
+			return m, nil
+		}
+		m.done = true
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
+func (m pickerModel) current() *pickerEntry {
+	if m.cursor < 0 || m.cursor >= len(m.entries) {
+		return nil
+	}
+	return &m.entries[m.cursor]
+}
+
+func (m pickerModel) View() string {
+	var b strings.Builder
+
+	// Deliberately echoes the shape of a first-run welcome: title, rule, a
+	// plain-language heading, then the choices. No banner art — the name is the
+	// only branding here.
+	b.WriteString("\n" + accent.Render("Welcome to re_gent") + " " + dim.Render(Version) + "\n")
+	b.WriteString(dim.Render(strings.Repeat("·", 62)) + "\n\n")
+	b.WriteString("Let's get started.\n\n")
+	b.WriteString(heading.Render("Choose the projects to connect to your team server") + "\n")
+	b.WriteString(dim.Render("Space selects, enter connects. Run rgt again any time.") + "\n\n")
+	b.WriteString(dim.Render("  "+shortPath(m.root)) + "\n\n")
+
+	if len(m.entries) == 0 {
+		b.WriteString(dim.Render("  (nothing here)") + "\n")
+	}
+	for i, e := range m.entries {
+		cursor := "  "
+		if i == m.cursor {
+			cursor = accent.Render("❯") + " "
+		}
+		num := fmt.Sprintf("%d.", i+1)
+
+		switch {
+		case e.isUp:
+			b.WriteString(cursor + dim.Render(num+" ..") + "\n")
+		case e.isProject:
+			label := num + " " + e.label
 			switch {
-			case e.isUp:
-				fmt.Fprintf(out, "  %2d) ..            (up one level)\n", i+1)
-			case e.isProject:
-				mark := " "
-				if m.selected[e.path] {
-					mark = "x"
-				}
-				fmt.Fprintf(out, "  %2d) [%s] %s\n", i+1, mark, e.label)
-			default:
-				fmt.Fprintf(out, "  %2d)     %s\n", i+1, e.label)
+			case m.selected[e.path]:
+				label = chosen.Render(label) + " " + chosen.Render("✔")
+			case e.wired:
+				label += " " + dim.Render("(already connected)")
 			}
-		}
-		fmt.Fprintf(out, "\n  %d selected\n", len(m.picked()))
-		fmt.Fprintf(out, "  number = open folder / tick project · a = all here · c = connect · q = quit\n> ")
-
-		line, err := in.ReadString('\n')
-		if err != nil && strings.TrimSpace(line) == "" {
-			return nil // input closed; treat as cancel rather than looping forever
-		}
-		switch cmd := strings.ToLower(strings.TrimSpace(line)); cmd {
-		case "q", "quit":
-			return nil
-		case "c", "":
-			return m.picked()
-		case "a", "all":
-			for _, e := range m.entries {
-				if e.isProject {
-					m.selected[e.path] = true
-				}
-			}
-			continue
+			b.WriteString(cursor + label + "\n")
 		default:
-			picks, perr := parseSelection(cmd, len(m.entries))
-			if perr != nil || len(picks) == 0 {
-				fmt.Fprintf(out, "  ! %v\n", perr)
-				continue
-			}
-			// A single entry that is a folder means "go there"; anything else
-			// toggles the projects named.
-			if len(picks) == 1 {
-				if e := m.entries[picks[0]]; e.isUp || !e.isProject {
-					m.root = e.path
-					m.reload()
-					continue
-				}
-			}
-			for _, i := range picks {
-				if e := m.entries[i]; e.isProject {
-					m.selected[e.path] = !m.selected[e.path]
-				}
-			}
+			b.WriteString(cursor + dim.Render(num+" "+e.label) + "\n")
 		}
 	}
+
+	b.WriteString("\n" + dim.Render(fmt.Sprintf("  %d selected  ·  ↑↓ move  ·  space select  ·  → open folder  ·  ← back  ·  q quit", len(m.picked()))) + "\n")
+	return b.String()
+}
+
+// shortPath abbreviates the home prefix, so the header stays readable.
+func shortPath(p string) string {
+	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(p, home) {
+		return "~" + strings.TrimPrefix(p, home)
+	}
+	return p
+}
+
+// runPicker drives the picker, reading from in and drawing to out. They are
+// separate because they are not always the same file: see ttyPair.
+func runPicker(root string, in, out *os.File) ([]string, error) {
+	p := tea.NewProgram(newPickerModel(root), tea.WithInput(in), tea.WithOutput(out))
+	final, err := p.Run()
+	if err != nil {
+		return nil, fmt.Errorf("picker: %w", err)
+	}
+	m, _ := final.(pickerModel)
+	return m.picked(), nil
 }
