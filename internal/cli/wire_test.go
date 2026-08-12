@@ -172,6 +172,46 @@ func TestResolveHookBinaryFallsBackWhenLookupFails(t *testing.T) {
 	}
 }
 
+// Found by running the installer against a real server, which no test did.
+//
+// connectWireHooks wired Claude and nothing else, so `rgt setup` left Codex,
+// OpenCode and Pi unwired. That was survivable until the installer started
+// verifying its own work: doctor correctly reports the missing Codex hook, the
+// installer treats that as failure, and the paste dies on any machine where a
+// second agent is installed. Partial wiring became a hard failure.
+//
+// The team path must wire every detected agent, exactly as init does.
+func TestConnectWiresEveryDetectedAgentNotJustClaude(t *testing.T) {
+	root := t.TempDir()
+	// runConnect creates .regent/ before wiring; this test starts after that.
+	mustMkdir(t, filepath.Join(root, ".regent"))
+	// Both agents are present in this project.
+	mustMkdir(t, filepath.Join(root, ".claude"))
+	mustMkdir(t, filepath.Join(root, ".codex"))
+
+	if err := connectWireHooks(root); err != nil {
+		t.Fatalf("connectWireHooks: %v", err)
+	}
+
+	for _, rel := range []string{
+		filepath.Join(".claude", "settings.json"),
+		filepath.Join(".codex", "config.toml"),
+	} {
+		if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
+			t.Errorf("%s not wired by connect: %v", rel, err)
+		}
+	}
+
+	// The check the installer actually runs must agree.
+	if findings := diagnose(root); !allOK(findings) {
+		for _, f := range findings {
+			if !f.OK {
+				t.Errorf("doctor would fail the install: %s — %s", f.Name, f.Detail)
+			}
+		}
+	}
+}
+
 // This is the guard for the risk that made the absolute-path change dangerous
 // rather than trivial.
 //

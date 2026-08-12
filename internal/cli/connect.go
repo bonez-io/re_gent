@@ -136,15 +136,27 @@ func runConnect(p connectParams) error {
 	return connectWireHooks(p.projectRoot)
 }
 
+// connectWireHooks wires every agent detected in the project, not just Claude.
+//
+// It used to install the Claude hook alone, which silently left Codex,
+// OpenCode and Pi uncaptured for anyone onboarding through the team server.
+// That became a hard failure once the installer started verifying its own
+// work: rgt doctor correctly reports the missing hook, the installer treats
+// that as failure, and the pasted command dies on any machine with a second
+// agent installed. Found by running the installer against a real server.
 func connectWireHooks(projectRoot string) error {
-	result, err := installClaudeHook(projectRoot)
+	targets, err := resolveAgentTargets(projectRoot, agentAuto)
 	if err != nil {
-		return fmt.Errorf("install Claude hooks: %w", err)
+		return err
 	}
-	if result.BackupPath != "" {
-		fmt.Fprintf(os.Stderr, "warning: backed up invalid hook config to %s\n", result.BackupPath)
+
+	installed, err := wireAgents(projectRoot, targets)
+	if err != nil {
+		return err
 	}
-	fmt.Printf("  ✓ Claude Code hooks configured\n")
+	if len(installed) == 0 {
+		return fmt.Errorf("no agent hooks were configured in %s", projectRoot)
+	}
 	// Agents read their hook config at session startup, so a session that was
 	// already running when this ran won't capture until it is restarted. This
 	// is the single most common "why wasn't my change captured?" cause.
