@@ -72,3 +72,39 @@ func wireAgents(projectRoot string, targets []agentTarget) ([]agentTarget, error
 func reportWired(agent, path string) {
 	fmt.Printf("  %s %s hooks configured -> %s\n", style.Success(""), agent, path)
 }
+
+// hookOptions selects how configureHooks behaves. The zero value is the
+// default: wire everything detected, ask nothing.
+type hookOptions struct {
+	skip        bool // --skip-hook: install nothing
+	interactive bool // --interactive: present the multi-select
+}
+
+// configureHooks is the decision layer above wireAgents. Prompting is opt-in
+// rather than the default because the default path has to survive `curl | sh`,
+// devcontainers, CI, and SSH — none of which can answer a question.
+func configureHooks(projectRoot string, targets []agentTarget, opts hookOptions) ([]agentTarget, error) {
+	if opts.skip {
+		fmt.Printf("  %s Hook configuration skipped\n", style.DimText("-"))
+		printManualInstructions(targets)
+		return nil, nil
+	}
+
+	if opts.interactive {
+		return offerHookInstall(projectRoot, targets, nil)
+	}
+
+	return wireAgents(projectRoot, targets)
+}
+
+// summaryStatus derives the closing headline from what was actually installed.
+//
+// This is the fix for the shipped bug: printSummary was handed the *detected*
+// targets, so a run that installed nothing still printed
+// "Initialization complete". The boolean is the caller's exit code.
+func summaryStatus(installed []agentTarget) (string, bool) {
+	if len(installed) == 0 {
+		return "Initialization incomplete - no agent hooks were configured", false
+	}
+	return "Initialization complete", true
+}

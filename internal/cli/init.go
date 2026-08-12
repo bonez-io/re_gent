@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -45,6 +46,7 @@ func InitCmd() *cobra.Command {
 	var skipHook bool
 	var skipSkills bool
 	var agent string
+	var interactiveHooks bool
 
 	cmd := &cobra.Command{
 		Use:          "init",
@@ -110,18 +112,13 @@ func InitCmd() *cobra.Command {
 			if reinit {
 				printExistingHooks(cwd)
 			}
-			installedTargets := targets
-			if skipHook {
-				fmt.Printf("  %s Hook configuration skipped\n", style.DimText("-"))
+			installedTargets, hookErr := configureHooks(cwd, targets, hookOptions{
+				skip:        skipHook,
+				interactive: interactiveHooks,
+			})
+			if hookErr != nil {
+				fmt.Printf("  %s Could not configure hooks: %v\n", style.Warning(""), hookErr)
 				printManualInstructions(targets)
-			} else {
-				selected, err := offerHookInstall(cwd, targets, input)
-				if err != nil {
-					fmt.Printf("  %s Could not configure hooks: %v\n", style.Warning(""), err)
-					printManualInstructions(targets)
-				} else if len(selected) > 0 {
-					installedTargets = selected
-				}
 			}
 
 			printStep(3, 3, "Install Agent Skills")
@@ -131,7 +128,16 @@ func InitCmd() *cobra.Command {
 				fmt.Printf("  %s Could not install skills: %v\n", style.Warning(""), err)
 			}
 
-			printSummary(cwd, targets)
+			// The summary reports what was installed, not what was detected,
+			// and the exit code follows it. A run that wired nothing must not
+			// look like a success to a script, a devcontainer, or a teammate.
+			printSummary(cwd, installedTargets)
+			if hookErr != nil {
+				return fmt.Errorf("configure hooks: %w", hookErr)
+			}
+			if !skipHook && len(installedTargets) == 0 {
+				return errors.New("no agent hooks were configured; pass --agent to name one explicitly, or --skip-hook to proceed without capture")
+			}
 			return nil
 		},
 	}
@@ -139,6 +145,7 @@ func InitCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&skipHook, "skip-hook", false, "Skip automatic hook configuration")
 	cmd.Flags().BoolVar(&skipSkills, "skip-skills", false, "Skip agent skill installation")
 	cmd.Flags().StringVar(&agent, "agent", string(agentAuto), "Agent hooks to configure: auto, claude, codex, opencode, pi, both, all")
+	cmd.Flags().BoolVar(&interactiveHooks, "interactive", false, "Choose agents from a menu instead of wiring every detected agent")
 
 	return cmd
 }
@@ -157,11 +164,24 @@ func printStep(current, total int, title string) {
 }
 
 func printSummary(projectRoot string, targets []agentTarget) {
+	headline, ok := summaryStatus(targets)
+
 	fmt.Println()
 	fmt.Println(style.DividerFull(""))
-	fmt.Printf("  %s Initialization complete\n", style.Success(""))
+	if ok {
+		fmt.Printf("  %s %s\n", style.Success(""), headline)
+	} else {
+		fmt.Printf("  %s %s\n", style.Warning(""), headline)
+	}
 	fmt.Println(style.DividerFull(""))
 	fmt.Println()
+	if !ok {
+		fmt.Println("Nothing will be captured until an agent hook is configured.")
+		fmt.Println("  - Run: rgt init --agent claude")
+		fmt.Println("  - Or check what is wired: rgt doctor")
+		fmt.Println()
+		return
+	}
 	fmt.Println("Next steps:")
 	fmt.Println("  - Start an agent session in this directory")
 	fmt.Println("  - Make changes with Claude Code, Codex, OpenCode, or Pi")

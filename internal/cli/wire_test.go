@@ -78,6 +78,60 @@ func TestWireAgentsIsIdempotent(t *testing.T) {
 	}
 }
 
+// configureHooks is the decision layer above wireAgents: it chooses between
+// skipping, prompting, and the non-interactive default. The default must never
+// prompt, because `rgt init` runs under `curl | sh` and inside devcontainers.
+func TestConfigureHooksDefaultPathWiresWithoutPrompting(t *testing.T) {
+	root := t.TempDir()
+
+	installed, err := configureHooks(root, []agentTarget{agentClaude}, hookOptions{})
+	if err != nil {
+		t.Fatalf("configureHooks: %v", err)
+	}
+	if len(installed) != 1 || installed[0] != agentClaude {
+		t.Fatalf("installed = %v, want [claude]", installed)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".claude", "settings.json")); err != nil {
+		t.Errorf("settings.json not written: %v", err)
+	}
+}
+
+func TestConfigureHooksSkipWiresNothingAndReportsNothing(t *testing.T) {
+	root := t.TempDir()
+
+	installed, err := configureHooks(root, []agentTarget{agentClaude}, hookOptions{skip: true})
+	if err != nil {
+		t.Fatalf("configureHooks: %v", err)
+	}
+	if len(installed) != 0 {
+		t.Errorf("installed = %v, want none when skipping", installed)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".claude")); err == nil {
+		t.Error(".claude created despite --skip-hook")
+	}
+}
+
+// The shipped bug: with no TTY, rgt init printed "Initialization complete"
+// having installed nothing. The headline must follow what was installed, and
+// the caller must be able to exit non-zero.
+func TestSummaryStatusReportsIncompleteWhenNothingWasWired(t *testing.T) {
+	headline, ok := summaryStatus(nil)
+	if ok {
+		t.Error("summaryStatus reported success with no agents wired")
+	}
+	if headline == "Initialization complete" {
+		t.Errorf("headline = %q, must not claim completion", headline)
+	}
+
+	headline, ok = summaryStatus([]agentTarget{agentClaude})
+	if !ok {
+		t.Error("summaryStatus reported failure after wiring claude")
+	}
+	if headline != "Initialization complete" {
+		t.Errorf("headline = %q, want %q", headline, "Initialization complete")
+	}
+}
+
 // A teammate pasting an install command must never be told hooks are wired when
 // the write failed. wireAgents surfaces the error rather than swallowing it,
 // and reports the targets it managed before the failure.
