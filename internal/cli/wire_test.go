@@ -84,12 +84,12 @@ func TestWireAgentsIsIdempotent(t *testing.T) {
 func TestConfigureHooksDefaultPathWiresWithoutPrompting(t *testing.T) {
 	root := t.TempDir()
 
-	installed, err := configureHooks(root, []agentTarget{agentClaude}, hookOptions{})
+	outcome, err := configureHooks(root, []agentTarget{agentClaude}, hookOptions{})
 	if err != nil {
 		t.Fatalf("configureHooks: %v", err)
 	}
-	if len(installed) != 1 || installed[0] != agentClaude {
-		t.Fatalf("installed = %v, want [claude]", installed)
+	if len(outcome.installed) != 1 || outcome.installed[0] != agentClaude {
+		t.Fatalf("installed = %v, want [claude]", outcome.installed)
 	}
 	if _, err := os.Stat(filepath.Join(root, ".claude", "settings.json")); err != nil {
 		t.Errorf("settings.json not written: %v", err)
@@ -99,12 +99,12 @@ func TestConfigureHooksDefaultPathWiresWithoutPrompting(t *testing.T) {
 func TestConfigureHooksSkipWiresNothingAndReportsNothing(t *testing.T) {
 	root := t.TempDir()
 
-	installed, err := configureHooks(root, []agentTarget{agentClaude}, hookOptions{skip: true})
+	outcome, err := configureHooks(root, []agentTarget{agentClaude}, hookOptions{skip: true})
 	if err != nil {
 		t.Fatalf("configureHooks: %v", err)
 	}
-	if len(installed) != 0 {
-		t.Errorf("installed = %v, want none when skipping", installed)
+	if len(outcome.installed) != 0 {
+		t.Errorf("installed = %v, want none when skipping", outcome.installed)
 	}
 	if _, err := os.Stat(filepath.Join(root, ".claude")); err == nil {
 		t.Error(".claude created despite --skip-hook")
@@ -115,7 +115,7 @@ func TestConfigureHooksSkipWiresNothingAndReportsNothing(t *testing.T) {
 // having installed nothing. The headline must follow what was installed, and
 // the caller must be able to exit non-zero.
 func TestSummaryStatusReportsIncompleteWhenNothingWasWired(t *testing.T) {
-	headline, ok := summaryStatus(nil)
+	headline, ok := summaryStatus(hookOutcome{})
 	if ok {
 		t.Error("summaryStatus reported success with no agents wired")
 	}
@@ -123,12 +123,45 @@ func TestSummaryStatusReportsIncompleteWhenNothingWasWired(t *testing.T) {
 		t.Errorf("headline = %q, must not claim completion", headline)
 	}
 
-	headline, ok = summaryStatus([]agentTarget{agentClaude})
+	headline, ok = summaryStatus(hookOutcome{installed: []agentTarget{agentClaude}})
 	if !ok {
 		t.Error("summaryStatus reported failure after wiring claude")
 	}
 	if headline != "Initialization complete" {
 		t.Errorf("headline = %q, want %q", headline, "Initialization complete")
+	}
+}
+
+// Found by mutation testing: reverting init.go to printSummary(cwd, targets)
+// — the original bug — left every test green, because the requested and
+// installed sets were both []agentTarget and the call site had no test seam.
+//
+// hookOutcome now makes that call fail to compile. This test pins the
+// remaining behavioural half: when a requested agent is not installed, the
+// outcome must not contain it.
+func TestHookOutcomeCarriesInstalledNotRequested(t *testing.T) {
+	root := t.TempDir()
+
+	// Request two agents; block Codex by making its directory a regular file
+	// so only Claude can actually be written.
+	if err := os.WriteFile(filepath.Join(root, ".codex"), []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("seed blocker: %v", err)
+	}
+
+	requested := []agentTarget{agentClaude, agentCodex}
+	outcome, err := configureHooks(root, requested, hookOptions{})
+	if err == nil {
+		t.Fatal("configureHooks returned nil error despite Codex being unwritable")
+	}
+
+	if len(outcome.installed) == len(requested) {
+		t.Fatalf("outcome reports %d installed for %d requested; it is echoing the request",
+			len(outcome.installed), len(requested))
+	}
+	for _, target := range outcome.installed {
+		if target == agentCodex {
+			t.Error("outcome claims codex was installed, but its write failed")
+		}
 	}
 }
 

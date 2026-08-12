@@ -112,7 +112,7 @@ func InitCmd() *cobra.Command {
 			if reinit {
 				printExistingHooks(cwd)
 			}
-			installedTargets, hookErr := configureHooks(cwd, targets, hookOptions{
+			outcome, hookErr := configureHooks(cwd, targets, hookOptions{
 				skip:        skipHook,
 				interactive: interactiveHooks,
 			})
@@ -124,18 +124,18 @@ func InitCmd() *cobra.Command {
 			printStep(3, 3, "Install Agent Skills")
 			if skipSkills {
 				fmt.Printf("  %s Skill installation skipped\n", style.DimText("-"))
-			} else if err := offerSkillInstall(cwd, installedTargets, input); err != nil {
+			} else if err := offerSkillInstall(cwd, outcome.installed, input); err != nil {
 				fmt.Printf("  %s Could not install skills: %v\n", style.Warning(""), err)
 			}
 
 			// The summary reports what was installed, not what was detected,
 			// and the exit code follows it. A run that wired nothing must not
 			// look like a success to a script, a devcontainer, or a teammate.
-			printSummary(cwd, installedTargets)
+			printSummary(cwd, outcome)
 			if hookErr != nil {
 				return fmt.Errorf("configure hooks: %w", hookErr)
 			}
-			if !skipHook && len(installedTargets) == 0 {
+			if !skipHook && len(outcome.installed) == 0 {
 				return errors.New("no agent hooks were configured; pass --agent to name one explicitly, or --skip-hook to proceed without capture")
 			}
 			return nil
@@ -163,8 +163,10 @@ func printStep(current, total int, title string) {
 	fmt.Println()
 }
 
-func printSummary(projectRoot string, targets []agentTarget) {
-	headline, ok := summaryStatus(targets)
+// printSummary takes a hookOutcome rather than []agentTarget so that the
+// requested agents cannot be passed here by mistake. See hookOutcome.
+func printSummary(projectRoot string, outcome hookOutcome) {
+	headline, ok := summaryStatus(outcome)
 
 	fmt.Println()
 	fmt.Println(style.DividerFull(""))
@@ -187,10 +189,10 @@ func printSummary(projectRoot string, targets []agentTarget) {
 	fmt.Println("  - Make changes with Claude Code, Codex, OpenCode, or Pi")
 	fmt.Println("  - Run: rgt log")
 	fmt.Println("  - Run: rgt blame <file>")
-	if hasAgent(targets, agentClaude) || hasAgent(targets, agentCodex) || hasAgent(targets, agentOpenCode) || hasAgent(targets, agentPi) {
+	if len(outcome.installed) > 0 {
 		fmt.Println("  - Agent skills: log, blame, show")
 	}
-	if hasAgent(targets, agentCodex) {
+	if hasAgent(outcome.installed, agentCodex) {
 		fmt.Println("  - Codex may ask you to trust this project and the re_gent hooks")
 	}
 	fmt.Println()

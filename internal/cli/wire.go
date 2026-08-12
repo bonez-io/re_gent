@@ -80,21 +80,36 @@ type hookOptions struct {
 	interactive bool // --interactive: present the multi-select
 }
 
+// hookOutcome carries what was actually installed.
+//
+// It is a struct rather than a bare []agentTarget on purpose. The original bug
+// was printSummary(cwd, targets) — handing the reporting code the *requested*
+// agents instead of the *installed* ones. Both were []agentTarget, so the
+// compiler could not tell them apart and the mistake looked correct.
+//
+// Wrapping the result makes that specific mistake fail to compile. A test can
+// only catch a bug someone already wrote; a type stops it being written.
+type hookOutcome struct {
+	installed []agentTarget
+}
+
 // configureHooks is the decision layer above wireAgents. Prompting is opt-in
 // rather than the default because the default path has to survive `curl | sh`,
 // devcontainers, CI, and SSH — none of which can answer a question.
-func configureHooks(projectRoot string, targets []agentTarget, opts hookOptions) ([]agentTarget, error) {
+func configureHooks(projectRoot string, targets []agentTarget, opts hookOptions) (hookOutcome, error) {
 	if opts.skip {
 		fmt.Printf("  %s Hook configuration skipped\n", style.DimText("-"))
 		printManualInstructions(targets)
-		return nil, nil
+		return hookOutcome{}, nil
 	}
 
 	if opts.interactive {
-		return offerHookInstall(projectRoot, targets, nil)
+		selected, err := offerHookInstall(projectRoot, targets, nil)
+		return hookOutcome{installed: selected}, err
 	}
 
-	return wireAgents(projectRoot, targets)
+	installed, err := wireAgents(projectRoot, targets)
+	return hookOutcome{installed: installed}, err
 }
 
 // summaryStatus derives the closing headline from what was actually installed.
@@ -102,8 +117,8 @@ func configureHooks(projectRoot string, targets []agentTarget, opts hookOptions)
 // This is the fix for the shipped bug: printSummary was handed the *detected*
 // targets, so a run that installed nothing still printed
 // "Initialization complete". The boolean is the caller's exit code.
-func summaryStatus(installed []agentTarget) (string, bool) {
-	if len(installed) == 0 {
+func summaryStatus(outcome hookOutcome) (string, bool) {
+	if len(outcome.installed) == 0 {
 		return "Initialization incomplete - no agent hooks were configured", false
 	}
 	return "Initialization complete", true
