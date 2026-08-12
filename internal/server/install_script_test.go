@@ -103,41 +103,57 @@ func TestInstallAlwaysReinstalls(t *testing.T) {
 }
 
 // TestInstallHandsOverToSetup is the one-command onboarding promise: installing
-// leads straight into the project picker, so nobody runs a separate connect.
+// leads straight into wiring, so nobody has to run a separate command.
+//
+// This test previously branched on whether a terminal existed, asserting that
+// without one the installer must NOT wire anything and should print
+// instructions instead. That was a deliberate decision, and it was wrong: team
+// onboarding happens in devcontainers, over SSH and in CI, so the no-terminal
+// path is the main path, not a degraded one. The branch is gone and the
+// promise is now unconditional.
 func TestInstallHandsOverToSetup(t *testing.T) {
+	_, calls, url := runInstaller(t, t.TempDir())
+
+	if want := "setup " + url; !strings.Contains(calls, want) {
+		t.Errorf("installer should hand over to %q; calls were:\n%s", want, calls)
+	}
+}
+
+// TestInstallWiresWithoutATerminal is the Phase 2 specification: the paste has
+// to work where team onboarding actually happens.
+//
+// A teammate runs this command inside a devcontainer, over SSH, from a
+// provisioning script, or in CI. None of those have a controlling terminal. The
+// installer previously treated "no terminal" as "wire nothing and print
+// instructions" — which turns a one-command setup into a two-command setup
+// exactly for the people least able to notice the second command was needed.
+//
+// No terminal must mean "wire it without asking", never "give up quietly".
+func TestInstallWiresWithoutATerminal(t *testing.T) {
 	out, calls, url := runInstaller(t, t.TempDir())
 
-	if hasTTY() {
-		if want := "setup " + url; !strings.Contains(calls, want) {
-			t.Errorf("installer should hand over to %q; calls were:\n%s", want, calls)
-		}
-		return
-	}
-	if strings.Contains(calls, "setup ") {
-		t.Errorf("with no terminal the picker cannot run; calls were:\n%s", calls)
-	}
-	if !strings.Contains(out, "rgt setup "+url) {
-		t.Errorf("with no terminal the installer must print the command; output:\n%s", out)
+	if want := "setup " + url; !strings.Contains(calls, want) {
+		t.Errorf("installer must wire the project with or without a terminal;\nwanted a call to %q\ncalls were:\n%s\ninstaller output was:\n%s", want, calls, out)
 	}
 }
 
-// hasTTY reports whether this environment has a controlling terminal; the
-// installer legitimately behaves differently either way.
-func hasTTY() bool {
-	f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-	if err != nil {
-		return false
-	}
-	_ = f.Close()
-	return true
-}
-
-// TestInstallScriptReadsFromTTY pins the mechanism the picker depends on: under
-// `curl | sh` stdin is the script itself, so the wizard must be fed /dev/tty or
-// it receives EOF instead of keystrokes.
-func TestInstallScriptReadsFromTTY(t *testing.T) {
+// TestInstallScriptDoesNotDependOnATerminal inverts a test that used to require
+// `< /dev/tty` in the script.
+//
+// That redirect existed so the interactive picker could read keystrokes under
+// `curl | sh`, where stdin is the script itself. The mechanism was sound but
+// the guard around it was not: `[ -r /dev/tty ]` reports success whenever the
+// device node is readable, yet the redirect then fails with "Device not
+// configured" if the process has no controlling terminal. Observed in this very
+// suite — the script took the interactive branch, the redirect failed, the
+// fallback swallowed the error, and the installer exited 0 having wired
+// nothing.
+//
+// Depending on a terminal at all is the defect. Wiring is now unconditional and
+// rgt setup decides, so any reappearance of /dev/tty here is a regression.
+func TestInstallScriptDoesNotDependOnATerminal(t *testing.T) {
 	_, _, ts := newTestServer(t)
-	if script := fetchInstallScript(t, ts.URL); !strings.Contains(script, "< /dev/tty") {
-		t.Error("installer must run setup with stdin redirected from /dev/tty")
+	if script := fetchInstallScript(t, ts.URL); strings.Contains(script, "/dev/tty") {
+		t.Error("installer must not depend on /dev/tty; wiring has to work in devcontainers, SSH and CI")
 	}
 }

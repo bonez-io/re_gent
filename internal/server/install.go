@@ -25,6 +25,24 @@ import (
 //
 // {{.BaseURL}} is the scheme+host this request arrived on (e.g.
 // http://team-server:7654), with no trailing slash.
+//
+// The script deliberately does NOT inspect the terminal before wiring. It used
+// to: it ran the picker with stdin redirected from the tty when one looked
+// available, and otherwise printed instructions and wired nothing. Two things
+// were wrong with that.
+//
+// The guard was unreliable. A `[ -r /dev/tty ]` test succeeds whenever the
+// device node is readable, but the redirect then fails with "Device not
+// configured" if the process has no controlling terminal. The failure landed in
+// the fallback branch, which warned and continued, so the installer exited 0
+// having wired nothing. This was observed in the test suite itself.
+//
+// And the degraded path was the main path. Team onboarding happens in
+// devcontainers, over SSH, in CI and in provisioning scripts — none of which
+// have a terminal — so "no terminal" could not be the case that gives up.
+//
+// Wiring is now unconditional and `rgt setup` decides, prompting only when
+// explicitly asked with --interactive.
 var installScriptTemplate = template.Must(template.New("install").Parse(`#!/bin/sh
 # re_gent one-line installer (server-hosted; no Go toolchain required).
 #
@@ -153,24 +171,13 @@ rgt version 2>/dev/null || true
 # scatter .regent/ into home directories. A .git entry is the marker (it is a
 # file, not a directory, inside worktrees and submodules). The server is open,
 # so no token is involved.
-# Hand over to the interactive picker so choosing projects is part of the same
-# command. Redirecting from /dev/tty is what makes this possible at all: under
-# "curl | sh" stdin is the script being read, so the wizard would otherwise get
-# EOF instead of keystrokes. /dev/tty still refers to the real terminal.
-if [ -r /dev/tty ]; then
-  rgt setup "{{.BaseURL}}" < /dev/tty || {
-    warn "Setup did not finish. You can re-run it any time with:"
-    warn "  rgt setup {{.BaseURL}}"
-  }
-else
-  # No terminal at all (CI, a provisioning script): install only, and say what
-  # to run rather than guessing which project was meant.
-  printf '\n== rgt installed ==\n\n'
-  info "No terminal available, so no project was wired. Run this yourself:"
-  info ""
-  info "  rgt setup {{.BaseURL}}"
-  info ""
-fi
+# Wiring is unconditional: rgt setup wires what it detects, and only prompts
+# when asked with --interactive. See the Go comment on this template for why
+# the installer no longer inspects the terminal.
+rgt setup "{{.BaseURL}}" || {
+  warn "Setup did not finish. You can re-run it any time with:"
+  warn "  rgt setup {{.BaseURL}}"
+}
 printf '\n'
 `))
 
