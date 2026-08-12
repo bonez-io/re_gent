@@ -34,12 +34,12 @@ const (
 	agentBoth     agentTarget = "both"
 	agentAll      agentTarget = "all"
 
-	claudeUserHook      = "rgt message-hook user"
-	claudeAssistantHook = "rgt message-hook assistant"
-	claudeToolBatchHook = "rgt tool-batch-hook"
-	codexHookCommand    = "rgt codex-hook"
-	piPackageSource     = "git:github.com/MegaGrindStone/regent-pi-extension"
-	piInstallCommand    = "pi install -l " + piPackageSource
+	claudeUserHookArgs      = "message-hook user"
+	claudeAssistantHookArgs = "message-hook assistant"
+	claudeToolBatchHookArgs = "tool-batch-hook"
+	codexHookArgs           = "codex-hook"
+	piPackageSource         = "git:github.com/MegaGrindStone/regent-pi-extension"
+	piInstallCommand        = "pi install -l " + piPackageSource
 )
 
 func InitCmd() *cobra.Command {
@@ -305,9 +305,9 @@ func installClaudeHook(projectRoot string) (hookInstallResult, error) {
 		settings["hooks"] = hooks
 	}
 
-	mergeHookCommand(hooks, "UserPromptSubmit", claudeUserHook)
-	mergeHookCommand(hooks, "Stop", claudeAssistantHook)
-	mergeHookCommand(hooks, "PostToolBatch", claudeToolBatchHook)
+	mergeHookCommand(hooks, "UserPromptSubmit", claudeUserHook())
+	mergeHookCommand(hooks, "Stop", claudeAssistantHook())
+	mergeHookCommand(hooks, "PostToolBatch", claudeToolBatchHook())
 	removeRegentHookCommands(hooks, "PostToolUse")
 
 	output, err := json.MarshalIndent(settings, "", "  ")
@@ -349,7 +349,7 @@ func installCodexHook(projectRoot string) (hookInstallResult, error) {
 	}
 
 	for _, eventName := range []string{"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"} {
-		mergeHookCommand(hooks, eventName, codexHookCommand)
+		mergeHookCommand(hooks, eventName, codexHookCommand())
 	}
 	enableCodexHooksFeature(config)
 

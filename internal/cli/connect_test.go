@@ -160,7 +160,7 @@ func TestConnect_MergesExistingHooks(t *testing.T) {
 	if countCommand(stopCommands, "echo keep-me") != 1 {
 		t.Errorf("existing hook was lost; commands: %v", stopCommands)
 	}
-	if countCommand(stopCommands, claudeAssistantHook) != 1 {
+	if countCommand(stopCommands, claudeAssistantHook()) != 1 {
 		t.Errorf("regent assistant hook missing; commands: %v", stopCommands)
 	}
 }
@@ -210,7 +210,7 @@ func TestConnect_Idempotent(t *testing.T) {
 	}
 	hooks := settings["hooks"].(map[string]interface{})
 	stopCmds := hookCommands(t, hooks["Stop"])
-	if countCommand(stopCmds, claudeAssistantHook) != 1 {
+	if countCommand(stopCmds, claudeAssistantHook()) != 1 {
 		t.Errorf("expected exactly 1 assistant hook after two connects, got %v", stopCmds)
 	}
 }

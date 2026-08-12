@@ -133,7 +133,7 @@ command = "rgt codex-hook"
 	if countCommand(commands, "echo keep") != 1 {
 		t.Fatalf("expected existing hook to be preserved once, got %#v", commands)
 	}
-	if countCommand(commands, codexHookCommand) != 1 {
+	if countCommand(commands, codexHookCommand()) != 1 {
 		t.Fatalf("expected one re_gent hook, got %#v", commands)
 	}
 }
@@ -184,7 +184,7 @@ func TestInstallClaudeHook_PreservesExistingHooksAndRemovesLegacyHook(t *testing
 	}
 	hooks := settings["hooks"].(map[string]interface{})
 	stopCommands := hookCommands(t, hooks["Stop"])
-	if countCommand(stopCommands, "echo keep") != 1 || countCommand(stopCommands, claudeAssistantHook) != 1 {
+	if countCommand(stopCommands, "echo keep") != 1 || countCommand(stopCommands, claudeAssistantHook()) != 1 {
 		t.Fatalf("expected existing Stop hook and assistant hook, got %#v", stopCommands)
 	}
 

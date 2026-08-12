@@ -2,8 +2,10 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 
+	"github.com/regent-vcs/regent/internal/capture"
 	"github.com/regent-vcs/regent/internal/style"
 )
 
@@ -66,6 +68,51 @@ func wireAgents(projectRoot string, targets []agentTarget) ([]agentTarget, error
 	return installed, nil
 }
 
+// resolveHookBinary decides what an agent hook should invoke.
+//
+// Hooks run inside the agent host's environment, not the shell the user
+// installed from, so a bare "rgt" depends on PATH resolution that may simply
+// not be there — capture then fails silently, which is the failure mode this
+// whole area exists to remove. lefthook, which shipped the same Claude/Codex
+// hook feature in July 2026, resolves the absolute path for the documented
+// reason that "AI tools do not depend on lefthook being on PATH".
+//
+// The fallback matters as much as the happy path. Under `go test` the running
+// executable is the test binary, and under `go run` it is a temporary build
+// that will not exist tomorrow; writing either into a user's config would
+// produce a hook that never fires. When the running binary is not recognisably
+// rgt, keep the bare name and let PATH do its best.
+func resolveHookBinary(exe string, lookupErr error) string {
+	if lookupErr != nil || exe == "" {
+		return "rgt"
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	if !capture.IsRegentCommand(exe) {
+		return "rgt"
+	}
+	return exe
+}
+
+// hookBinary is resolveHookBinary applied to the running process.
+func hookBinary() string {
+	exe, err := os.Executable()
+	return resolveHookBinary(exe, err)
+}
+
+// hookCommandWith joins a binary and its arguments into the string an agent
+// host will execute. Kept separate from hookBinary so the composition can be
+// tested against paths this process will never have.
+func hookCommandWith(binary, args string) string {
+	return binary + " " + args
+}
+
+// hookCommand builds a hook command for the running binary.
+func hookCommand(args string) string {
+	return hookCommandWith(hookBinary(), args)
+}
+
 // reportWired names the file that was actually written. Naming the path (rather
 // than printing a bare "hooks configured") is what lets a user verify the claim
 // without trusting it.
@@ -123,3 +170,11 @@ func summaryStatus(outcome hookOutcome) (string, bool) {
 	}
 	return "Initialization complete", true
 }
+
+// The hook commands written into agent configs. These are functions rather
+// than constants because the binary path is resolved at run time; see
+// resolveHookBinary for why the bare name is not good enough.
+func claudeUserHook() string      { return hookCommand(claudeUserHookArgs) }
+func claudeAssistantHook() string { return hookCommand(claudeAssistantHookArgs) }
+func claudeToolBatchHook() string { return hookCommand(claudeToolBatchHookArgs) }
+func codexHookCommand() string    { return hookCommand(codexHookArgs) }

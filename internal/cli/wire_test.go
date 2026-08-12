@@ -1,9 +1,12 @@
 package cli
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/regent-vcs/regent/internal/capture"
 )
 
 // wireAgents is the single non-interactive entry point for installing agent
@@ -129,6 +132,68 @@ func TestSummaryStatusReportsIncompleteWhenNothingWasWired(t *testing.T) {
 	}
 	if headline != "Initialization complete" {
 		t.Errorf("headline = %q, want %q", headline, "Initialization complete")
+	}
+}
+
+// Hook commands embed the string an agent host will execute. Using the bare
+// name "rgt" makes capture depend on PATH resolution inside whatever
+// environment the agent runs in — which is not the shell the user installed
+// from. lefthook, which shipped the same Claude/Codex hook feature in July
+// 2026, resolves the absolute path for exactly this documented reason.
+//
+// resolveHookBinary is the decision, kept pure so it can be tested without
+// depending on what os.Executable() happens to return under `go test`.
+func TestResolveHookBinaryUsesTheAbsolutePathOfTheRunningBinary(t *testing.T) {
+	got := resolveHookBinary("/usr/local/bin/rgt", nil)
+
+	if got != "/usr/local/bin/rgt" {
+		t.Errorf("resolveHookBinary = %q, want the absolute path so hooks do not depend on PATH", got)
+	}
+}
+
+// Under `go test` the executable is the test binary; under `go run` it is a
+// temporary build that will not exist tomorrow. Writing either into a user's
+// hook config would produce a hook that silently never fires — the failure this
+// whole branch exists to eliminate. Fall back to the bare name instead.
+func TestResolveHookBinaryFallsBackWhenNotRunningAsRgt(t *testing.T) {
+	for _, exe := range []string{
+		"/tmp/go-build3862142002/b001/cli.test",
+		"/var/folders/xy/T/go-build/exe/main",
+	} {
+		if got := resolveHookBinary(exe, nil); got != "rgt" {
+			t.Errorf("resolveHookBinary(%q) = %q, want \"rgt\"; embedding this path would write a hook that never fires", exe, got)
+		}
+	}
+}
+
+func TestResolveHookBinaryFallsBackWhenLookupFails(t *testing.T) {
+	if got := resolveHookBinary("", errors.New("no executable")); got != "rgt" {
+		t.Errorf("resolveHookBinary = %q, want \"rgt\" when the path cannot be determined", got)
+	}
+}
+
+// This is the guard for the risk that made the absolute-path change dangerous
+// rather than trivial.
+//
+// capture.IsRegentCommand decides whether a command found in an agent's config
+// is one of ours — it drives hook detection, rgt doctor, and the merge logic
+// that avoids duplicating hooks. If switching to an absolute path stopped those
+// commands being recognised, capture would keep exiting 0 while silently
+// recording nothing: precisely the failure this branch exists to remove,
+// re-introduced by the fix for it.
+func TestHookCommandsStayRecognisableWithAnAbsoluteBinary(t *testing.T) {
+	for _, binary := range []string{
+		"rgt",
+		"/usr/local/bin/rgt",
+		"/Users/someone/.local/bin/rgt",
+		"/opt/homebrew/bin/regent",
+	} {
+		for _, args := range []string{"message-hook user", "message-hook assistant", "tool-batch-hook", "codex-hook"} {
+			cmd := hookCommandWith(binary, args)
+			if !capture.IsRegentCommand(cmd) {
+				t.Errorf("capture would not recognise %q as a re_gent hook; capture dies silently", cmd)
+			}
+		}
 	}
 }
 
