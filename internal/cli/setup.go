@@ -20,12 +20,15 @@ import (
 // share the wiring. The one-line installer hands over to it, and it can be
 // re-run at any time.
 func SetupCmd() *cobra.Command {
-	return &cobra.Command{
+	var interactiveSetup bool
+
+	cmd := &cobra.Command{
 		Use:   "setup [server-url]",
-		Short: "Pick projects to connect to a re_gent server",
-		Long: "Opens a picker of the projects on this machine and wires the ones you\n" +
-			"choose. The server URL is remembered after the first run, so later runs\n" +
-			"need no argument — `rgt` on its own does the same thing.",
+		Short: "Connect this project to a re_gent server",
+		Long: "Wires the project in the current directory to the server. The URL is\n" +
+			"remembered after the first run, so later runs need no argument — `rgt`\n" +
+			"on its own does the same thing. Pass --interactive to pick from a list\n" +
+			"of projects on this machine instead.",
 		Args:         cobra.MaximumNArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -37,9 +40,13 @@ func SetupCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runSetup(url)
+			return runSetup(url, setupOptions{interactive: interactiveSetup})
 		},
 	}
+
+	cmd.Flags().BoolVar(&interactiveSetup, "interactive", false, "Choose projects from a picker instead of wiring the current directory")
+
+	return cmd
 }
 
 // resolveServerURL prefers an explicit argument and otherwise falls back to the
@@ -72,12 +79,17 @@ func rememberServer(url string) {
 
 // RunDefaultSetup is what bare `rgt` does: offer to wire more projects into the
 // server this machine already knows.
+//
+// This one is interactive by default, unlike `rgt setup <url>`. Bare `rgt` is
+// typed by a person at a terminal who is exploring, and the picker is the point
+// of it. The installer never takes this path — it always passes a URL — so the
+// pasted command still runs without prompting.
 func RunDefaultSetup() error {
 	url, err := resolveServerURL("")
 	if err != nil {
 		return err
 	}
-	return runSetup(url)
+	return runSetup(url, setupOptions{interactive: true})
 }
 
 // ttyPair returns the handles the interactive UI reads from and draws to, plus
@@ -155,21 +167,60 @@ func isDir(p string) bool {
 	return err == nil && fi.IsDir()
 }
 
-func runSetup(serverURL string) error {
-	ttyIn, ttyOut, cleanup, err := ttyPair()
-	if err != nil {
-		fmt.Printf("No terminal available, so nothing was wired.\n\nRun this inside a project:\n\n  rgt connect %s\n\n", serverURL)
-		return nil
-	}
-	defer cleanup()
+// setupOptions selects how setup chooses projects. The zero value is the
+// default: wire the project we are standing in, ask nothing.
+type setupOptions struct {
+	interactive bool // --interactive: scan and present the picker
+}
 
-	picked, err := runPicker(defaultScanRoot(), ttyIn, ttyOut)
+// setupTargets decides which project directories a setup run should wire.
+//
+// The default wires only the current directory. The installer runs from inside
+// the repo the teammate cares about, so that is the one they mean; scanning and
+// wiring everything found under a scan root would let a single pasted command
+// reach into unrelated repositories nobody chose.
+//
+// Outside a project this returns an error rather than an empty list. The
+// previous behaviour — print a suggestion and return nil — is what let the
+// installer exit 0 having wired nothing, with no failure for the script to see.
+func setupTargets(cwd string, opts setupOptions) ([]string, error) {
+	if opts.interactive {
+		return nil, nil // caller runs the picker
+	}
+
+	if !isProjectDir(cwd) {
+		return nil, fmt.Errorf("%s is not a project (no .git or .regent)\n\nRun this from inside the repository you want to capture, or pass --interactive to choose from a list", cwd)
+	}
+	return []string{cwd}, nil
+}
+
+func runSetup(serverURL string, opts setupOptions) error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("get working directory: %w", err)
+	}
+
+	picked, err := setupTargets(cwd, opts)
 	if err != nil {
 		return err
 	}
-	if len(picked) == 0 {
-		fmt.Println("Nothing selected — no projects were connected.")
-		return nil
+
+	var ttyIn *os.File
+	if picked == nil {
+		ttyIn2, ttyOut, cleanup, ttyErr := ttyPair()
+		if ttyErr != nil {
+			return fmt.Errorf("--interactive needs a terminal, and none is available here: %w", ttyErr)
+		}
+		defer cleanup()
+		ttyIn = ttyIn2
+
+		picked, err = runPicker(defaultScanRoot(), ttyIn, ttyOut)
+		if err != nil {
+			return err
+		}
+		if len(picked) == 0 {
+			return fmt.Errorf("nothing selected — no projects were connected")
+		}
 	}
 
 	// A selected project that is already connected means "disconnect it": the
@@ -201,7 +252,11 @@ func runSetup(serverURL string) error {
 	}
 
 	rememberServer(serverURL)
-	offerShare(wired, ttyIn)
+	// Sharing is a question, so it only happens on the path that has a terminal
+	// to ask on. The default path wires and reports; it never blocks a paste.
+	if ttyIn != nil {
+		offerShare(wired, ttyIn)
+	}
 
 	fmt.Printf("\nDone. Open the viewer to watch turns arrive.\n")
 	fmt.Printf("Restart any Claude Code / Codex session already open in these projects —\n")
