@@ -157,3 +157,54 @@ func TestInstallScriptDoesNotDependOnATerminal(t *testing.T) {
 		t.Error("installer must not depend on /dev/tty; wiring has to work in devcontainers, SSH and CI")
 	}
 }
+
+// TestInstallVerifiesItsOwnWork closes the loop that Phase 1 and Phase 2 exist
+// to close.
+//
+// Wiring can succeed mechanically and still capture nothing: hooks written but
+// never fired, a binary absent from PATH inside the agent's environment, an
+// agent host that needs restarting. Every other rgt command exits 0 in that
+// state. On a team, the person who pasted the command is not the person who
+// would notice — so the paste has to check itself and say so.
+func TestInstallVerifiesItsOwnWork(t *testing.T) {
+	_, calls, _ := runInstaller(t, t.TempDir())
+
+	if !strings.Contains(calls, "doctor") {
+		t.Errorf("installer must end by verifying the install with rgt doctor; calls were:\n%s", calls)
+	}
+}
+
+// TestInstallFailsWhenVerificationFails is the half that makes the previous
+// test worth anything. Calling doctor and then ignoring its verdict would be
+// theatre: the teammate would still see the command finish cleanly.
+func TestInstallFailsWhenVerificationFails(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX sh installer")
+	}
+
+	home := t.TempDir()
+
+	// This stub succeeds at everything except doctor, reproducing the case
+	// that matters: setup appeared to work, verification says it did not.
+	binaries := t.TempDir()
+	stub := "#!/bin/sh\ncase \"$1\" in doctor) exit 1 ;; esac\nexit 0\n"
+	name := "rgt_" + runtime.GOOS + "_" + runtime.GOARCH
+	if err := os.WriteFile(filepath.Join(binaries, name), []byte(stub), 0o755); err != nil {
+		t.Fatalf("write stub binary: %v", err)
+	}
+
+	_, _, ts := newTestServer(t, WithBinariesDir(binaries))
+	scriptPath := filepath.Join(t.TempDir(), "install.sh")
+	if err := os.WriteFile(scriptPath, []byte(fetchInstallScript(t, ts.URL)), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	cmd := exec.Command("sh", scriptPath)
+	cmd.Dir = t.TempDir()
+	cmd.Env = append(os.Environ(), "HOME="+home, "PATH="+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+
+	if err == nil {
+		t.Errorf("installer exited 0 despite doctor failing; a broken setup would look successful.\noutput:\n%s", out)
+	}
+}

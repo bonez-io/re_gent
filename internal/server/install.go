@@ -177,7 +177,21 @@ rgt version 2>/dev/null || true
 rgt setup "{{.BaseURL}}" || {
   warn "Setup did not finish. You can re-run it any time with:"
   warn "  rgt setup {{.BaseURL}}"
+  exit 1
 }
+
+# ---------------------------------------------------------------------------
+# 6. Verify, rather than assume.
+# ---------------------------------------------------------------------------
+# Wiring can succeed mechanically and still capture nothing, and every other
+# rgt command exits 0 in that state. Whoever pasted this command is usually not
+# whoever would notice the silence, so the command checks its own work and
+# fails loudly instead of ending on an unearned success message.
+if ! rgt doctor; then
+  warn "Setup ran, but verification failed - see the report above."
+  warn "Nothing will be captured until those problems are fixed."
+  exit 1
+fi
 printf '\n'
 `))
 
