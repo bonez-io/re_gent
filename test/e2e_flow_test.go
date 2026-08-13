@@ -419,6 +419,29 @@ func e2eRunStdin(t *testing.T, rgtPath, dir string, payload []byte, args ...stri
 	return string(out)
 }
 
+// e2eRunEnv runs rgt with extra environment variables, a stdin payload, and
+// fails on non-zero exit.
+//
+// The environment is what makes server mode reachable from a test. Every other
+// runner here leaves cmd.Env nil, so the child inherits the process environment
+// — which TestMain deliberately strips of any server configuration. Passing env
+// per-invocation lets one test put the binary into server mode without
+// affecting any other test in the package.
+func e2eRunEnv(t *testing.T, rgtPath, dir string, env []string, payload []byte, args ...string) string {
+	t.Helper()
+	cmd := exec.Command(rgtPath, args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), env...)
+	if payload != nil {
+		cmd.Stdin = strings.NewReader(string(payload))
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("rgt %v (env %v) failed: %v\nOutput:\n%s", args, env, err, out)
+	}
+	return string(out)
+}
+
 // assertContains fails the test if s does not contain substr.
 func assertContains(t *testing.T, s, substr, label string) {
 	t.Helper()
