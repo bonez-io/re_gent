@@ -25,7 +25,15 @@ const minTokenLen = 16
 
 // UserConfig is the top-level user configuration structure.
 type UserConfig struct {
-	Auth Auth `toml:"auth"`
+	Auth   Auth   `toml:"auth"`
+	Server Server `toml:"server"`
+}
+
+// Server remembers the team server this machine was last set up against, so
+// `rgt` on its own can offer to wire more projects without being told the URL
+// again. It holds no credential — an open server needs none.
+type Server struct {
+	URL string `toml:"url"`
 }
 
 // Auth holds authentication credentials for a re_gent server.

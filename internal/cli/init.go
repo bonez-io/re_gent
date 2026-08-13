@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -33,18 +34,19 @@ const (
 	agentBoth     agentTarget = "both"
 	agentAll      agentTarget = "all"
 
-	claudeUserHook      = "rgt message-hook user"
-	claudeAssistantHook = "rgt message-hook assistant"
-	claudeToolBatchHook = "rgt tool-batch-hook"
-	codexHookCommand    = "rgt codex-hook"
-	piPackageSource     = "git:github.com/MegaGrindStone/regent-pi-extension"
-	piInstallCommand    = "pi install -l " + piPackageSource
+	claudeUserHookArgs      = "message-hook user"
+	claudeAssistantHookArgs = "message-hook assistant"
+	claudeToolBatchHookArgs = "tool-batch-hook"
+	codexHookArgs           = "codex-hook"
+	piPackageSource         = "git:github.com/MegaGrindStone/regent-pi-extension"
+	piInstallCommand        = "pi install -l " + piPackageSource
 )
 
 func InitCmd() *cobra.Command {
 	var skipHook bool
 	var skipSkills bool
 	var agent string
+	var interactiveHooks bool
 
 	cmd := &cobra.Command{
 		Use:          "init",
@@ -110,28 +112,32 @@ func InitCmd() *cobra.Command {
 			if reinit {
 				printExistingHooks(cwd)
 			}
-			installedTargets := targets
-			if skipHook {
-				fmt.Printf("  %s Hook configuration skipped\n", style.DimText("-"))
+			outcome, hookErr := configureHooks(cwd, targets, hookOptions{
+				skip:        skipHook,
+				interactive: interactiveHooks,
+			})
+			if hookErr != nil {
+				fmt.Printf("  %s Could not configure hooks: %v\n", style.Warning(""), hookErr)
 				printManualInstructions(targets)
-			} else {
-				selected, err := offerHookInstall(cwd, targets, input)
-				if err != nil {
-					fmt.Printf("  %s Could not configure hooks: %v\n", style.Warning(""), err)
-					printManualInstructions(targets)
-				} else if len(selected) > 0 {
-					installedTargets = selected
-				}
 			}
 
 			printStep(3, 3, "Install Agent Skills")
 			if skipSkills {
 				fmt.Printf("  %s Skill installation skipped\n", style.DimText("-"))
-			} else if err := offerSkillInstall(cwd, installedTargets, input); err != nil {
+			} else if err := offerSkillInstall(cwd, outcome.installed, input); err != nil {
 				fmt.Printf("  %s Could not install skills: %v\n", style.Warning(""), err)
 			}
 
-			printSummary(cwd, targets)
+			// The summary reports what was installed, not what was detected,
+			// and the exit code follows it. A run that wired nothing must not
+			// look like a success to a script, a devcontainer, or a teammate.
+			printSummary(cwd, outcome)
+			if hookErr != nil {
+				return fmt.Errorf("configure hooks: %w", hookErr)
+			}
+			if !skipHook && len(outcome.installed) == 0 {
+				return errors.New("no agent hooks were configured; pass --agent to name one explicitly, or --skip-hook to proceed without capture")
+			}
 			return nil
 		},
 	}
@@ -139,6 +145,7 @@ func InitCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&skipHook, "skip-hook", false, "Skip automatic hook configuration")
 	cmd.Flags().BoolVar(&skipSkills, "skip-skills", false, "Skip agent skill installation")
 	cmd.Flags().StringVar(&agent, "agent", string(agentAuto), "Agent hooks to configure: auto, claude, codex, opencode, pi, both, all")
+	cmd.Flags().BoolVar(&interactiveHooks, "interactive", false, "Choose agents from a menu instead of wiring every detected agent")
 
 	return cmd
 }
@@ -156,21 +163,36 @@ func printStep(current, total int, title string) {
 	fmt.Println()
 }
 
-func printSummary(projectRoot string, targets []agentTarget) {
+// printSummary takes a hookOutcome rather than []agentTarget so that the
+// requested agents cannot be passed here by mistake. See hookOutcome.
+func printSummary(projectRoot string, outcome hookOutcome) {
+	headline, ok := summaryStatus(outcome)
+
 	fmt.Println()
 	fmt.Println(style.DividerFull(""))
-	fmt.Printf("  %s Initialization complete\n", style.Success(""))
+	if ok {
+		fmt.Printf("  %s %s\n", style.Success(""), headline)
+	} else {
+		fmt.Printf("  %s %s\n", style.Warning(""), headline)
+	}
 	fmt.Println(style.DividerFull(""))
 	fmt.Println()
+	if !ok {
+		fmt.Println("Nothing will be captured until an agent hook is configured.")
+		fmt.Println("  - Run: rgt init --agent claude")
+		fmt.Println("  - Or check what is wired: rgt doctor")
+		fmt.Println()
+		return
+	}
 	fmt.Println("Next steps:")
 	fmt.Println("  - Start an agent session in this directory")
 	fmt.Println("  - Make changes with Claude Code, Codex, OpenCode, or Pi")
 	fmt.Println("  - Run: rgt log")
 	fmt.Println("  - Run: rgt blame <file>")
-	if hasAgent(targets, agentClaude) || hasAgent(targets, agentCodex) || hasAgent(targets, agentOpenCode) || hasAgent(targets, agentPi) {
+	if len(outcome.installed) > 0 {
 		fmt.Println("  - Agent skills: log, blame, show")
 	}
-	if hasAgent(targets, agentCodex) {
+	if hasAgent(outcome.installed, agentCodex) {
 		fmt.Println("  - Codex may ask you to trust this project and the re_gent hooks")
 	}
 	fmt.Println()
@@ -283,9 +305,9 @@ func installClaudeHook(projectRoot string) (hookInstallResult, error) {
 		settings["hooks"] = hooks
 	}
 
-	mergeHookCommand(hooks, "UserPromptSubmit", claudeUserHook)
-	mergeHookCommand(hooks, "Stop", claudeAssistantHook)
-	mergeHookCommand(hooks, "PostToolBatch", claudeToolBatchHook)
+	mergeHookCommand(hooks, "UserPromptSubmit", claudeUserHook())
+	mergeHookCommand(hooks, "Stop", claudeAssistantHook())
+	mergeHookCommand(hooks, "PostToolBatch", claudeToolBatchHook())
 	removeRegentHookCommands(hooks, "PostToolUse")
 
 	output, err := json.MarshalIndent(settings, "", "  ")
@@ -327,7 +349,7 @@ func installCodexHook(projectRoot string) (hookInstallResult, error) {
 	}
 
 	for _, eventName := range []string{"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"} {
-		mergeHookCommand(hooks, eventName, codexHookCommand)
+		mergeHookCommand(hooks, eventName, codexHookCommand())
 	}
 	enableCodexHooksFeature(config)
 
@@ -720,9 +742,16 @@ func printManualInstructions(targets []agentTarget) {
 
 func createRegentGitignore(projectRoot string) error {
 	gitignorePath := filepath.Join(projectRoot, ".regent", ".gitignore")
-	content := `# re_gent temporary files
-*.backup
-log/
+	// .regent/ is machine-local VCS state (like .git/ itself) — the object
+	// store, index, refs, and logs must NOT be committed. The one exception is
+	// config.toml: committing it lets teammates who clone inherit the server
+	// wiring (url + repo_id) and capture automatically, without running connect.
+	// So: ignore everything, then un-ignore config.toml (and this file).
+	content := `# re_gent local state — do not commit (like .git/ itself).
+# Only config.toml is shared, so teammates inherit the server wiring on clone.
+*
+!.gitignore
+!config.toml
 `
 
 	return os.WriteFile(gitignorePath, []byte(content), 0o644)

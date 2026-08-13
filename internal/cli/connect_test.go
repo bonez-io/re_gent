@@ -160,7 +160,7 @@ func TestConnect_MergesExistingHooks(t *testing.T) {
 	if countCommand(stopCommands, "echo keep-me") != 1 {
 		t.Errorf("existing hook was lost; commands: %v", stopCommands)
 	}
-	if countCommand(stopCommands, claudeAssistantHook) != 1 {
+	if countCommand(stopCommands, claudeAssistantHook()) != 1 {
 		t.Errorf("regent assistant hook missing; commands: %v", stopCommands)
 	}
 }
@@ -210,30 +210,70 @@ func TestConnect_Idempotent(t *testing.T) {
 	}
 	hooks := settings["hooks"].(map[string]interface{})
 	stopCmds := hookCommands(t, hooks["Stop"])
-	if countCommand(stopCmds, claudeAssistantHook) != 1 {
+	if countCommand(stopCmds, claudeAssistantHook()) != 1 {
 		t.Errorf("expected exactly 1 assistant hook after two connects, got %v", stopCmds)
 	}
 }
 
-// TestConnect_FailsIfNotSignedIn verifies a missing token produces a clear,
-// actionable error.
-func TestConnect_FailsIfNotSignedIn(t *testing.T) {
+// TestConnect_SucceedsWithoutToken is the new-teammate path: a machine that has
+// never run `rgt login` must still connect, because the default server is open.
+// Requiring a token here broke onboarding for everyone except the person who had
+// signed in at some point — and their stale token hid the bug during testing.
+func TestConnect_SucceedsWithoutToken(t *testing.T) {
+	srv := newTestServer(t, http.StatusCreated, "repo-open")
 	root := t.TempDir()
 	cfgPath := filepath.Join(t.TempDir(), "config.toml") // no token written
 
-	err := runConnect(connectParams{
-		serverURL:   "http://localhost:9999",
+	if err := runConnect(connectParams{
+		serverURL:   srv.URL,
 		projectRoot: root,
 		configPath:  cfgPath,
-	})
-	if err == nil {
-		t.Fatal("want error when not signed in, got nil")
+		httpClient:  srv.Client(),
+	}); err != nil {
+		t.Fatalf("connect without a token must succeed against an open server: %v", err)
 	}
-	if !strings.Contains(err.Error(), "not signed in") {
-		t.Errorf("error should mention 'not signed in', got: %v", err)
+
+	s, err := store.Open(filepath.Join(root, ".regent"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
 	}
-	if !strings.Contains(err.Error(), "rgt login") {
-		t.Errorf("error should mention 'rgt login', got: %v", err)
+	cfg, err := s.ReadRepoConfig()
+	if err != nil {
+		t.Fatalf("read repo config: %v", err)
+	}
+	if cfg.Remote.RepoID != "repo-open" {
+		t.Errorf("repo_id = %q, want %q", cfg.Remote.RepoID, "repo-open")
+	}
+}
+
+// TestConnect_OmitsAuthHeaderWithoutToken guards the wire format: with no token
+// stored we must send no Authorization header at all, rather than a malformed
+// "Bearer " that a stricter server would reject.
+func TestConnect_OmitsAuthHeaderWithoutToken(t *testing.T) {
+	var gotAuth string
+	var seen bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		seen = true
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]string{"repo_id": "repo-open"})
+	}))
+	t.Cleanup(srv.Close)
+
+	if err := runConnect(connectParams{
+		serverURL:   srv.URL,
+		projectRoot: t.TempDir(),
+		configPath:  filepath.Join(t.TempDir(), "config.toml"),
+		httpClient:  srv.Client(),
+	}); err != nil {
+		t.Fatalf("runConnect: %v", err)
+	}
+	if !seen {
+		t.Fatal("server never received the register request")
+	}
+	if gotAuth != "" {
+		t.Errorf("Authorization header = %q, want none", gotAuth)
 	}
 }
 

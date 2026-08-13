@@ -56,6 +56,39 @@ func createRepo(t *testing.T, ts *httptest.Server, repoID string) int {
 	return resp.StatusCode
 }
 
+// TestServerIsOpen verifies the server serves every endpoint without any auth —
+// it is always open.
+func TestServerIsOpen(t *testing.T) {
+	_, _, ts := newTestServer(t)
+	resp, err := http.Get(ts.URL + "/repos")
+	if err != nil {
+		t.Fatalf("GET /repos: %v", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("open server GET /repos = %d, want 200", resp.StatusCode)
+	}
+}
+
+// TestHealthz verifies /healthz returns 200 "ok".
+func TestHealthz(t *testing.T) {
+	_, _, ts := newTestServer(t)
+
+	resp, err := http.Get(ts.URL + "/healthz")
+	if err != nil {
+		t.Fatalf("GET /healthz: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /healthz = %d, want 200", resp.StatusCode)
+	}
+	if string(body) != "ok" {
+		t.Errorf("GET /healthz body = %q, want \"ok\"", body)
+	}
+}
+
 // putObject uploads data to repo and returns (status, hash).
 func putObject(t *testing.T, ts *httptest.Server, repo string, data []byte) (int, store.Hash) {
 	t.Helper()
@@ -1033,5 +1066,63 @@ func TestHandlerListRefs(t *testing.T) {
 	}
 	if lr.Refs["s1"] != string(h) {
 		t.Errorf("expected ref s1=%s, got %s", h, lr.Refs["s1"])
+	}
+}
+
+// TestInstallEndpoint verifies GET /install serves the personalized shell
+// installer: it always targets this server's host and references /bin/rgt. The
+// server is always open, so the script never mentions a token.
+func TestInstallEndpoint(t *testing.T) {
+	_, _, ts := newTestServer(t)
+
+	for _, path := range []string{"/install", "/install.sh"} {
+		resp, err := http.Get(ts.URL + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s = %d, want 200", path, resp.StatusCode)
+		}
+		script := string(body)
+		// httptest.Server listens on 127.0.0.1:<port>; the script must
+		// target THIS server via its Host header.
+		host := strings.TrimPrefix(ts.URL, "http://")
+		if !strings.Contains(script, host) {
+			t.Errorf("GET %s body does not mention server host %q", path, host)
+		}
+		if strings.Contains(script, "REGENT_TOKEN") {
+			t.Errorf("GET %s: open-server script must not mention REGENT_TOKEN", path)
+		}
+		if !strings.Contains(script, "/bin/rgt") {
+			t.Errorf("GET %s body does not reference the /bin/rgt download route", path)
+		}
+	}
+}
+
+// TestBinaryEndpoint verifies GET /bin/rgt serves a non-empty body. In tests
+// os.Executable() is the test binary, which is fine: we only assert 200 +
+// non-empty.
+func TestBinaryEndpoint(t *testing.T) {
+	_, _, ts := newTestServer(t)
+
+	resp, err := http.Get(ts.URL + "/bin/rgt")
+	if err != nil {
+		t.Fatalf("GET /bin/rgt: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /bin/rgt (no auth) = %d, want 200", resp.StatusCode)
+	}
+	n, err := io.Copy(io.Discard, resp.Body)
+	if err != nil {
+		t.Fatalf("read /bin/rgt body: %v", err)
+	}
+	if n == 0 {
+		t.Errorf("GET /bin/rgt returned an empty body")
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "application/octet-stream" {
+		t.Errorf("GET /bin/rgt Content-Type = %q, want application/octet-stream", ct)
 	}
 }

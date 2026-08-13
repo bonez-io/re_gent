@@ -24,6 +24,7 @@ type serveParams struct {
 	Addr          string
 	DataDir       string
 	MaxObjectSize int64
+	BinariesDir   string
 }
 
 // ServeCmd creates the serve command: one server, many repos.
@@ -48,6 +49,8 @@ func ServeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&p.Addr, "addr", p.Addr, "address to listen on")
 	cmd.Flags().StringVar(&p.DataDir, "data", "", "directory holding served repos (default ~/.regent-server)")
 	cmd.Flags().Int64Var(&p.MaxObjectSize, "max-object-size", p.MaxObjectSize, "maximum accepted object size in bytes")
+	cmd.Flags().StringVar(&p.BinariesDir, "binaries-dir", "",
+		"directory of prebuilt per-OS rgt binaries (rgt_<os>_<arch>[.exe]) served by /install (also read from env REGENT_BINARIES_DIR); empty serves only the server's own binary")
 
 	return cmd
 }
@@ -70,7 +73,15 @@ func runServe(ctx context.Context, p serveParams) error {
 	if err != nil {
 		return err
 	}
-	srv, err := server.New(dataDir, server.WithMaxObjectBytes(p.MaxObjectSize))
+	// Flag wins over env so a single process can be overridden without editing
+	// shared state.
+	binariesDir := p.BinariesDir
+	if binariesDir == "" {
+		binariesDir = os.Getenv("REGENT_BINARIES_DIR")
+	}
+	srv, err := server.New(dataDir,
+		server.WithMaxObjectBytes(p.MaxObjectSize),
+		server.WithBinariesDir(binariesDir))
 	if err != nil {
 		return err
 	}

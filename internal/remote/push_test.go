@@ -92,6 +92,61 @@ func (f *fixture) addStep(t *testing.T, files map[string]string, tool string) st
 	return stepHash
 }
 
+// TestStepObjectsIncludesConversationBlob asserts that a step's conversation
+// blob is part of the upload set, so it reaches the server ahead of the step
+// that references it.
+func TestStepObjectsIncludesConversationBlob(t *testing.T) {
+	f := newFixture(t)
+
+	conv, err := f.cache.WriteBlob([]byte(`[{"type":"user","text":"hi"}]`))
+	if err != nil {
+		t.Fatalf("write conversation blob: %v", err)
+	}
+
+	step := &store.Step{
+		SessionID:      "claude_code--session1",
+		Conversation:   conv,
+		TimestampNanos: time.Now().UnixNano(),
+	}
+
+	hashes, err := stepObjects(f.cache, step, "", map[store.Hash]bool{})
+	if err != nil {
+		t.Fatalf("stepObjects: %v", err)
+	}
+
+	var found bool
+	for _, h := range hashes {
+		if h == conv {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("conversation blob %s missing from step objects %v", conv, hashes)
+	}
+}
+
+// TestStepObjectsOmitsEmptyConversation guards backward compatibility: a step
+// without a conversation blob must not add an empty hash to the upload set.
+func TestStepObjectsOmitsEmptyConversation(t *testing.T) {
+	f := newFixture(t)
+
+	step := &store.Step{
+		SessionID:      "claude_code--session1",
+		TimestampNanos: time.Now().UnixNano(),
+	}
+
+	hashes, err := stepObjects(f.cache, step, "", map[store.Hash]bool{})
+	if err != nil {
+		t.Fatalf("stepObjects: %v", err)
+	}
+	for _, h := range hashes {
+		if h == "" {
+			t.Fatal("stepObjects must not emit an empty hash for a step with no conversation")
+		}
+	}
+}
+
 func TestPushDeliversHistoryAndAdvancesRef(t *testing.T) {
 	f := newFixture(t)
 	f.addStep(t, map[string]string{"a.txt": "one"}, "first")

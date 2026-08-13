@@ -1,0 +1,29 @@
+# One-command re_gent server.
+#
+#   docker compose up -d --build
+#   # or: make server
+#
+# Default is OPEN (no auth) — fine on a private network (VPN/Tailscale/LAN).
+# Set REGENT_SERVER_TOKEN (env or a .env file next to this file) ONLY if the
+# server is publicly reachable, to require bearer-token auth:
+#
+#   REGENT_SERVER_TOKEN=$(openssl rand -hex 32) docker compose up -d --build
+services:
+  server:
+    build: .
+    image: regent-server:latest
+    container_name: regent-server
+    ports:
+      # Host port is overridable (REGENT_PORT) to avoid colliding with a
+      # locally-running `rgt serve`; container always listens on 7654.
+      - "${REGENT_PORT:-7654}:7654"
+    volumes:
+      - regent-data:/data
+    environment:
+      # Empty -> server runs open. Provide a long random value in production.
+      REGENT_SERVER_TOKEN: ${REGENT_SERVER_TOKEN:-}
+    restart: unless-stopped
+
+volumes:
+  # Named volume so served repos survive `docker compose down` / restarts.
+  regent-data:

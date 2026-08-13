@@ -48,10 +48,16 @@ merged rather than duplicated and existing config is preserved.`,
 			if err != nil {
 				return fmt.Errorf("get working directory: %w", err)
 			}
-			return runConnect(connectParams{
-				serverURL:   strings.TrimRight(args[0], "/"),
-				projectRoot: cwd,
-			})
+			serverURL := strings.TrimRight(args[0], "/")
+
+			// Standing inside a project (or one already wired) connects it —
+			// the common case, unchanged.
+			if isProjectDir(cwd) {
+				return runConnect(connectParams{serverURL: serverURL, projectRoot: cwd})
+			}
+			// Otherwise offer the projects below here, so wiring several does
+			// not mean cd-ing into each one and retyping the command.
+			return connectPicked(serverURL, cwd, cmd.OutOrStdout(), cmd.InOrStdin(), interactive())
 		},
 	}
 	return cmd
@@ -69,9 +75,11 @@ func runConnect(p connectParams) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	if userCfg.Auth.Token == "" {
-		return ErrNotSignedIn
-	}
+	// A token is OPTIONAL: the default server is open, and requiring sign-in
+	// here broke the advertised onboarding ("install rgt, then rgt connect
+	// <server>") on every machine that had never run `rgt login`. Send a stored
+	// token when there is one and let a server that genuinely requires auth
+	// answer 401 — registerRepo turns that into ErrNotSignedIn.
 	token := userCfg.Auth.Token
 
 	// 2. Initialise .regent/ if it doesn't exist.
@@ -128,15 +136,36 @@ func runConnect(p connectParams) error {
 	return connectWireHooks(p.projectRoot)
 }
 
+// connectWireHooks wires every agent detected in the project, not just Claude.
+//
+// It used to install the Claude hook alone, which silently left Codex,
+// OpenCode and Pi uncaptured for anyone onboarding through the team server.
+// That became a hard failure once the installer started verifying its own
+// work: rgt doctor correctly reports the missing hook, the installer treats
+// that as failure, and the pasted command dies on any machine with a second
+// agent installed. Found by running the installer against a real server.
 func connectWireHooks(projectRoot string) error {
-	result, err := installClaudeHook(projectRoot)
+	targets, err := resolveAgentTargets(projectRoot, agentAuto)
 	if err != nil {
-		return fmt.Errorf("install Claude hooks: %w", err)
+		return err
 	}
-	if result.BackupPath != "" {
-		fmt.Fprintf(os.Stderr, "warning: backed up invalid hook config to %s\n", result.BackupPath)
+
+	installed, err := wireAgents(projectRoot, targets)
+	if err != nil {
+		return err
 	}
-	fmt.Printf("  ✓ Claude Code hooks configured\n")
+	if len(installed) == 0 {
+		return fmt.Errorf("no agent hooks were configured in %s", projectRoot)
+	}
+	// Agents read their hook config at session startup, so a session that was
+	// already running when this ran won't capture until it is restarted. This
+	// is the single most common "why wasn't my change captured?" cause.
+	fmt.Printf("  ⚠ Restart any Claude Code / Codex session already open in this repo —\n")
+	fmt.Printf("    agents load hooks at startup, so a running session won't capture until\n")
+	fmt.Printf("    you restart it. (New sessions, and teammates who clone, are unaffected.)\n")
+	fmt.Printf("  → To auto-wire teammates: commit .regent/config.toml and .claude/settings.json\n")
+	fmt.Printf("    (the rest of .regent/ is git-ignored). Then a clone + `rgt` installed is all\n")
+	fmt.Printf("    they need — no connect step.\n")
 	return nil
 }
 
@@ -154,7 +183,11 @@ func registerRepo(serverURL, token, projectRoot string, client *http.Client) (st
 		return "", fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
+	// Only send Authorization when we actually have a token; a bare "Bearer "
+	// is malformed and a strict server would reject it.
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {

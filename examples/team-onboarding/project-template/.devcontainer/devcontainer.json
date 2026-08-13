@@ -1,0 +1,44 @@
+// re_gent zero-step onboarding for VS Code Dev Containers / GitHub Codespaces.
+//
+// Opening this repo in the container = fully set up: `rgt` is installed and the
+// committed .regent/config.toml already points capture at the team server.
+//
+// devcontainer.json is JSONC — comments and trailing commas are part of the
+// spec and are parsed by VS Code and the `devcontainer` CLI.
+{
+  "name": "re_gent team repo",
+
+  // A prebuilt Go toolchain image. `go install` lands binaries in /go/bin,
+  // which is already on PATH in this image — so `rgt` is runnable immediately.
+  "image": "mcr.microsoft.com/devcontainers/go:1-1.23-bookworm",
+
+  // Install the rgt binary once, when the container is created.
+  // TODO(team): no public release exists yet. This installs from source and
+  // requires the module to be reachable (public repo, or a configured GOPRIVATE
+  // + credentials for a private one). If you publish prebuilt binaries later,
+  // swap this for a download step (see ../../install.sh for the same TODO).
+  "postCreateCommand": "go install github.com/regent-vcs/regent/cmd/rgt@latest && rgt --version",
+
+  // OPTIONAL — only if your team's server requires a token.
+  //
+  // The default setup is an OPEN server on a private network (VPN/Tailscale/LAN):
+  // no token, no secrets, and this zero-step path needs nothing below. Opening
+  // the repo in the container is the whole setup.
+  //
+  // If (and only if) your server is PUBLIC and token-protected, deliver the
+  // shared team token as a Codespaces secret named REGENT_TOKEN (Repo/Org
+  // Settings -> Secrets -> Codespaces) — Codespaces injects it automatically —
+  // and, for a local Dev Container, uncomment the block below to forward it from
+  // your host env. NOTE: the CLIENT reads REGENT_TOKEN (the server process reads
+  // REGENT_SERVER_TOKEN — different var, same shared secret value).
+  //
+  // "containerEnv": {
+  //   "REGENT_TOKEN": "${localEnv:REGENT_TOKEN}"
+  // },
+
+  "customizations": {
+    "vscode": {
+      "extensions": ["golang.go"]
+    }
+  }
+}

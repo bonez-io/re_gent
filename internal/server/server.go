@@ -82,6 +82,7 @@ var (
 type Server struct {
 	dataDir        string
 	maxObjectBytes int64
+	binariesDir    string
 	logger         *log.Logger
 
 	mu    sync.Mutex
@@ -103,6 +104,14 @@ func WithMaxObjectBytes(n int64) Option {
 // WithLogger sets the logger used for server-side failures. Nil disables logging.
 func WithLogger(l *log.Logger) Option {
 	return func(s *Server) { s.logger = l }
+}
+
+// WithBinariesDir points GET /bin/rgt at a directory of prebuilt, per-OS/arch
+// rgt binaries (named rgt_<goos>_<goarch>[.exe]) so a teammate on any platform
+// can download a runnable binary — not just teammates matching the server's OS.
+// Empty (the default) means the server only serves its own running executable.
+func WithBinariesDir(dir string) Option {
+	return func(s *Server) { s.binariesDir = dir }
 }
 
 // New creates a Server persisting repo data under dataDir, which is created if
@@ -224,6 +233,28 @@ func (s *Server) openRepo(repoID string, create bool) (*store.Store, error) {
 // rewrites "a/../b" and "./a" before a handler ever sees them, which would hide
 // traversal attempts from validation.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Health check so container and orchestrator probes succeed. The exemption is
+	// scoped to exactly "/healthz".
+	if r.URL.Path == "/healthz" {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "ok")
+		return
+	}
+
+	// The onboarding endpoints expose the open-source binary and a bootstrap
+	// script that carries no secret, never any repo data. This is what makes
+	// `curl -fsSL http://<server>/install | sh` a one-paste onboarding. See
+	// install.go.
+	switch r.URL.Path {
+	case "/install", "/install.sh":
+		s.handleInstallScript(w, r)
+		return
+	case "/bin/rgt":
+		s.handleBinary(w, r)
+		return
+	}
+
 	segs, err := pathSegments(r.URL.EscapedPath())
 	if err != nil {
 		httpError(w, http.StatusBadRequest, err.Error())
@@ -246,6 +277,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch {
+	case len(segs) >= 2 && segs[1] == "api":
+		s.handleAPI(w, r, repoID, segs)
 	case len(segs) == 3 && segs[1] == "objects":
 		s.handleObject(w, r, repoID, store.Hash(segs[2]))
 	case len(segs) == 2 && segs[1] == "refs":

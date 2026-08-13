@@ -297,6 +297,42 @@ cache loss) with the accepted risks stated explicitly.
 
 ---
 
+## Self-host your server (Docker)
+
+Run your own re_gent server anywhere with Docker, then point repos at it.
+
+**With the published image:**
+
+```bash
+# 1. Start a secured server — capture the token so you can reuse it
+TOKEN=$(openssl rand -hex 32); echo "server token: $TOKEN"
+docker run -d --name regent-server \
+  -p 7654:7654 -v regent-data:/data \
+  -e REGENT_SERVER_TOKEN="$TOKEN" \
+  ghcr.io/regent-vcs/regent-server:latest
+
+# 2. Connect a project to it in one command
+cd ~/code/my-project
+rgt connect http://your-host:7654 --token "$TOKEN"
+
+# 3. Push its history up
+rgt push
+```
+
+**From source** (build and run locally, one command):
+
+```bash
+git clone https://github.com/regent-vcs/regent && cd regent
+REGENT_SERVER_TOKEN=$(openssl rand -hex 32) make server   # or: docker compose up -d --build
+```
+
+The server persists repos in the `regent-data` volume and exposes an unauthenticated
+`GET /healthz` for container/orchestrator probes. Leave `REGENT_SERVER_TOKEN` unset only on a
+trusted local network; set it to a long random value for anything reachable, and terminate TLS
+at a reverse proxy before exposing it to the internet.
+
+---
+
 ## Multiple repos, one server
 
 One `rgt serve` process hosts any number of repositories. Each repo is addressed
