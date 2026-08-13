@@ -136,12 +136,19 @@ func connectPicked(serverURL, root string, out io.Writer, in io.Reader, canPromp
 
 	// Without a terminal we cannot ask, so say what we found and what to run
 	// rather than picking something nobody chose.
+	//
+	// The suggestions are guidance, not an outcome. Returning nil here made
+	// `rgt connect <url>` exit 0 from a directory of repositories having
+	// connected none of them — the same shape as the init summary bug, where a
+	// command that did nothing reported as though it had. A person reads the
+	// list and acts on it; an installer reads the exit code and moves on, and
+	// capture silently never happens. So: print the guidance, then fail.
 	if !canPrompt {
 		fmt.Fprintf(out, "Found %d project(s) under %s. Run connect inside the one you want:\n\n", len(projects), root)
 		for _, p := range projects {
 			fmt.Fprintf(out, "  cd %s && rgt connect %s\n", p, serverURL)
 		}
-		return nil
+		return fmt.Errorf("nothing connected: %s is not a project, and there is no terminal to choose one on", root)
 	}
 
 	fmt.Fprintf(out, "Projects under %s:\n\n", root)

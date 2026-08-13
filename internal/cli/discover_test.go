@@ -82,21 +82,33 @@ func TestConnectPickedWiresChosenProjects(t *testing.T) {
 	}
 }
 
-// TestConnectPickedWithoutTerminalOnlyPrints guards the `curl | sh` case: with
-// no terminal we must not guess, only report what to run.
-func TestConnectPickedWithoutTerminalOnlyPrints(t *testing.T) {
+// The `curl | sh` case: with no terminal we must not guess, only report what to
+// run — and we must not call that success.
+//
+// This test previously asserted the opposite. It required a nil error, which
+// pinned the behaviour that connect prints a list of suggestions and exits 0
+// having connected nothing. That is the same defect the summary bug was in
+// init: a command that did nothing, reporting as though it had. An installer
+// that runs `rgt connect <url>` from a directory of repositories reads the zero
+// exit as "connected" and moves on, and capture silently never happens.
+//
+// Printing the suggestions is right and stays. Claiming success for it does not.
+func TestConnectWithoutTerminalReportsAndFails(t *testing.T) {
 	root := t.TempDir()
 	alpha := mkProject(t, root, "alpha")
 
 	var out bytes.Buffer
-	if err := connectPicked("http://example.test", root, &out, strings.NewReader(""), false); err != nil {
-		t.Fatalf("connectPicked: %v", err)
+	err := connectPicked("http://example.test", root, &out, strings.NewReader(""), false)
+	if err == nil {
+		t.Error("connect exited 0 without connecting anything; a script cannot tell that from success")
+	}
+
+	// The guidance is the point of this path, so it has to survive the exit code.
+	if !strings.Contains(out.String(), "rgt connect http://example.test") {
+		t.Errorf("should print the command to run; got:\n%s", out.String())
 	}
 	if _, statErr := os.Stat(filepath.Join(alpha, ".regent")); statErr == nil {
 		t.Error("nothing may be wired without a terminal to ask on")
-	}
-	if !strings.Contains(out.String(), "rgt connect http://example.test") {
-		t.Errorf("should print the command to run; got:\n%s", out.String())
 	}
 }
 
