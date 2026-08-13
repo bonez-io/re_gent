@@ -135,8 +135,7 @@ func reportWired(agent, path string) {
 // hookOptions selects how configureHooks behaves. The zero value is the
 // default: wire everything detected, ask nothing.
 type hookOptions struct {
-	skip        bool // --skip-hook: install nothing
-	interactive bool // --interactive: present the multi-select
+	skip bool // --skip-hook: install nothing
 }
 
 // hookOutcome carries what was actually installed.
@@ -152,19 +151,25 @@ type hookOutcome struct {
 	installed []agentTarget
 }
 
-// configureHooks is the decision layer above wireAgents. Prompting is opt-in
-// rather than the default because the default path has to survive `curl | sh`,
-// devcontainers, CI, and SSH — none of which can answer a question.
+// configureHooks is the decision layer above wireAgents, and the only decision
+// left to make is whether to wire at all.
+//
+// There used to be a second path here: --interactive presented a full-screen
+// multi-select, then ran its own copy of the install switch and returned the
+// agents the user *selected* rather than the ones it managed to write. That is
+// how `rgt init` came to report success for a Pi extension it had not
+// installed. Two dispatchers meant two answers to "what got wired", and only
+// one of them was true.
+//
+// It is gone rather than fixed. A prompt cannot run under `curl | sh`, in a
+// devcontainer, in CI, or over SSH, so it could never be the default; a
+// non-default path that duplicates the default one earns its bugs. Choosing
+// agents is what --agent is for, and that works everywhere.
 func configureHooks(projectRoot string, targets []agentTarget, opts hookOptions) (hookOutcome, error) {
 	if opts.skip {
 		fmt.Printf("  %s Hook configuration skipped\n", style.DimText("-"))
 		printManualInstructions(targets)
 		return hookOutcome{}, nil
-	}
-
-	if opts.interactive {
-		selected, err := offerHookInstall(projectRoot, targets, nil)
-		return hookOutcome{installed: selected}, err
 	}
 
 	installed, err := wireAgents(projectRoot, targets)
