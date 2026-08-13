@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -913,14 +914,28 @@ func hasAgent(targets []agentTarget, target agentTarget) bool {
 	return false
 }
 
-func confirmedDefaultYes(input *bufio.Reader) (bool, error) {
-	response, err := input.ReadString('\n')
-	if err != nil {
+// confirmedDefaultYes reads a yes/no answer, treating a bare enter as yes.
+//
+// It delegates to readAnswer rather than reading to a newline itself. This
+// package had two confirmation readers that disagreed about what enter looks
+// like: readAnswer accepts a carriage return as well, because after a
+// full-screen picker hands the terminal back that is what a keypress arrives
+// as, and a newline-only read waits forever for a key the user already pressed.
+// This function never got that fix, so the skills prompt behind it inherited
+// the hang.
+//
+// An answer that arrives without any terminator is still an answer — the reader
+// simply ended — so a partial read is honoured. Only a genuinely empty read is
+// an error, which keeps the prompt from silently defaulting to yes when stdin
+// is the installing script rather than a person.
+func confirmedDefaultYes(input io.Reader) (bool, error) {
+	answer, err := readAnswer(input)
+	if err != nil && answer == "" {
 		return false, err
 	}
 
-	response = strings.TrimSpace(strings.ToLower(response))
-	return response == "" || response == "y" || response == "yes", nil
+	answer = strings.TrimSpace(strings.ToLower(answer))
+	return answer == "" || answer == "y" || answer == "yes", nil
 }
 
 func backupFile(path string) (string, error) {
