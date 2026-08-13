@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/regent-vcs/regent/internal/capture"
@@ -267,6 +268,51 @@ func TestHookOutcomeCarriesInstalledNotRequested(t *testing.T) {
 		if target == agentCodex {
 			t.Error("outcome claims codex was installed, but its write failed")
 		}
+	}
+}
+
+// One broken agent must not cost the user the others.
+//
+// wireAgents walks its targets in order and returns at the first failure, so a
+// project carrying a stale `.codex` file gets no Claude hooks either — and the
+// user is told only about Codex. Which agent survives depends on the order
+// resolveAgentTargets happened to produce, which is not something a user can
+// see or reason about.
+//
+// The dispatcher is meant to be the one place that decides what gets wired and
+// what gets reported. Deciding "nothing further" on behalf of unrelated agents
+// is not that. Every requested agent is attempted, the failures are surfaced
+// together, and the summary lists exactly the ones that were written.
+func TestWireAgentsContinuesPastAFailedAgent(t *testing.T) {
+	root := t.TempDir()
+
+	// Block Codex, and request it first, so a failure there is what stands
+	// between the user and their Claude hooks.
+	if err := os.WriteFile(filepath.Join(root, ".codex"), []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("seed blocker: %v", err)
+	}
+
+	installed, err := wireAgents(root, []agentTarget{agentCodex, agentClaude})
+	if err == nil {
+		t.Fatal("wireAgents returned nil error despite Codex being unwritable")
+	}
+
+	if !hasAgent(installed, agentClaude) {
+		t.Errorf("installed = %v; Claude was requested and writable, and was skipped because an earlier agent failed", installed)
+	}
+	if hasAgent(installed, agentCodex) {
+		t.Error("installed claims codex, but its write failed")
+	}
+
+	// The error has to name the agent that failed — a user reading it needs to
+	// know which config to fix, not merely that something did not work.
+	if !strings.Contains(err.Error(), "Codex") {
+		t.Errorf("error does not name the failing agent: %v", err)
+	}
+
+	// And the wiring it did do must be real, not merely reported.
+	if _, statErr := os.Stat(filepath.Join(root, ".claude", "settings.json")); statErr != nil {
+		t.Errorf("Claude reported installed but settings.json is absent: %v", statErr)
 	}
 }
 
