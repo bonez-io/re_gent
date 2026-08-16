@@ -52,3 +52,6 @@ simple.py
 
 # Scratch worktrees for parallel agent runs; never part of the repo.
 .claude/worktrees/
+
+# rgt writes these when it rewrites hook config; never commit them.
+.claude/settings.json.bak-*
