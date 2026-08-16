@@ -3,6 +3,7 @@ package index
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -958,6 +959,227 @@ func TestOpen_MigratesPreForkLegacySchema(t *testing.T) {
 	}
 }
 
+// TestOpen_MigratesPreAuthorSchema is the upgrade-in-place guarantee. An index
+// written by the build before author storage existed must gain the author
+// columns on the next Open, keep every row it already had, and accept new
+// authored steps — without anyone re-capturing history that is already
+// recorded.
+func TestOpen_MigratesPreAuthorSchema(t *testing.T) {
+	root := t.TempDir()
+	s, err := store.Init(root)
+	if err != nil {
+		t.Fatalf("init store: %v", err)
+	}
+
+	db, err := sql.Open("sqlite", filepath.Join(s.Root, "index.db"))
+	if err != nil {
+		t.Fatalf("open raw db: %v", err)
+	}
+	if _, err := db.Exec(preAuthorSchema); err != nil {
+		t.Fatalf("create pre-author schema: %v", err)
+	}
+	// A session and step recorded by the old build, standing in for the
+	// history a user already has on disk.
+	if _, err := db.Exec(`
+		INSERT INTO sessions (id, origin, started_at, last_seen_at, head_step_id)
+		VALUES ('claude_code--old', 'claude_code', 1000, 2000, 'oldstep');
+		INSERT INTO steps (id, parent_id, session_id, origin, ts_nanos, tool_name, tool_use_id, tree_hash)
+		VALUES ('oldstep', '', 'claude_code--old', 'claude_code', 1000, 'Write', 'tu_old', 'tree_old');
+	`); err != nil {
+		t.Fatalf("seed pre-author rows: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close raw db: %v", err)
+	}
+
+	idx, err := Open(s)
+	if err != nil {
+		t.Fatalf("open migrated index: %v", err)
+	}
+	defer func() { _ = idx.Close() }()
+
+	for _, column := range []string{"author_name", "author_email"} {
+		exists, err := columnExists(idx.db, "steps", column)
+		if err != nil {
+			t.Fatalf("check column steps.%s: %v", column, err)
+		}
+		if !exists {
+			t.Fatalf("expected migrated column steps.%s", column)
+		}
+	}
+
+	// The pre-existing row survives the migration and reads back as
+	// author-less rather than failing the read.
+	sessions, err := idx.ListAllSessions()
+	if err != nil {
+		t.Fatalf("list sessions after migration: %v", err)
+	}
+	if len(sessions) != 1 || sessions[0].ID != "claude_code--old" {
+		t.Fatalf("sessions after migration = %#v, want the one pre-existing session", sessions)
+	}
+	if sessions[0].HeadStepID != "oldstep" {
+		t.Errorf("head step after migration = %q, want %q", sessions[0].HeadStepID, "oldstep")
+	}
+
+	// And a newly captured step records its author into the migrated table.
+	blobHash, err := s.WriteBlob([]byte("hello\n"))
+	if err != nil {
+		t.Fatalf("write blob: %v", err)
+	}
+	tree := &store.Tree{Entries: []store.TreeEntry{{Path: "hello.txt", Blob: blobHash}}}
+	treeHash, err := s.WriteTree(tree)
+	if err != nil {
+		t.Fatalf("write tree: %v", err)
+	}
+	step := &store.Step{
+		Tree:           treeHash,
+		Causes:         []store.Cause{{ToolName: "Write", ToolUseID: "tu_new"}},
+		SessionID:      "claude_code--old",
+		Origin:         "claude_code",
+		Author:         store.Author{Name: "Ada Lovelace", Email: "ada@example.com"},
+		TimestampNanos: 3000,
+	}
+	stepHash, err := s.WriteStep(step)
+	if err != nil {
+		t.Fatalf("write step: %v", err)
+	}
+	if err := idx.IndexStep(stepHash, step, tree); err != nil {
+		t.Fatalf("index step into migrated index: %v", err)
+	}
+
+	var name, email string
+	if err := idx.db.QueryRow(
+		`SELECT COALESCE(author_name, ''), COALESCE(author_email, '') FROM steps WHERE id = ?`,
+		stepHash,
+	).Scan(&name, &email); err != nil {
+		t.Fatalf("read back author: %v", err)
+	}
+	if name != "Ada Lovelace" || email != "ada@example.com" {
+		t.Errorf("stored author = %q <%s>, want %q <%s>", name, email, "Ada Lovelace", "ada@example.com")
+	}
+}
+
+// TestListAllSessions_AttributesSessionToFirstStepAuthor pins the attribution
+// rule. A session belongs to whoever started it. Taking the latest author
+// instead would move a session to whoever touched it last, so the two steps
+// here carry deliberately different authors and the earlier one must win.
+func TestListAllSessions_AttributesSessionToFirstStepAuthor(t *testing.T) {
+	root := t.TempDir()
+	s, err := store.Init(root)
+	if err != nil {
+		t.Fatalf("init store: %v", err)
+	}
+	idx, err := Open(s)
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer func() { _ = idx.Close() }()
+
+	const sessionID = "claude_code--shared"
+	first := writeAuthoredStep(t, s, idx, sessionID, "", store.Author{Name: "Ada", Email: "ada@example.com"}, 1000)
+	writeAuthoredStep(t, s, idx, sessionID, first, store.Author{Name: "Grace", Email: "grace@example.com"}, 2000)
+
+	sessions, err := idx.ListAllSessions()
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("sessions = %d, want 1", len(sessions))
+	}
+	if got := sessions[0].Author; got.Name != "Ada" || got.Email != "ada@example.com" {
+		t.Errorf("session author = %q <%s>, want the author of the first step, %q <%s>",
+			got.Name, got.Email, "Ada", "ada@example.com")
+	}
+}
+
+// TestListAllSessions_ListsSessionsWithNoAuthor covers history captured with no
+// git identity: it has no author to show, but it must still appear.
+func TestListAllSessions_ListsSessionsWithNoAuthor(t *testing.T) {
+	root := t.TempDir()
+	s, err := store.Init(root)
+	if err != nil {
+		t.Fatalf("init store: %v", err)
+	}
+	idx, err := Open(s)
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer func() { _ = idx.Close() }()
+
+	writeAuthoredStep(t, s, idx, "claude_code--anon", "", store.Author{}, 1000)
+
+	sessions, err := idx.ListAllSessions()
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("sessions = %d, want the author-less session still listed", len(sessions))
+	}
+	if got := sessions[0].Author; got.Name != "" || got.Email != "" {
+		t.Errorf("session author = %q <%s>, want empty", got.Name, got.Email)
+	}
+}
+
+// TestListAllSessions_FallsBackPastAnAuthorlessFirstStep covers a session whose
+// earliest step predates the git identity being set. Attribution walks forward
+// to the earliest step that names someone rather than reporting nobody.
+func TestListAllSessions_FallsBackPastAnAuthorlessFirstStep(t *testing.T) {
+	root := t.TempDir()
+	s, err := store.Init(root)
+	if err != nil {
+		t.Fatalf("init store: %v", err)
+	}
+	idx, err := Open(s)
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer func() { _ = idx.Close() }()
+
+	const sessionID = "claude_code--late-identity"
+	first := writeAuthoredStep(t, s, idx, sessionID, "", store.Author{}, 1000)
+	second := writeAuthoredStep(t, s, idx, sessionID, first, store.Author{Name: "Ada", Email: "ada@example.com"}, 2000)
+	writeAuthoredStep(t, s, idx, sessionID, second, store.Author{Name: "Grace", Email: "grace@example.com"}, 3000)
+
+	sessions, err := idx.ListAllSessions()
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	if got := sessions[0].Author; got.Name != "Ada" {
+		t.Errorf("session author = %q, want the earliest identifiable author %q", got.Name, "Ada")
+	}
+}
+
+func writeAuthoredStep(t *testing.T, s *store.Store, idx *DB, sessionID string, parent store.Hash, author store.Author, ts int64) store.Hash {
+	t.Helper()
+
+	blobHash, err := s.WriteBlob([]byte(fmt.Sprintf("content-%d", ts)))
+	if err != nil {
+		t.Fatalf("write blob: %v", err)
+	}
+	tree := &store.Tree{Entries: []store.TreeEntry{{Path: "file.txt", Blob: blobHash, Mode: 0o644}}}
+	treeHash, err := s.WriteTree(tree)
+	if err != nil {
+		t.Fatalf("write tree: %v", err)
+	}
+	step := &store.Step{
+		Parent:         parent,
+		Tree:           treeHash,
+		Causes:         []store.Cause{{ToolName: "Write", ToolUseID: fmt.Sprintf("tu-%d", ts)}},
+		SessionID:      sessionID,
+		Origin:         "claude_code",
+		Author:         author,
+		TimestampNanos: ts,
+	}
+	stepHash, err := s.WriteStep(step)
+	if err != nil {
+		t.Fatalf("write step: %v", err)
+	}
+	if err := idx.IndexStep(stepHash, step, tree); err != nil {
+		t.Fatalf("index step: %v", err)
+	}
+	return stepHash
+}
+
 func TestSessions_NoHeadSessionsAreNotDefaultable(t *testing.T) {
 	root := t.TempDir()
 	s, err := store.Init(root)
@@ -1177,6 +1399,82 @@ CREATE TABLE messages (
 	tool_use_id     TEXT,
 	tool_input      TEXT,
 	tool_output     TEXT
+);
+CREATE TABLE jsonl_snapshots (
+	session_id      TEXT NOT NULL,
+	captured_at     INTEGER NOT NULL,
+	jsonl_blob      TEXT NOT NULL,
+	PRIMARY KEY (session_id, captured_at)
+);
+`
+
+// preAuthorSchema is the index schema exactly as it shipped before author
+// storage existed. A database created by that build must upgrade in place: the
+// rows already in it stay readable and no re-capture is required.
+const preAuthorSchema = `
+CREATE TABLE steps (
+	id          TEXT PRIMARY KEY,
+	parent_id   TEXT,
+	session_id  TEXT NOT NULL,
+	origin      TEXT NOT NULL DEFAULT 'claude_code',
+	turn_id     TEXT,
+	agent_id    TEXT,
+	ts_nanos    INTEGER NOT NULL,
+	tool_name   TEXT NOT NULL,
+	tool_use_id TEXT NOT NULL,
+	tree_hash   TEXT NOT NULL,
+	transcript_hash TEXT,
+	usage_input_tokens          INTEGER,
+	usage_output_tokens         INTEGER,
+	usage_cache_creation_tokens INTEGER,
+	usage_cache_read_tokens     INTEGER,
+	usage_api_calls             INTEGER,
+	usage_subagents             INTEGER
+);
+CREATE TABLE step_files (
+	step_id   TEXT NOT NULL,
+	path      TEXT NOT NULL,
+	blob_hash TEXT NOT NULL,
+	PRIMARY KEY (step_id, path)
+);
+CREATE TABLE sessions (
+	id            TEXT PRIMARY KEY,
+	origin        TEXT NOT NULL,
+	started_at    INTEGER NOT NULL,
+	last_seen_at  INTEGER NOT NULL,
+	head_step_id  TEXT,
+	model         TEXT,
+	permission_mode TEXT,
+	transcript_path TEXT,
+	forked_from_session TEXT,
+	forked_from_step    TEXT,
+	fork_detected_at    INTEGER
+);
+CREATE TABLE session_transcript (
+	session_id           TEXT PRIMARY KEY,
+	last_message_id      TEXT NOT NULL,
+	last_transcript_hash TEXT NOT NULL
+);
+CREATE TABLE messages (
+	id              TEXT PRIMARY KEY,
+	session_id      TEXT NOT NULL,
+	step_id         TEXT,
+	turn_id         TEXT,
+	seq_num         INTEGER NOT NULL,
+	timestamp       INTEGER NOT NULL,
+	processed_at    INTEGER,
+	message_type    TEXT NOT NULL,
+	content_text    TEXT,
+	tool_name       TEXT,
+	tool_use_id     TEXT,
+	tool_input      TEXT,
+	tool_output     TEXT
+);
+CREATE TABLE tool_uses (
+	session_id  TEXT NOT NULL,
+	turn_id     TEXT NOT NULL,
+	tool_use_id TEXT NOT NULL,
+	PRIMARY KEY (session_id, turn_id, tool_use_id)
 );
 CREATE TABLE jsonl_snapshots (
 	session_id      TEXT NOT NULL,
