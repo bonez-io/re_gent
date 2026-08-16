@@ -651,10 +651,12 @@ func methodNotAllowed(w http.ResponseWriter, allowed ...string) {
 	httpError(w, http.StatusMethodNotAllowed, "method not allowed")
 }
 
-// --- Single-repo rgt remote protocol handler (from RE-7). Used by
-// internal/push (single-repo uploader) and its HTTP tests. The multi-repo
+// --- Single-repo rgt remote protocol handler (from RE-7). The multi-repo
 // Server above (New/ServeHTTP) is the primary API; this Handler is retained
 // for the object/ref remote used by remote.HTTPRemote.
+//
+// It previously also served internal/push, a standalone uploader that nothing
+// reached: server-mode sync inside capture is the live upload path.
 // ---
 // Handler returns an http.Handler backed by s that implements the rgt remote
 // protocol:
