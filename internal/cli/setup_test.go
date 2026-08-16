@@ -361,39 +361,7 @@ func TestServerIsRemembered(t *testing.T) {
 	}
 }
 
-// setupTargets is the decision half of rgt setup, split out so it can be tested
-// without a pty. The installer now calls setup unconditionally, so this runs in
-// devcontainers, over SSH and in CI far more often than it runs at a terminal.
-
-func TestSetupTargetsWiresTheCurrentProjectWithoutATerminal(t *testing.T) {
-	root := t.TempDir()
-	mustMkdir(t, filepath.Join(root, ".git"))
-
-	targets, err := setupTargets(root, setupOptions{})
-	if err != nil {
-		t.Fatalf("setupTargets: %v", err)
-	}
-
-	if len(targets) != 1 || targets[0] != root {
-		t.Fatalf("targets = %v, want [%s]", targets, root)
-	}
-}
-
-// The bug this pins, and the reason the installer could report success having
-// done nothing: runSetup opened /dev/tty, and when that failed it printed a
-// suggestion and returned nil. Exit 0, no project wired, no error anywhere for
-// the install script to detect.
-//
-// Outside a project there is nothing safe to wire, so that must be an error
-// rather than a quiet success.
-func TestSetupTargetsFailsOutsideAProject(t *testing.T) {
-	root := t.TempDir() // no .git, no .regent
-
-	targets, err := setupTargets(root, setupOptions{})
-	if err == nil {
-		t.Fatal("setupTargets returned nil error outside a project; a paste would report success having wired nothing")
-	}
-	if len(targets) != 0 {
-		t.Errorf("targets = %v, want none", targets)
-	}
-}
+// The two setupTargets tests that stood here moved to discover_test.go when
+// setup was folded into connect. "Wires only the current project" became
+// TestConnectInsideAProjectWiresOnlyThatProject; "fails outside a project" was
+// already pinned by TestConnectWithoutTerminalReportsAndFails.

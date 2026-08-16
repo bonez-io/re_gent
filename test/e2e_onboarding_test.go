@@ -88,3 +88,37 @@ func e2eRunExpectingFailure(t *testing.T, rgtPath, dir string, args ...string) s
 	}
 	return string(out)
 }
+
+// A failure must be reported once.
+//
+// Every error `rgt` produced was printed twice: cobra printed it, then main
+// printed the same error it had just returned. It was easy to miss on a
+// one-line "unknown flag", and impossible to miss once the removed commands
+// started answering with a five-line explanation of what to run instead —
+// which arrived, in full, twice.
+//
+// Asserted against the built binary because that is where the duplication
+// lives: neither printer is wrong on its own, only the pair of them.
+func TestErrorsArePrintedOnce(t *testing.T) {
+	rgt := buildTestBinary(t)
+
+	// Both a removed command and an ordinary one, because silencing is
+	// inheritable and it is entirely possible to fix this on one command and
+	// believe it fixed everywhere. The first version of this test asserted only
+	// the removed command and passed against exactly that mistake.
+	cases := []struct {
+		name    string
+		args    []string
+		message string
+	}{
+		{"a removed command", []string{"setup"}, "has been removed"},
+		{"an ordinary command", []string{"cat"}, "accepts 1 arg(s)"},
+	}
+
+	for _, tc := range cases {
+		out := e2eRunExpectingFailure(t, rgt, t.TempDir(), tc.args...)
+		if n := strings.Count(out, tc.message); n != 1 {
+			t.Errorf("%s: the failure was printed %d times, want 1:\n%s", tc.name, n, out)
+		}
+	}
+}

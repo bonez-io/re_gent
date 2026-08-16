@@ -12,44 +12,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/regent-vcs/regent/internal/config"
-	"github.com/spf13/cobra"
 )
 
 // SetupCmd is the interactive front door: pick projects, wire them, and offer to
 // share the wiring. The one-line installer hands over to it, and it can be
 // re-run at any time.
-func SetupCmd() *cobra.Command {
-	var interactiveSetup bool
-
-	cmd := &cobra.Command{
-		Use:   "setup [server-url]",
-		Short: "Connect this project to a re_gent server",
-		Long: "Wires the project in the current directory to the server. The URL is\n" +
-			"remembered after the first run, so later runs need no argument — `rgt`\n" +
-			"on its own does the same thing. Pass --interactive to pick from a list\n" +
-			"of projects on this machine instead.",
-		Args:         cobra.MaximumNArgs(1),
-		SilenceUsage: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			explicit := ""
-			if len(args) == 1 {
-				explicit = args[0]
-			}
-			url, err := resolveServerURL(explicit)
-			if err != nil {
-				return err
-			}
-			return runSetup(url, setupOptions{interactive: interactiveSetup})
-		},
-	}
-
-	cmd.Flags().BoolVar(&interactiveSetup, "interactive", false, "Choose projects from a picker instead of wiring the current directory")
-
-	return cmd
-}
-
-// resolveServerURL prefers an explicit argument and otherwise falls back to the
-// server remembered from a previous run, so repeat use needs no URL.
 func resolveServerURL(explicit string) (string, error) {
 	if explicit != "" {
 		return strings.TrimRight(explicit, "/"), nil
@@ -58,7 +25,7 @@ func resolveServerURL(explicit string) (string, error) {
 	if err == nil && cfg.Server.URL != "" {
 		return strings.TrimRight(cfg.Server.URL, "/"), nil
 	}
-	return "", fmt.Errorf("no server known yet\n\nRun it once with your team server:\n\n  rgt setup <server-url>")
+	return "", fmt.Errorf("no server known yet\n\nRun it once with your team server:\n\n  rgt connect <server-url>")
 }
 
 // rememberServer stores the server so later runs need no URL. A failure here is
@@ -88,7 +55,11 @@ func RunDefaultSetup() error {
 	if err != nil {
 		return err
 	}
-	return runSetup(url, setupOptions{interactive: true})
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("get working directory: %w", err)
+	}
+	return connectPicked(url, cwd, os.Stdout, isTerminal(os.Stdin), chooseWithPicker, shareWithTeam)
 }
 
 // ttyPair returns the handles the interactive UI reads from and draws to, plus
@@ -170,97 +141,6 @@ func isDir(p string) bool {
 // default: wire the project we are standing in, ask nothing.
 type setupOptions struct {
 	interactive bool // --interactive: scan and present the picker
-}
-
-// setupTargets decides which project directories a setup run should wire.
-//
-// The default wires only the current directory. The installer runs from inside
-// the repo the teammate cares about, so that is the one they mean; scanning and
-// wiring everything found under a scan root would let a single pasted command
-// reach into unrelated repositories nobody chose.
-//
-// Outside a project this returns an error rather than an empty list. The
-// previous behaviour — print a suggestion and return nil — is what let the
-// installer exit 0 having wired nothing, with no failure for the script to see.
-func setupTargets(cwd string, opts setupOptions) ([]string, error) {
-	if opts.interactive {
-		return nil, nil // caller runs the picker
-	}
-
-	if !isProjectDir(cwd) {
-		return nil, fmt.Errorf("%s is not a project (no .git or .regent)\n\nRun this from inside the repository you want to capture, or pass --interactive to choose from a list", cwd)
-	}
-	return []string{cwd}, nil
-}
-
-func runSetup(serverURL string, opts setupOptions) error {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("get working directory: %w", err)
-	}
-
-	picked, err := setupTargets(cwd, opts)
-	if err != nil {
-		return err
-	}
-
-	var ttyIn *os.File
-	if picked == nil {
-		ttyIn2, ttyOut, cleanup, ttyErr := ttyPair()
-		if ttyErr != nil {
-			return fmt.Errorf("--interactive needs a terminal, and none is available here: %w", ttyErr)
-		}
-		defer cleanup()
-		ttyIn = ttyIn2
-
-		picked, err = runPicker(defaultScanRoot(), ttyIn, ttyOut)
-		if err != nil {
-			return err
-		}
-		if len(picked) == 0 {
-			return fmt.Errorf("nothing selected — no projects were connected")
-		}
-	}
-
-	// A selected project that is already connected means "disconnect it": the
-	// tick expresses the change you want, not a single fixed verb.
-	var wired []string
-	var unwired int
-	for _, p := range picked {
-		fmt.Printf("\n== %s ==\n", filepath.Base(p))
-		if isWired(p) {
-			if err := reportDisconnect(p); err != nil {
-				fmt.Printf("  ! %v\n", err)
-				continue
-			}
-			unwired++
-			continue
-		}
-		if err := runConnect(connectParams{serverURL: serverURL, projectRoot: p}); err != nil {
-			fmt.Printf("  ! %v\n", err)
-			continue
-		}
-		wired = append(wired, p)
-	}
-	if len(wired) == 0 && unwired == 0 {
-		return fmt.Errorf("nothing was changed")
-	}
-	if len(wired) == 0 {
-		fmt.Printf("\nDone. %d project(s) disconnected.\n", unwired)
-		return nil
-	}
-
-	rememberServer(serverURL)
-	// Sharing is a question, so it only happens on the path that has a terminal
-	// to ask on. The default path wires and reports; it never blocks a paste.
-	if ttyIn != nil {
-		offerShare(wired, ttyIn)
-	}
-
-	fmt.Printf("\nDone. Open the viewer to watch turns arrive.\n")
-	fmt.Printf("Restart any Claude Code / Codex session already open in these projects —\n")
-	fmt.Printf("agents load hooks at startup.\n")
-	return nil
 }
 
 // sharedFiles are the only paths the share step ever commits: the server wiring

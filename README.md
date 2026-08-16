@@ -261,13 +261,14 @@ Hooks auto-configure on `rgt init`. No manual setup required.
 
 | Command | Description |
 |---------|-------------|
+| `rgt connect [server-url]` | Connect this project (or pick several) to a server and wire agent hooks. The URL is remembered after the first run. Replaces the former `rgt setup`. |
 | `rgt init` | Initialize `.regent/` in current directory |
 | `rgt log` | Show step history (supports `--session`, `-n`, `--json`, `--graph`) |
 | `rgt sessions` | List all active sessions |
 | `rgt status` | Show current repository state |
 | `rgt show <step>` | Display full context for a step (tool call + conversation) |
 | `rgt blame <path>[:<line>]` | Show per-line provenance for a file |
-| `rgt cat <hash>` | Inspect any object by hash |
+| `rgt cat <hash>` | Inspect any object by hash (debugging tool; runnable but not listed in `rgt --help`) |
 | `rgt serve` | Serve re_gent repositories over HTTP (`--addr`, `--data`) |
 | `rgt push` | Push session history to a repo on a server (`--url`, `--repo`, `--session`) |
 | `rgt version` | Print version information |
@@ -304,22 +305,25 @@ Run your own re_gent server anywhere with Docker, then point repos at it.
 **With the published image:**
 
 ```bash
-# 1. Start a secured server — capture the token so you can reuse it
-TOKEN=$(openssl rand -hex 32); echo "server token: $TOKEN"
+# 1. Start the server
 docker run -d --name regent-server \
   -p 7654:7654 -v regent-data:/data \
-  -e REGENT_SERVER_TOKEN="$TOKEN" \
   ghcr.io/regent-vcs/regent-server:latest
 
 # 2. Connect a project to it in one command
 cd ~/code/my-project
-rgt connect http://your-host:7654 --token "$TOKEN"
+rgt connect http://your-host:7654
 
 # 3. Push its history up
 rgt push
 ```
 
 **From source** (build and run locally, one command):
+
+> **On authentication:** the server performs none, and `rgt` has no sign-in
+> command — run it on a network you trust, or put your own reverse proxy in
+> front of it. If a server does answer `401`, `rgt connect` reports that and
+> stops; there is currently no client-side way to supply credentials.
 
 ```bash
 git clone https://github.com/regent-vcs/regent && cd regent

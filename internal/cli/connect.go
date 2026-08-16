@@ -17,7 +17,7 @@ import (
 )
 
 // ErrNotSignedIn is returned when no auth token is found in the global config.
-var ErrNotSignedIn = fmt.Errorf("not signed in\n\nRun: rgt login <server-url>")
+var ErrNotSignedIn = fmt.Errorf("the server refused this request as unauthenticated,\nand rgt has no sign-in command to fix that with.\n\nThis server is configured to require credentials; ask whoever runs it.")
 
 // connectParams bundles everything runConnect needs; injectable for testing.
 type connectParams struct {
@@ -30,16 +30,22 @@ type connectParams struct {
 // ConnectCmd returns the cobra command for `rgt connect`.
 func ConnectCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "connect <server-url>",
-		Short: "Register this repo with a re_gent server and wire Claude hooks",
-		Long: `Register this repo with a remote re_gent server.
+		Use:   "connect [server-url]",
+		Short: "Connect projects to a re_gent server and wire agent hooks",
+		Long: `Connect this project — or several — to a re_gent server.
 
-connect checks that you are signed in (see: rgt login), registers the repo to
-obtain a repo_id, writes the remote URL and repo_id to .regent/config.toml, and
-installs Claude Code hooks. Running connect more than once is safe: hooks are
-merged rather than duplicated and existing config is preserved.`,
+Run inside a project and connect wires that project. Run it anywhere else and
+connect offers the projects it finds below, so wiring several does not mean
+cd-ing into each one. Selecting a project that is already connected
+disconnects it.
+
+The server URL is remembered after the first successful run, so later runs can
+omit it. Running connect more than once is safe: hooks are merged rather than
+duplicated and existing config is preserved.
+
+connect replaces setup, which did the same job with different answers.`,
 		SilenceUsage: true,
-		Args:         cobra.ExactArgs(1),
+		Args:         cobra.MaximumNArgs(1),
 		Annotations: map[string]string{
 			"commandOrder": "1",
 		},
@@ -48,19 +54,56 @@ merged rather than duplicated and existing config is preserved.`,
 			if err != nil {
 				return fmt.Errorf("get working directory: %w", err)
 			}
-			serverURL := strings.TrimRight(args[0], "/")
-
-			// Standing inside a project (or one already wired) connects it —
-			// the common case, unchanged.
-			if isProjectDir(cwd) {
-				return runConnect(connectParams{serverURL: serverURL, projectRoot: cwd})
+			// The URL is optional because setup's was: a machine that has
+			// connected once already knows its server, and making connect
+			// demand the argument again would have been a regression dressed
+			// up as a simplification.
+			explicit := ""
+			if len(args) > 0 {
+				explicit = args[0]
 			}
-			// Otherwise offer the projects below here, so wiring several does
-			// not mean cd-ing into each one and retyping the command.
-			return connectPicked(serverURL, cwd, cmd.OutOrStdout(), isTerminal(os.Stdin), chooseWithPicker)
+			serverURL, err := resolveServerURL(explicit)
+			if err != nil {
+				return err
+			}
+
+			// Standing inside a project connects it — the common case, and the
+			// one the installer takes.
+			if isProjectDir(cwd) {
+				return connectHere(serverURL, cwd, cmd.OutOrStdout(), isTerminal(os.Stdin))
+			}
+			// Otherwise offer the projects below here.
+			return connectPicked(serverURL, cwd, cmd.OutOrStdout(), isTerminal(os.Stdin), chooseWithPicker, shareWithTeam)
 		},
 	}
 	return cmd
+}
+
+// connectHere wires the one project the user is standing in.
+//
+// It goes through applyConnections rather than calling runConnect directly so
+// that the single-project and multi-project routes cannot drift: the toggle
+// behaviour, the per-project reporting, and the share offer are the same code
+// on both.
+func connectHere(serverURL, dir string, out io.Writer, canPrompt bool) error {
+	share := shareWithTeam
+	if !canPrompt {
+		share = nil
+	}
+	wired, unwired, failed := applyConnections(serverURL, []string{dir}, out)
+	if failed > 0 {
+		return fmt.Errorf("%s could not be connected", filepath.Base(dir))
+	}
+	if len(wired) > 0 {
+		rememberServer(serverURL)
+		if share != nil {
+			share(wired)
+		}
+	}
+	if unwired > 0 {
+		fmt.Fprintf(out, "\n%s disconnected.\n", filepath.Base(dir))
+	}
+	return nil
 }
 
 func runConnect(p connectParams) error {

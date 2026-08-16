@@ -59,6 +59,11 @@ func TestDiscoverProjectsIncludesRootItself(t *testing.T) {
 // TestConnectPickedWiresChosenProjects drives the picker end to end: two
 // projects offered, one chosen, only that one wired.
 func TestConnectPickedWiresChosenProjects(t *testing.T) {
+	// connect now remembers the server on success, the way setup did. Without
+	// this the test would write a throwaway URL into the developer's real
+	// config.
+	t.Setenv("HOME", t.TempDir())
+
 	srv := newTestServer(t, http.StatusCreated, "picked-repo")
 	root := t.TempDir()
 	mkProject(t, root, "alpha")
@@ -69,7 +74,7 @@ func TestConnectPickedWiresChosenProjects(t *testing.T) {
 	// under test is what happens to the projects it returns, not how a person
 	// drives the UI.
 	chooseBeta := func(string) ([]string, error) { return []string{beta}, nil }
-	if err := connectPicked(srv.URL, root, &out, true, chooseBeta); err != nil {
+	if err := connectPicked(srv.URL, root, &out, true, chooseBeta, nil); err != nil {
 		t.Fatalf("connectPicked: %v", err)
 	}
 
@@ -100,7 +105,7 @@ func TestConnectWithoutTerminalReportsAndFails(t *testing.T) {
 	alpha := mkProject(t, root, "alpha")
 
 	var out bytes.Buffer
-	err := connectPicked("http://example.test", root, &out, false, nil)
+	err := connectPicked("http://example.test", root, &out, false, nil, nil)
 	if err == nil {
 		t.Error("connect exited 0 without connecting anything; a script cannot tell that from success")
 	}
@@ -132,12 +137,41 @@ func TestConnectSelectingNothingIsNotSuccess(t *testing.T) {
 	var out bytes.Buffer
 	// The picker was shown and closed without a selection.
 	chooseNothing := func(string) ([]string, error) { return nil, nil }
-	err := connectPicked("http://example.test", root, &out, true, chooseNothing)
+	err := connectPicked("http://example.test", root, &out, true, chooseNothing, nil)
 	if err == nil {
 		t.Error("connect exited 0 after connecting nothing; setup fails for the same choice")
 	}
 
 	if _, statErr := os.Stat(filepath.Join(alpha, ".regent")); statErr == nil {
 		t.Error("nothing was selected, so nothing may be wired")
+	}
+}
+
+// Standing inside a project, connect wires that project and nothing else.
+//
+// Retargeted from setupTargets, which is gone: setup and connect used to make
+// this decision in two different places, and this is the promise that survived
+// the merge. Scanning and wiring everything found below would let one pasted
+// command reach into unrelated repositories nobody chose.
+func TestConnectInsideAProjectWiresOnlyThatProject(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	srv := newTestServer(t, http.StatusCreated, "here-repo")
+	root := t.TempDir()
+	here := mkProject(t, root, "here")
+	sibling := mkProject(t, root, "sibling")
+
+	var out bytes.Buffer
+	// canPrompt=false: no terminal, so no share question — the path an
+	// installer, a devcontainer or CI actually takes.
+	if err := connectHere(srv.URL, here, &out, false); err != nil {
+		t.Fatalf("connectHere: %v", err)
+	}
+
+	if !isWired(here) {
+		t.Errorf("connect ran inside %s but did not wire it", here)
+	}
+	if isWired(sibling) {
+		t.Errorf("connect wired %s, which the user never named", sibling)
 	}
 }

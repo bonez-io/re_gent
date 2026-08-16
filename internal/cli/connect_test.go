@@ -293,7 +293,14 @@ func TestConnect_ServerUnauthorized(t *testing.T) {
 	if err == nil {
 		t.Fatal("want error for 401, got nil")
 	}
-	if !strings.Contains(err.Error(), "not signed in") {
-		t.Errorf("error should mention 'not signed in', got: %v", err)
+	// A 401 must still be reported as a 401. What changed is the remedy: the
+	// old message said "Run: rgt login <server-url>", and login no longer
+	// exists, so following the advice would have produced "unknown command".
+	// An error that names a removed command is worse than one that names none.
+	if !strings.Contains(err.Error(), "unauthenticated") {
+		t.Errorf("error should say the server rejected us as unauthenticated, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "rgt login") {
+		t.Errorf("error points at `rgt login`, which has been removed: %v", err)
 	}
 }

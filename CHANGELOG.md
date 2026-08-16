@@ -5,6 +5,29 @@ All notable changes to re_gent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Removed
+- `rgt login` and `rgt whoami`. The server performs no authentication, so a
+  sign-in command and an identity command implied a security model that did not
+  exist. Identity comes from `git config user.name` / `user.email`.
+- `rgt setup`, folded into `rgt connect`. The two were one job with two
+  implementations that disagreed: on whether backing out of the picker was an
+  error, on whether selecting an already-connected project disconnected it, and
+  on whether the server URL was remembered.
+
+  All three names still respond — hidden, failing, and naming what to run
+  instead — because "unknown command" tells a script nothing.
+
+### Changed
+- `rgt connect` now takes the server URL optionally, remembers it after a
+  successful run, offers to commit the wiring for teammates, and treats
+  selecting a connected project as "disconnect it" — everything `setup` did.
+- `rgt cat` is hidden from `rgt --help`. It is a debugging tool; it remains
+  runnable by name.
+- A `401` from the server no longer advises running `rgt login`, which would
+  have produced "unknown command".
+
 ## [1.0.0] - 2026-05-14
 
 ### Added

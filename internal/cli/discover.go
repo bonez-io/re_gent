@@ -130,7 +130,44 @@ func isProjectDir(dir string) bool {
 // canPrompt and choose are both passed in rather than read from os.Stdin here,
 // so this path is testable without a pty — which is what let the empty-selection
 // disagreement with setup go unnoticed.
-func connectPicked(serverURL, root string, out io.Writer, canPrompt bool, choose projectChooser) error {
+// shareFunc is asked, after projects have been wired, whether to commit the
+// wiring so teammates get it on clone. A nil shareFunc asks nothing, which is
+// what a run with no terminal — and every test — wants.
+type shareFunc func(projects []string)
+
+// applyConnections wires each chosen project, or unwires one that is already
+// wired, and reports what happened per project.
+//
+// Selecting an already-connected project means "disconnect it": the tick
+// expresses the change you want, not one fixed verb. This came from setup,
+// which had it; connect did not, so the same selection in the same picker did
+// different things depending on which command you had typed to reach it.
+//
+// One project's failure must not strand the rest, so failures are counted and
+// the loop continues.
+func applyConnections(serverURL string, picked []string, out io.Writer) (wired []string, unwired, failed int) {
+	for _, p := range picked {
+		fmt.Fprintf(out, "\n== %s ==\n", filepath.Base(p))
+		if isWired(p) {
+			if err := reportDisconnect(p); err != nil {
+				failed++
+				fmt.Fprintf(out, "  ! %v\n", err)
+				continue
+			}
+			unwired++
+			continue
+		}
+		if err := runConnect(connectParams{serverURL: serverURL, projectRoot: p}); err != nil {
+			failed++
+			fmt.Fprintf(out, "  ! %v\n", err)
+			continue
+		}
+		wired = append(wired, p)
+	}
+	return wired, unwired, failed
+}
+
+func connectPicked(serverURL, root string, out io.Writer, canPrompt bool, choose projectChooser, share shareFunc) error {
 	projects := discoverProjects(root, maxDiscoveryDepth)
 	if len(projects) == 0 {
 		return fmt.Errorf("no projects found in %s\n\nRun this inside a project, or from a directory that contains your projects", root)
@@ -167,18 +204,33 @@ func connectPicked(serverURL, root string, out io.Writer, canPrompt bool, choose
 		return fmt.Errorf("nothing selected — no projects were connected")
 	}
 
-	// One project's failure must not strand the rest: report and continue, then
-	// fail overall so a scripted caller still sees something went wrong.
-	var failed int
-	for _, p := range picked {
-		fmt.Fprintf(out, "\n== %s ==\n", filepath.Base(p))
-		if err := runConnect(connectParams{serverURL: serverURL, projectRoot: p}); err != nil {
-			failed++
-			fmt.Fprintf(out, "  ! %v\n", err)
-		}
-	}
+	wired, unwired, failed := applyConnections(serverURL, picked, out)
 	if failed > 0 {
 		return fmt.Errorf("%d of %d project(s) failed to connect", failed, len(picked))
 	}
+
+	// Only offer to share what was actually wired. Asking about a project that
+	// was just disconnected would propose committing config that is now gone.
+	if len(wired) > 0 {
+		rememberServer(serverURL)
+		if share != nil {
+			share(wired)
+		}
+	}
+	if unwired > 0 {
+		fmt.Fprintf(out, "\n%d project(s) disconnected.\n", unwired)
+	}
 	return nil
+}
+
+// shareWithTeam is the production shareFunc. It opens its own terminal handle
+// because the picker has already closed the one it used, and a failure to find
+// one simply means the question goes unasked.
+func shareWithTeam(projects []string) {
+	in, _, cleanup, err := ttyPair()
+	if err != nil {
+		return
+	}
+	defer cleanup()
+	offerShare(projects, in)
 }
