@@ -11,6 +11,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/term"
 	"github.com/regent-vcs/regent/internal/config"
 	"github.com/spf13/cobra"
 )
@@ -112,7 +113,7 @@ func ttyPair() (in *os.File, out *os.File, cleanup func(), err error) {
 	// Read from stdin whenever it is already a terminal. Read-only is fine for
 	// reading, and it is the handle the TUI library drives most reliably — a
 	// separately-opened /dev/tty renders but never delivers keystrokes.
-	if isTerminal(os.Stdin) {
+	if interactive() {
 		in = os.Stdin
 	} else if f, e := os.OpenFile("/dev/tty", os.O_RDONLY, 0); e == nil {
 		in, toClose = f, append(toClose, f)
@@ -121,7 +122,7 @@ func ttyPair() (in *os.File, out *os.File, cleanup func(), err error) {
 	// Draw to stdout when it is a terminal, else to /dev/tty. Never back at the
 	// input handle: the installer runs this with `< /dev/tty`, whose read-only
 	// fd silently drops every write and leaves the picker looking frozen.
-	if isTerminal(os.Stdout) {
+	if term.IsTerminal(os.Stdout.Fd()) {
 		out = os.Stdout
 	} else if f, e := os.OpenFile("/dev/tty", os.O_WRONLY, 0); e == nil {
 		out, toClose = f, append(toClose, f)

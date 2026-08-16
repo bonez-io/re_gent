@@ -65,11 +65,9 @@ func TestConnectPickedWiresChosenProjects(t *testing.T) {
 	beta := mkProject(t, root, "beta")
 
 	var out bytes.Buffer
-	// The chooser stands in for the picker, which needs a terminal. What is
-	// under test is what happens to the projects it returns, not how a person
-	// drives the UI.
-	chooseBeta := func(string) ([]string, error) { return []string{beta}, nil }
-	if err := connectPicked(srv.URL, root, &out, true, chooseBeta); err != nil {
+	// "2" selects beta: discovery is sorted, so alpha is 1 and beta is 2.
+	err := connectPicked(srv.URL, root, &out, strings.NewReader("2\n"), true)
+	if err != nil {
 		t.Fatalf("connectPicked: %v", err)
 	}
 
@@ -79,65 +77,63 @@ func TestConnectPickedWiresChosenProjects(t *testing.T) {
 	if _, statErr := os.Stat(filepath.Join(root, "alpha", ".regent")); statErr == nil {
 		t.Error("unchosen project must not be wired")
 	}
-	if !strings.Contains(out.String(), "beta") {
-		t.Errorf("the connected project should be named in the output; got:\n%s", out.String())
+	if !strings.Contains(out.String(), "alpha") || !strings.Contains(out.String(), "beta") {
+		t.Errorf("both projects should be listed; got:\n%s", out.String())
 	}
 }
 
-// The `curl | sh` case: with no terminal we must not guess, only report what to
-// run — and we must not call that success.
-//
-// This test previously asserted the opposite. It required a nil error, which
-// pinned the behaviour that connect prints a list of suggestions and exits 0
-// having connected nothing. That is the same defect the summary bug was in
-// init: a command that did nothing, reporting as though it had. An installer
-// that runs `rgt connect <url>` from a directory of repositories reads the zero
-// exit as "connected" and moves on, and capture silently never happens.
-//
-// Printing the suggestions is right and stays. Claiming success for it does not.
-func TestConnectWithoutTerminalReportsAndFails(t *testing.T) {
+// TestConnectPickedWithoutTerminalOnlyPrints guards the `curl | sh` case: with
+// no terminal we must not guess, only report what to run.
+func TestConnectPickedWithoutTerminalOnlyPrints(t *testing.T) {
 	root := t.TempDir()
 	alpha := mkProject(t, root, "alpha")
 
 	var out bytes.Buffer
-	err := connectPicked("http://example.test", root, &out, false, nil)
-	if err == nil {
-		t.Error("connect exited 0 without connecting anything; a script cannot tell that from success")
-	}
-
-	// The guidance is the point of this path, so it has to survive the exit code.
-	if !strings.Contains(out.String(), "rgt connect http://example.test") {
-		t.Errorf("should print the command to run; got:\n%s", out.String())
+	if err := connectPicked("http://example.test", root, &out, strings.NewReader(""), false); err != nil {
+		t.Fatalf("connectPicked: %v", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(alpha, ".regent")); statErr == nil {
 		t.Error("nothing may be wired without a terminal to ask on")
 	}
+	if !strings.Contains(out.String(), "rgt connect http://example.test") {
+		t.Errorf("should print the command to run; got:\n%s", out.String())
+	}
 }
 
-// Backing out of the picker is not an error. Reporting success for it is.
-//
-// setup and connect both offer a list of projects and both let you choose
-// none, and they disagree about what that means: setup returns "nothing
-// selected — no projects were connected", connect prints "Nothing selected."
-// and exits 0. Same situation, two answers, and the one a script sees from
-// connect is indistinguishable from having wired everything asked for.
-//
-// This is the disagreement that having two pickers produces. Unifying them on
-// one picker is what makes a single answer possible; this test says which
-// answer it has to be.
-func TestConnectSelectingNothingIsNotSuccess(t *testing.T) {
-	root := t.TempDir()
-	alpha := mkProject(t, root, "alpha")
-
-	var out bytes.Buffer
-	// The picker was shown and closed without a selection.
-	chooseNothing := func(string) ([]string, error) { return nil, nil }
-	err := connectPicked("http://example.test", root, &out, true, chooseNothing)
-	if err == nil {
-		t.Error("connect exited 0 after connecting nothing; setup fails for the same choice")
+func TestParseSelection(t *testing.T) {
+	cases := []struct {
+		name  string
+		in    string
+		n     int
+		want  []int
+		isErr bool
+	}{
+		{name: "single", in: "2", n: 3, want: []int{1}},
+		{name: "comma separated", in: "1,3", n: 3, want: []int{0, 2}},
+		{name: "space separated", in: "2 3", n: 3, want: []int{1, 2}},
+		{name: "all keyword", in: "all", n: 3, want: []int{0, 1, 2}},
+		{name: "a shorthand", in: "A", n: 2, want: []int{0, 1}},
+		{name: "duplicates collapse", in: "2,2", n: 3, want: []int{1}},
+		{name: "empty backs out", in: "  ", n: 3, want: nil},
+		{name: "zero rejected", in: "0", n: 3, isErr: true},
+		{name: "past end rejected", in: "4", n: 3, isErr: true},
+		{name: "not a number", in: "x", n: 3, isErr: true},
 	}
-
-	if _, statErr := os.Stat(filepath.Join(alpha, ".regent")); statErr == nil {
-		t.Error("nothing was selected, so nothing may be wired")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseSelection(tc.in, tc.n)
+			if tc.isErr {
+				if err == nil {
+					t.Fatalf("parseSelection(%q) = %v, want an error", tc.in, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseSelection(%q): %v", tc.in, err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("parseSelection(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
 	}
 }

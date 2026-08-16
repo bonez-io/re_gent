@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/x/term"
@@ -61,55 +63,53 @@ func discoverProjects(root string, maxDepth int) []string {
 	return found
 }
 
-// projectChooser presents the projects under root and returns the ones the user
-// chose. It exists so that connect and setup share one picker rather than each
-// carrying its own.
-//
-// It is a function type rather than a direct call to runPicker because the
-// picker needs a real terminal and a test does not have one. Injecting the
-// choice keeps "which projects were chosen" separate from "what happens to
-// them", and the second half is the part worth testing.
-type projectChooser func(root string) ([]string, error)
-
-// chooseWithPicker is the production chooser: the full-screen picker, the same
-// one `rgt setup --interactive` presents.
-//
-// The alternative it replaces was a numbered list read a line at a time, with
-// its own selection parser accepting "1,3", "2 4" and "a" for all. Two pickers
-// meant two answers to the same questions — whether backing out is an error,
-// whether you can see which projects are already connected, how far below the
-// current directory to look. This one navigates, shows wired state, and does
-// not let a single keystroke wire every repository it happened to find.
-func chooseWithPicker(root string) ([]string, error) {
-	in, out, cleanup, err := ttyPair()
-	if err != nil {
-		return nil, err
+// parseSelection turns a picker answer into zero-based indices into n options.
+// It accepts "1", "1,3", "2 4" and "a"/"all". An empty answer selects nothing,
+// which is how someone backs out. Anything unparseable or out of range is an
+// error rather than a silent skip, so a typo never wires a project nobody chose.
+func parseSelection(input string, n int) ([]int, error) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return nil, nil
 	}
-	defer cleanup()
-	return runPicker(root, in, out)
+	if s := strings.ToLower(input); s == "a" || s == "all" {
+		all := make([]int, n)
+		for i := range all {
+			all[i] = i
+		}
+		return all, nil
+	}
+
+	fields := strings.FieldsFunc(input, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t'
+	})
+	seen := make(map[int]bool, len(fields))
+	var out []int
+	for _, f := range fields {
+		num, err := strconv.Atoi(f)
+		if err != nil {
+			return nil, fmt.Errorf("%q is not a number", f)
+		}
+		if num < 1 || num > n {
+			return nil, fmt.Errorf("%d is not between 1 and %d", num, n)
+		}
+		if idx := num - 1; !seen[idx] {
+			seen[idx] = true
+			out = append(out, idx)
+		}
+	}
+	return out, nil
 }
 
-// isTerminal reports whether f is a terminal.
+// interactive reports whether stdin is a terminal we can prompt on. It is false
+// under `curl ... | sh`, where stdin is the script itself: prompting there would
+// swallow the rest of the script or block forever.
 //
-// This is the one terminal check in the package. There were two: a named helper
-// that only ever looked at stdin, and a bare term.IsTerminal call on stdout
-// inside ttyPair. Two probes meant the reasoning below was written down in one
-// place and silently assumed in the other, and neither name said which handle it
-// meant — so "is this interactive?" had two answers depending on which you
-// happened to call.
-//
-// The two handles genuinely differ and both matter. Under `curl ... | sh` stdin
-// is the script itself, so prompting swallows the rest of the script or blocks
-// forever. The installer meanwhile runs `rgt setup <url> < /dev/tty`, and a
-// shell `<` redirect opens the terminal read-only, so reusing that stdin for
-// output makes every draw fail and the picker look frozen. Taking the handle as
-// an argument makes each caller say which one it is asking about.
-//
-// It is a real isatty check, not a character-device test: /dev/null is a
+// This is a real isatty check, not a character-device test: /dev/null is a
 // character device too, so `rgt connect < /dev/null` would otherwise be treated
 // as interactive and fail on an EOF it should never have waited for.
-func isTerminal(f *os.File) bool {
-	return term.IsTerminal(f.Fd())
+func interactive() bool {
+	return term.IsTerminal(os.Stdin.Fd())
 }
 
 // isProjectDir reports whether dir is somewhere connect should act directly: a
@@ -126,11 +126,9 @@ func isProjectDir(dir string) bool {
 // connectPicked lists the projects below root and connects the chosen ones. It
 // runs when connect is invoked outside a project, where the alternative is
 // cd-ing into each one and repeating the command.
-//
-// canPrompt and choose are both passed in rather than read from os.Stdin here,
-// so this path is testable without a pty — which is what let the empty-selection
-// disagreement with setup go unnoticed.
-func connectPicked(serverURL, root string, out io.Writer, canPrompt bool, choose projectChooser) error {
+// canPrompt is passed in rather than read from os.Stdin here so the picker is
+// testable without a pty.
+func connectPicked(serverURL, root string, out io.Writer, in io.Reader, canPrompt bool) error {
 	projects := discoverProjects(root, maxDiscoveryDepth)
 	if len(projects) == 0 {
 		return fmt.Errorf("no projects found in %s\n\nRun this inside a project, or from a directory that contains your projects", root)
@@ -138,47 +136,49 @@ func connectPicked(serverURL, root string, out io.Writer, canPrompt bool, choose
 
 	// Without a terminal we cannot ask, so say what we found and what to run
 	// rather than picking something nobody chose.
-	//
-	// The suggestions are guidance, not an outcome. Returning nil here made
-	// `rgt connect <url>` exit 0 from a directory of repositories having
-	// connected none of them — the same shape as the init summary bug, where a
-	// command that did nothing reported as though it had. A person reads the
-	// list and acts on it; an installer reads the exit code and moves on, and
-	// capture silently never happens. So: print the guidance, then fail.
 	if !canPrompt {
 		fmt.Fprintf(out, "Found %d project(s) under %s. Run connect inside the one you want:\n\n", len(projects), root)
 		for _, p := range projects {
 			fmt.Fprintf(out, "  cd %s && rgt connect %s\n", p, serverURL)
 		}
-		return fmt.Errorf("nothing connected: %s is not a project, and there is no terminal to choose one on", root)
+		return nil
 	}
 
-	picked, err := choose(root)
+	fmt.Fprintf(out, "Projects under %s:\n\n", root)
+	for i, p := range projects {
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			rel = p
+		}
+		fmt.Fprintf(out, "  %d) %s\n", i+1, rel)
+	}
+	fmt.Fprintf(out, "\nWire which? (e.g. 1, or 1,3, or 'a' for all; Enter to cancel): ")
+
+	line, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil && line == "" {
+		return fmt.Errorf("read selection: %w", err)
+	}
+	picks, err := parseSelection(line, len(projects))
 	if err != nil {
-		return err
+		return fmt.Errorf("invalid selection: %w", err)
 	}
-
-	// Backing out is a legitimate choice and not an error in itself, but it did
-	// not connect anything, and the caller has to be able to tell. setup has
-	// always failed here; connect printed "Nothing selected." and exited 0, so
-	// the same decision produced opposite answers depending on which command you
-	// reached it through. One picker, one answer.
-	if len(picked) == 0 {
-		return fmt.Errorf("nothing selected — no projects were connected")
+	if len(picks) == 0 {
+		fmt.Fprintln(out, "Nothing selected.")
+		return nil
 	}
 
 	// One project's failure must not strand the rest: report and continue, then
 	// fail overall so a scripted caller still sees something went wrong.
 	var failed int
-	for _, p := range picked {
-		fmt.Fprintf(out, "\n== %s ==\n", filepath.Base(p))
-		if err := runConnect(connectParams{serverURL: serverURL, projectRoot: p}); err != nil {
+	for _, i := range picks {
+		fmt.Fprintf(out, "\n== %s ==\n", filepath.Base(projects[i]))
+		if err := runConnect(connectParams{serverURL: serverURL, projectRoot: projects[i]}); err != nil {
 			failed++
 			fmt.Fprintf(out, "  ! %v\n", err)
 		}
 	}
 	if failed > 0 {
-		return fmt.Errorf("%d of %d project(s) failed to connect", failed, len(picked))
+		return fmt.Errorf("%d of %d project(s) failed to connect", failed, len(picks))
 	}
 	return nil
 }

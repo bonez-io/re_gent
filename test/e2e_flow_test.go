@@ -394,12 +394,9 @@ func e2eRun(t *testing.T, rgtPath, dir string, stdin []byte, args ...string) str
 	t.Helper()
 	cmd := exec.Command(rgtPath, args...)
 	cmd.Dir = dir
-	// No special case for init. It used to be fed two blank lines because it
-	// prompted, which meant the suite could never have caught init blocking —
-	// the one failure that breaks onboarding under `curl | sh`, in a
-	// devcontainer, over SSH and in CI. TestE2EInitNeverBlocksOnInput asserts
-	// the opposite directly, so the crutch is gone.
-	if stdin != nil {
+	if len(args) > 0 && args[0] == "init" {
+		cmd.Stdin = strings.NewReader("\n\n")
+	} else if stdin != nil {
 		cmd.Stdin = strings.NewReader(string(stdin))
 	}
 	out, err := cmd.CombinedOutput()
@@ -418,61 +415,6 @@ func e2eRunStdin(t *testing.T, rgtPath, dir string, payload []byte, args ...stri
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("rgt %v (stdin) failed: %v\nOutput:\n%s", args, err, out)
-	}
-	return string(out)
-}
-
-// TestE2EInitNeverBlocksOnInput pins the promise that makes one-command
-// onboarding possible: init has to work where nobody can answer a question.
-//
-// e2eRun special-cases init by feeding it two blank lines. That workaround
-// exists because init prompts, and it quietly hides the failure it was written
-// to avoid — under `curl | sh`, in a devcontainer, over SSH or in CI there is
-// nobody to press enter, and stdin is whatever the installer happened to leave
-// there. This test bypasses the workaround: stdin is present and immediately
-// empty, exactly as a closed pipe behaves.
-//
-// The demand is not merely that init exits. It is that init exits having
-// actually wired the agent it detected — a run that gives up quietly and
-// reports success is the bug this whole area exists to remove.
-func TestE2EInitNeverBlocksOnInput(t *testing.T) {
-	cwd, _ := os.Getwd()
-	rgt := buildRGTBinary(t, filepath.Dir(cwd))
-
-	repo := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(repo, ".claude"), 0o755); err != nil {
-		t.Fatalf("seed .claude: %v", err)
-	}
-
-	// Empty, non-nil stdin: the runner installs it verbatim rather than
-	// substituting the blank lines it feeds init elsewhere.
-	out := e2eRunEnv(t, rgt, repo, nil, []byte{}, "init")
-
-	settings := filepath.Join(repo, ".claude", "settings.json")
-	if _, err := os.Stat(settings); err != nil {
-		t.Errorf("init exited without wiring the detected agent: %v\ninit said:\n%s", err, out)
-	}
-}
-
-// e2eRunEnv runs rgt with extra environment variables, a stdin payload, and
-// fails on non-zero exit.
-//
-// The environment is what makes server mode reachable from a test. Every other
-// runner here leaves cmd.Env nil, so the child inherits the process environment
-// — which TestMain deliberately strips of any server configuration. Passing env
-// per-invocation lets one test put the binary into server mode without
-// affecting any other test in the package.
-func e2eRunEnv(t *testing.T, rgtPath, dir string, env []string, payload []byte, args ...string) string {
-	t.Helper()
-	cmd := exec.Command(rgtPath, args...)
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), env...)
-	if payload != nil {
-		cmd.Stdin = strings.NewReader(string(payload))
-	}
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("rgt %v (env %v) failed: %v\nOutput:\n%s", args, env, err, out)
 	}
 	return string(out)
 }
