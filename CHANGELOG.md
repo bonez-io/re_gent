@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Connecting a project you had already been using locally now connects it.
+  "Connected" was decided by whether `.regent/config.toml` existed, but
+  `rgt init` writes that file unconditionally — so every locally-used project
+  already looked connected. `rgt connect` took its disconnect branch: it
+  reported "is not connected to a server", changed nothing and exited
+  non-zero; where it got further, it removed the agent hooks and reported
+  success. One predicate now answers the question, and it requires both a
+  server address and a project identity.
+- Re-pointing a project at a different server registers it there, keeps the
+  hooks, and names the previous server so it is clear that history stayed
+  behind. It is a move, not a disconnect.
+- `rgt connect` no longer trusts local config blindly. If the server has no
+  record of the project, it re-registers instead of printing "already
+  connected" and leaving every future upload to be rejected in silence.
+- Connecting twice is safe: the picker's "selecting a connected project
+  disconnects it" applies to a tick in the picker, not to `rgt connect` typed
+  inside a project, which is an instruction and never removes hooks.
+
 ### Removed
 - `rgt login` and `rgt whoami`. The server performs no authentication, so a
   sign-in command and an identity command implied a security model that did not

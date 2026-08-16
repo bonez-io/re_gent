@@ -199,8 +199,20 @@ func TestPickerBrowsesIntoFolders(t *testing.T) {
 func TestPickerMarksAlreadyConnected(t *testing.T) {
 	root := t.TempDir()
 	wired := mkProject(t, root, "alpha")
-	writeFile(t, wired, ".regent/config.toml", "[remote]\nurl = 'http://example.test'\n")
+	// A binding is a server address AND a project identity. A config carrying
+	// only one of the two is a half-written file, not a connection.
+	writeFile(t, wired, ".regent/config.toml",
+		"[remote]\nurl = 'http://example.test'\nrepo_id = 'alpha'\n")
 	mkProject(t, root, "beta")
+
+	// Half a binding must not read as connected. This is the shape `rgt init`
+	// leaves behind, and reading it as a connection is what made connecting a
+	// locally-used project disconnect it instead.
+	half := mkProject(t, root, "gamma")
+	writeFile(t, half, ".regent/config.toml", "[remote]\nurl = 'http://example.test'\n")
+	if isConnected(half) {
+		t.Error("a config with a server URL but no repo_id was read as connected")
+	}
 
 	m := newPickerModel(root)
 	for _, e := range m.entries {
@@ -209,6 +221,9 @@ func TestPickerMarksAlreadyConnected(t *testing.T) {
 		}
 		if e.label == "beta" && e.wired {
 			t.Error("beta is not connected and must not be marked")
+		}
+		if e.label == "gamma" && e.wired {
+			t.Error("gamma has half a binding and must not be marked connected")
 		}
 	}
 	if !strings.Contains(m.View(), "(connected)") {

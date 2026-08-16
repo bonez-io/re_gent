@@ -90,7 +90,7 @@ func connectHere(serverURL, dir string, out io.Writer, canPrompt bool) error {
 	if !canPrompt {
 		share = nil
 	}
-	wired, unwired, failed := applyConnections(serverURL, []string{dir}, out)
+	wired, unwired, failed := applyConnections(serverURL, []string{dir}, out, false)
 	if failed > 0 {
 		return fmt.Errorf("%s could not be connected", filepath.Base(dir))
 	}
@@ -155,9 +155,26 @@ func runConnect(p connectParams) error {
 	if err != nil {
 		return fmt.Errorf("read repo config: %w", err)
 	}
-	if repoCfg.Remote.URL == p.serverURL && repoCfg.Remote.RepoID != "" {
-		fmt.Printf("  - Already connected to %s (repo_id: %s)\n", p.serverURL, repoCfg.Remote.RepoID)
-		return connectWireHooks(p.projectRoot)
+	switch {
+	case repoCfg.Remote.URL == p.serverURL && repoCfg.Remote.RepoID != "":
+		// Local config is a claim about the server, not proof of it. A server
+		// restored from backup, wiped, or replaced by a different deployment at
+		// the same address has no record of this project — and trusting the
+		// file would leave every future upload rejected for an unknown repo,
+		// with nothing on screen to say so.
+		if serverKnowsRepo(p.serverURL, repoCfg.Remote.RepoID, p.httpClient, token) {
+			fmt.Printf("  - Already connected to %s (repo_id: %s)\n", p.serverURL, repoCfg.Remote.RepoID)
+			return connectWireHooks(p.projectRoot)
+		}
+		fmt.Printf("  ⚠ %s has no record of this project (repo_id: %s) — re-registering it.\n",
+			p.serverURL, repoCfg.Remote.RepoID)
+
+	case repoCfg.Remote.URL != "" && repoCfg.Remote.RepoID != "":
+		// Moving to a different server. This is a move, not a disconnect: the
+		// hooks stay, capture never stops. Naming the old server is the only
+		// warning the user gets that their history did not travel with them.
+		fmt.Printf("  → Moving this project from %s to %s.\n", repoCfg.Remote.URL, p.serverURL)
+		fmt.Printf("    History already on %s stays there — it is not copied across.\n", repoCfg.Remote.URL)
 	}
 
 	// 4. Register the repo with the server.
@@ -210,6 +227,45 @@ func connectWireHooks(projectRoot string) error {
 	fmt.Printf("    (the rest of .regent/ is git-ignored). Then a clone + `rgt` installed is all\n")
 	fmt.Printf("    they need — no connect step.\n")
 	return nil
+}
+
+// serverKnowsRepo asks the server whether it still has a record of this repo.
+//
+// A failure to reach the server, or anything unexpected in the reply, returns
+// true — "assume it knows". The alternative is worse in exactly the case that
+// matters: on a flaky network or a server mid-restart, returning false would
+// re-register a project that was fine, on every connect, forever.
+func serverKnowsRepo(serverURL, repoID string, client *http.Client, token string) bool {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(serverURL, "/")+"/repos", nil)
+	if err != nil {
+		return true
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return true
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return true
+	}
+	var body struct {
+		Repos []string `json:"repos"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return true
+	}
+	for _, r := range body.Repos {
+		if r == repoID {
+			return true
+		}
+	}
+	return false
 }
 
 // registerRepo POSTs to <serverURL>/repos and returns the assigned repo_id.

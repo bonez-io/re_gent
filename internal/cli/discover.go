@@ -138,17 +138,20 @@ type shareFunc func(projects []string)
 // applyConnections wires each chosen project, or unwires one that is already
 // wired, and reports what happened per project.
 //
-// Selecting an already-connected project means "disconnect it": the tick
-// expresses the change you want, not one fixed verb. This came from setup,
-// which had it; connect did not, so the same selection in the same picker did
-// different things depending on which command you had typed to reach it.
+// In the picker, selecting an already-connected project means "disconnect it":
+// the tick expresses the state you want, not one fixed verb.
+//
+// That reading only holds for a tick. `rgt connect` typed inside a project is
+// an imperative, and answering it by disconnecting is how connecting a project
+// twice used to remove its hooks. allowDisconnect is which of the two the
+// caller is: a state expressed, or an instruction given.
 //
 // One project's failure must not strand the rest, so failures are counted and
 // the loop continues.
-func applyConnections(serverURL string, picked []string, out io.Writer) (wired []string, unwired, failed int) {
+func applyConnections(serverURL string, picked []string, out io.Writer, allowDisconnect bool) (wired []string, unwired, failed int) {
 	for _, p := range picked {
 		fmt.Fprintf(out, "\n== %s ==\n", filepath.Base(p))
-		if isWired(p) {
+		if allowDisconnect && isConnected(p) {
 			if err := reportDisconnect(p); err != nil {
 				failed++
 				fmt.Fprintf(out, "  ! %v\n", err)
@@ -204,7 +207,7 @@ func connectPicked(serverURL, root string, out io.Writer, canPrompt bool, choose
 		return fmt.Errorf("nothing selected — no projects were connected")
 	}
 
-	wired, unwired, failed := applyConnections(serverURL, picked, out)
+	wired, unwired, failed := applyConnections(serverURL, picked, out, true)
 	if failed > 0 {
 		return fmt.Errorf("%d of %d project(s) failed to connect", failed, len(picked))
 	}

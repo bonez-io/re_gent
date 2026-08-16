@@ -11,7 +11,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/pelletier/go-toml/v2"
 	"github.com/regent-vcs/regent/internal/config"
+	"github.com/regent-vcs/regent/internal/store"
 )
 
 // SetupCmd is the interactive front door: pick projects, wire them, and offer to
@@ -127,9 +129,39 @@ func defaultScanRoot() string {
 }
 
 // isWired reports whether a project already points at a server.
-func isWired(dir string) bool {
-	_, err := os.Stat(filepath.Join(dir, ".regent", "config.toml"))
-	return err == nil
+// isConnected is the single answer to "is this project bound to a server".
+//
+// It requires BOTH a server address and a project identity, because either one
+// alone is not a binding. The previous check was the existence of
+// .regent/config.toml — but `rgt init` writes that file unconditionally, so
+// every project anyone had used locally already looked connected. Connecting
+// one then took the disconnect branch: it reported "not connected to a server",
+// changed nothing, and exited non-zero; and where it got further, it removed
+// the agent hooks and called that success.
+//
+// Two facts disagreeing about one word is what caused that. There is one fact
+// now.
+func isConnected(dir string) bool {
+	cfg, err := readRemoteConfig(dir)
+	if err != nil {
+		return false
+	}
+	return cfg.URL != "" && cfg.RepoID != ""
+}
+
+// readRemoteConfig reads a project's server binding without opening a store.
+// A missing or unparseable file is simply "no binding", which is what every
+// caller means by it.
+func readRemoteConfig(dir string) (store.RemoteConfig, error) {
+	data, err := os.ReadFile(filepath.Join(dir, ".regent", "config.toml"))
+	if err != nil {
+		return store.RemoteConfig{}, err
+	}
+	var cfg store.RepoConfig
+	if err := toml.Unmarshal(data, &cfg); err != nil {
+		return store.RemoteConfig{}, err
+	}
+	return cfg.Remote, nil
 }
 
 func isDir(p string) bool {
@@ -302,7 +334,7 @@ func (m *pickerModel) reload() {
 	if isProjectDir(m.root) {
 		m.entries = append(m.entries, pickerEntry{
 			path: m.root, label: filepath.Base(m.root) + "  (this folder)",
-			isProject: true, wired: isWired(m.root),
+			isProject: true, wired: isConnected(m.root),
 		})
 	}
 
@@ -318,7 +350,7 @@ func (m *pickerModel) reload() {
 		}
 		full := filepath.Join(m.root, name)
 		if isProjectDir(full) {
-			projects = append(projects, pickerEntry{path: full, label: name, isProject: true, wired: isWired(full)})
+			projects = append(projects, pickerEntry{path: full, label: name, isProject: true, wired: isConnected(full)})
 		} else {
 			folders = append(folders, pickerEntry{path: full, label: name + "/"})
 		}

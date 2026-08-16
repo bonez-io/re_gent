@@ -168,10 +168,10 @@ func TestConnectInsideAProjectWiresOnlyThatProject(t *testing.T) {
 		t.Fatalf("connectHere: %v", err)
 	}
 
-	if !isWired(here) {
+	if !isConnected(here) {
 		t.Errorf("connect ran inside %s but did not wire it", here)
 	}
-	if isWired(sibling) {
+	if isConnected(sibling) {
 		t.Errorf("connect wired %s, which the user never named", sibling)
 	}
 }
