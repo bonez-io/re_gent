@@ -57,19 +57,22 @@ func DoctorCmd() *cobra.Command {
 // diagnose collects every check without stopping at the first failure, so one
 // run tells the user everything that is wrong rather than one thing at a time.
 func diagnose(projectRoot string) []doctorFinding {
-	findings := []doctorFinding{repositoryFinding(projectRoot)}
+	findings := []doctorFinding{repositoryFinding(projectRoot), identityFinding()}
 
 	// Only report on agents that are actually present here. Reporting a
 	// missing Codex hook on a machine with no Codex is noise, and noise is
 	// what makes people stop reading the output.
+	agentsChecked := false
 	if agentPresent(projectRoot, ".claude", "claude") {
 		findings = append(findings, claudeHookFinding(projectRoot))
+		agentsChecked = true
 	}
 	if agentPresent(projectRoot, ".codex", "codex") {
 		findings = append(findings, codexHookFinding(projectRoot))
+		agentsChecked = true
 	}
 
-	if len(findings) == 1 {
+	if !agentsChecked {
 		findings = append(findings, doctorFinding{
 			Name:   "agents",
 			OK:     false,
@@ -78,6 +81,26 @@ func diagnose(projectRoot string) []doctorFinding {
 	}
 
 	return findings
+}
+
+// identityFinding reports whether this machine can name who is doing the work.
+//
+// Author comes from git identity and nowhere else — deliberately, since a
+// second identity system would be a login to build, run, and keep in sync. The
+// weakness of that choice is silence: with git identity unset, every step is
+// still recorded, just anonymously, and nothing says so until someone looks at
+// a session listing months later and finds no one to ask. Failing here is the
+// signal at the only moment it is still cheap to act on.
+func identityFinding() doctorFinding {
+	author := capture.ResolveAuthor()
+	if author.Name == "" && author.Email == "" {
+		return doctorFinding{
+			Name:   "git identity",
+			OK:     false,
+			Detail: "no git identity configured; sessions will be recorded with no author. Run git config --global user.name \"Your Name\" and git config --global user.email you@example.com",
+		}
+	}
+	return doctorFinding{Name: "git identity", OK: true, Detail: formatAuthor(author)}
 }
 
 func repositoryFinding(projectRoot string) doctorFinding {

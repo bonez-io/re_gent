@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -75,6 +76,58 @@ func TestDoctorFailsWhenAnyFindingFails(t *testing.T) {
 	if allOK(broken) {
 		t.Error("allOK true despite a failing finding; doctor would exit 0 on a broken install")
 	}
+}
+
+// Git identity is the only thing naming who ran a session. When it is unset,
+// every step is recorded anonymously and nothing says so at the time — the loss
+// is only discovered later, when the history that would have proved authorship
+// is already written. Doctor is the one place that can say it while it still
+// costs one command to fix.
+func TestDiagnoseFailsWhenGitIdentityIsUnset(t *testing.T) {
+	root := t.TempDir()
+	mustMkdir(t, filepath.Join(root, ".regent"))
+	withoutGitIdentity(t, root)
+
+	findings := diagnose(root)
+
+	f := findFinding(t, findings, "git identity")
+	if f.OK {
+		t.Errorf("git identity reported healthy with no identity configured: %s", f.Detail)
+	}
+	if allOK(findings) {
+		t.Error("diagnose exited healthy while every captured step would be anonymous")
+	}
+}
+
+func TestDiagnoseReportsGitIdentityHealthyWhenConfigured(t *testing.T) {
+	root := t.TempDir()
+	mustMkdir(t, filepath.Join(root, ".regent"))
+	withoutGitIdentity(t, root)
+	t.Setenv("REGENT_AUTHOR_NAME", "Ada Lovelace")
+	t.Setenv("REGENT_AUTHOR_EMAIL", "ada@example.com")
+
+	f := findFinding(t, diagnose(root), "git identity")
+	if !f.OK {
+		t.Errorf("git identity reported unhealthy with an identity configured: %s", f.Detail)
+	}
+	if !strings.Contains(f.Detail, "Ada Lovelace") {
+		t.Errorf("git identity detail = %q, want it to name the identity in use", f.Detail)
+	}
+}
+
+// withoutGitIdentity makes identity resolution deterministic: no environment
+// override, and no global or system git config for the subprocess to read. The
+// working directory moves to a temp dir so there is no repository-local config
+// above it either.
+func withoutGitIdentity(t *testing.T, dir string) {
+	t.Helper()
+	t.Setenv("REGENT_AUTHOR_NAME", "")
+	t.Setenv("REGENT_AUTHOR_EMAIL", "")
+	t.Setenv("GIT_AUTHOR_NAME", "")
+	t.Setenv("GIT_AUTHOR_EMAIL", "")
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+	withWorkingDir(t, dir)
 }
 
 func findFinding(t *testing.T, findings []doctorFinding, name string) doctorFinding {
