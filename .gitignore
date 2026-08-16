@@ -49,3 +49,6 @@ demo/.opencode/
 demo/.codex/
 plugins/
 simple.py
+
+# Scratch worktrees for parallel agent runs; never part of the repo.
+.claude/worktrees/
