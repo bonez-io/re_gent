@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
-	"github.com/charmbracelet/huh"
 	"github.com/pelletier/go-toml/v2"
 	"github.com/regent-vcs/regent/internal/capture"
 	"github.com/regent-vcs/regent/internal/index"
@@ -46,7 +46,6 @@ func InitCmd() *cobra.Command {
 	var skipHook bool
 	var skipSkills bool
 	var agent string
-	var interactiveHooks bool
 
 	cmd := &cobra.Command{
 		Use:          "init",
@@ -112,10 +111,7 @@ func InitCmd() *cobra.Command {
 			if reinit {
 				printExistingHooks(cwd)
 			}
-			outcome, hookErr := configureHooks(cwd, targets, hookOptions{
-				skip:        skipHook,
-				interactive: interactiveHooks,
-			})
+			outcome, hookErr := configureHooks(cwd, targets, hookOptions{skip: skipHook})
 			if hookErr != nil {
 				fmt.Printf("  %s Could not configure hooks: %v\n", style.Warning(""), hookErr)
 				printManualInstructions(targets)
@@ -145,7 +141,6 @@ func InitCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&skipHook, "skip-hook", false, "Skip automatic hook configuration")
 	cmd.Flags().BoolVar(&skipSkills, "skip-skills", false, "Skip agent skill installation")
 	cmd.Flags().StringVar(&agent, "agent", string(agentAuto), "Agent hooks to configure: auto, claude, codex, opencode, pi, both, all")
-	cmd.Flags().BoolVar(&interactiveHooks, "interactive", false, "Choose agents from a menu instead of wiring every detected agent")
 
 	return cmd
 }
@@ -198,77 +193,6 @@ func printSummary(projectRoot string, outcome hookOutcome) {
 	fmt.Println()
 	fmt.Printf("%s %s\n", style.Label("Repository:"), filepath.Join(projectRoot, ".regent"))
 	fmt.Println()
-}
-
-func offerHookInstall(projectRoot string, targets []agentTarget, _ *bufio.Reader) ([]agentTarget, error) {
-	fmt.Printf("%s captures step history automatically via agent hooks.\n", style.Brand("re_gent"))
-	fmt.Println()
-
-	options := make([]huh.Option[agentTarget], 0, len(targets))
-	for _, target := range targets {
-		switch target {
-		case agentClaude:
-			options = append(options, huh.NewOption("Claude Code   (.claude/settings.json)", agentClaude))
-		case agentCodex:
-			options = append(options, huh.NewOption("Codex         (.codex/config.toml)", agentCodex))
-		case agentOpenCode:
-			options = append(options, huh.NewOption("OpenCode      (opencode.jsonc + npm plugin)", agentOpenCode))
-		case agentPi:
-			options = append(options, huh.NewOption("Pi            (.pi/settings.json package)", agentPi))
-		}
-	}
-
-	var selected []agentTarget
-	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewMultiSelect[agentTarget]().
-				Title("Select agents to configure").
-				Description("Use arrow keys to navigate, space to toggle, enter to confirm").
-				Options(options...).
-				Value(&selected),
-		),
-	)
-
-	if err := form.Run(); err != nil {
-		return nil, fmt.Errorf("agent selection: %w", err)
-	}
-
-	if len(selected) == 0 {
-		fmt.Printf("  %s Skipped - you can configure hooks manually later\n", style.DimText("-"))
-		fmt.Println()
-		return nil, nil
-	}
-
-	for _, target := range selected {
-		switch target {
-		case agentClaude:
-			result, err := installClaudeHook(projectRoot)
-			if err != nil {
-				return nil, err
-			}
-			printHookInstallWarning(result)
-			fmt.Printf("  %s Claude Code hooks configured\n", style.Success(""))
-		case agentCodex:
-			result, err := installCodexHook(projectRoot)
-			if err != nil {
-				return nil, err
-			}
-			printHookInstallWarning(result)
-			fmt.Printf("  %s Codex hooks configured\n", style.Success(""))
-		case agentOpenCode:
-			if err := installOpenCodeHook(projectRoot); err != nil {
-				return nil, err
-			}
-			fmt.Printf("  %s OpenCode plugin installed\n", style.Success(""))
-		case agentPi:
-			installed := installPiHook(projectRoot)
-			if installed {
-				fmt.Printf("  %s Pi extension package installed\n", style.Success(""))
-			}
-		}
-	}
-	fmt.Println()
-	return selected, nil
 }
 
 func printHookInstallWarning(result hookInstallResult) {
@@ -913,14 +837,28 @@ func hasAgent(targets []agentTarget, target agentTarget) bool {
 	return false
 }
 
-func confirmedDefaultYes(input *bufio.Reader) (bool, error) {
-	response, err := input.ReadString('\n')
-	if err != nil {
+// confirmedDefaultYes reads a yes/no answer, treating a bare enter as yes.
+//
+// It delegates to readAnswer rather than reading to a newline itself. This
+// package had two confirmation readers that disagreed about what enter looks
+// like: readAnswer accepts a carriage return as well, because after a
+// full-screen picker hands the terminal back that is what a keypress arrives
+// as, and a newline-only read waits forever for a key the user already pressed.
+// This function never got that fix, so the skills prompt behind it inherited
+// the hang.
+//
+// An answer that arrives without any terminator is still an answer — the reader
+// simply ended — so a partial read is honoured. Only a genuinely empty read is
+// an error, which keeps the prompt from silently defaulting to yes when stdin
+// is the installing script rather than a person.
+func confirmedDefaultYes(input io.Reader) (bool, error) {
+	answer, err := readAnswer(input)
+	if err != nil && answer == "" {
 		return false, err
 	}
 
-	response = strings.TrimSpace(strings.ToLower(response))
-	return response == "" || response == "y" || response == "yes", nil
+	answer = strings.TrimSpace(strings.ToLower(answer))
+	return answer == "" || answer == "y" || answer == "yes", nil
 }
 
 func backupFile(path string) (string, error) {

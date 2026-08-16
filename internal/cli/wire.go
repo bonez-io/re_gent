@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,15 +22,24 @@ import (
 // The returned slice is what callers must report to the user. Reporting the
 // *requested* targets instead is what made `rgt init` claim success after
 // installing nothing.
+//
+// Every requested agent is attempted, including the ones after a failure. A
+// stale `.codex` file is a reason to not have Codex hooks; it is not a reason
+// to not have Claude hooks. Returning early made the two indistinguishable and
+// made which agent survived depend on the order resolveAgentTargets happened to
+// produce. Failures are collected and returned together, so the caller can both
+// report the agents that were written and fail the run.
 func wireAgents(projectRoot string, targets []agentTarget) ([]agentTarget, error) {
 	installed := make([]agentTarget, 0, len(targets))
+	var failures []error
 
 	for _, target := range targets {
 		switch target {
 		case agentClaude:
 			result, err := installClaudeHook(projectRoot)
 			if err != nil {
-				return installed, fmt.Errorf("configure Claude Code hooks: %w", err)
+				failures = append(failures, fmt.Errorf("configure Claude Code hooks: %w", err))
+				continue
 			}
 			printHookInstallWarning(result)
 			reportWired("Claude Code", filepath.Join(projectRoot, ".claude", "settings.json"))
@@ -38,7 +48,8 @@ func wireAgents(projectRoot string, targets []agentTarget) ([]agentTarget, error
 		case agentCodex:
 			result, err := installCodexHook(projectRoot)
 			if err != nil {
-				return installed, fmt.Errorf("configure Codex hooks: %w", err)
+				failures = append(failures, fmt.Errorf("configure Codex hooks: %w", err))
+				continue
 			}
 			printHookInstallWarning(result)
 			reportWired("Codex", filepath.Join(projectRoot, ".codex", "config.toml"))
@@ -46,7 +57,8 @@ func wireAgents(projectRoot string, targets []agentTarget) ([]agentTarget, error
 
 		case agentOpenCode:
 			if err := installOpenCodeHook(projectRoot); err != nil {
-				return installed, fmt.Errorf("configure OpenCode plugin: %w", err)
+				failures = append(failures, fmt.Errorf("configure OpenCode plugin: %w", err))
+				continue
 			}
 			reportWired("OpenCode", filepath.Join(projectRoot, "opencode.jsonc"))
 			installed = append(installed, agentOpenCode)
@@ -61,11 +73,11 @@ func wireAgents(projectRoot string, targets []agentTarget) ([]agentTarget, error
 			}
 
 		default:
-			return installed, fmt.Errorf("cannot wire unknown agent %q", target)
+			failures = append(failures, fmt.Errorf("cannot wire unknown agent %q", target))
 		}
 	}
 
-	return installed, nil
+	return installed, errors.Join(failures...)
 }
 
 // resolveHookBinary decides what an agent hook should invoke.
@@ -123,8 +135,7 @@ func reportWired(agent, path string) {
 // hookOptions selects how configureHooks behaves. The zero value is the
 // default: wire everything detected, ask nothing.
 type hookOptions struct {
-	skip        bool // --skip-hook: install nothing
-	interactive bool // --interactive: present the multi-select
+	skip bool // --skip-hook: install nothing
 }
 
 // hookOutcome carries what was actually installed.
@@ -140,19 +151,25 @@ type hookOutcome struct {
 	installed []agentTarget
 }
 
-// configureHooks is the decision layer above wireAgents. Prompting is opt-in
-// rather than the default because the default path has to survive `curl | sh`,
-// devcontainers, CI, and SSH — none of which can answer a question.
+// configureHooks is the decision layer above wireAgents, and the only decision
+// left to make is whether to wire at all.
+//
+// There used to be a second path here: --interactive presented a full-screen
+// multi-select, then ran its own copy of the install switch and returned the
+// agents the user *selected* rather than the ones it managed to write. That is
+// how `rgt init` came to report success for a Pi extension it had not
+// installed. Two dispatchers meant two answers to "what got wired", and only
+// one of them was true.
+//
+// It is gone rather than fixed. A prompt cannot run under `curl | sh`, in a
+// devcontainer, in CI, or over SSH, so it could never be the default; a
+// non-default path that duplicates the default one earns its bugs. Choosing
+// agents is what --agent is for, and that works everywhere.
 func configureHooks(projectRoot string, targets []agentTarget, opts hookOptions) (hookOutcome, error) {
 	if opts.skip {
 		fmt.Printf("  %s Hook configuration skipped\n", style.DimText("-"))
 		printManualInstructions(targets)
 		return hookOutcome{}, nil
-	}
-
-	if opts.interactive {
-		selected, err := offerHookInstall(projectRoot, targets, nil)
-		return hookOutcome{installed: selected}, err
 	}
 
 	installed, err := wireAgents(projectRoot, targets)

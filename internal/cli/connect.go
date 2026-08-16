@@ -57,7 +57,7 @@ merged rather than duplicated and existing config is preserved.`,
 			}
 			// Otherwise offer the projects below here, so wiring several does
 			// not mean cd-ing into each one and retyping the command.
-			return connectPicked(serverURL, cwd, cmd.OutOrStdout(), cmd.InOrStdin(), interactive())
+			return connectPicked(serverURL, cwd, cmd.OutOrStdout(), isTerminal(os.Stdin), chooseWithPicker)
 		},
 	}
 	return cmd
