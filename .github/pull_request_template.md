@@ -8,6 +8,14 @@ Closes #
 
 <!-- Link to related issues. Use "Closes #123" to auto-close when merged -->
 
+## Delivery Gate
+
+- [ ] This PR targets `dev`, not `main`
+- [ ] It closes one assigned child issue rather than an entire epic
+- [ ] The issue is labeled `status: review`
+- [ ] `@shayliv` is requested as reviewer
+- [ ] Unrelated changes are excluded
+
 ---
 
 ## Type of Change
@@ -163,6 +171,6 @@ Closes #
 ## Reviewer Notes
 
 <!-- Optional: Call out specific areas for reviewers to focus on -->
-- [ ] Please focus on: 
-- [ ] Known issues/TODOs: 
-- [ ] Follow-up work needed: 
+- [ ] Please focus on:
+- [ ] Known issues/TODOs:
+- [ ] Follow-up work needed:

@@ -1,0 +1,9 @@
+# Shay is the review and merge owner for every change entering dev.
+* @shayliv
+
+# Epic owners join review in their areas; Shay remains required everywhere.
+/internal/remote/ @arad1410 @shayliv
+/internal/capture/ @arad1410 @shayliv
+/internal/server/ @arad1410 @shayliv
+/web/ @shayliv
+/docs/ @Amirshrim @shayliv
