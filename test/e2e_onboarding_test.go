@@ -75,6 +75,50 @@ func TestE2EInitSucceedsWhenAnAgentIsWired(t *testing.T) {
 	}
 }
 
+// `rgt init` run inside a project whose agent is opened one directory up.
+//
+// The remedy itself is pinned in internal/cli, but that leaves the question of
+// whether init actually prints it — and the printing is the half that was
+// wrong. The old text ended on "wire that directory too: cd <ancestor> && rgt
+// init --agent claude", a user ran exactly that, and every project under that
+// directory now records into one blended history there (#27).
+//
+// Asserted against the built binary because a user reads this from a terminal,
+// and because reportClaudeSettingsScope is reached only through the real wiring
+// path — nothing in-process covers the call site.
+func TestE2EInitUnderAShadowingWorkspaceLeadsWithOpeningTheAgentHere(t *testing.T) {
+	rgt := buildTestBinary(t)
+
+	// The workspace above: a .claude/ with no re_gent hook, which is what an
+	// agent opened there would load instead of the project's.
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, ".claude"), 0o755); err != nil {
+		t.Fatalf("seed workspace .claude: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, ".claude", "settings.json"), []byte(`{"hooks":{}}`), 0o644); err != nil {
+		t.Fatalf("seed workspace settings: %v", err)
+	}
+	project := filepath.Join(workspace, "tsenta-agent")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+
+	out := e2eRun(t, rgt, project, nil, "init", "--agent", "claude", "--skip-skills")
+
+	openHere := strings.Index(out, "open the agent inside this project")
+	if openHere < 0 {
+		t.Fatalf("init wrote hooks an agent opened at %s will never load, and never said to open it here instead:\n%s", workspace, out)
+	}
+	if wireAncestor := strings.Index(out, "rgt init --agent claude"); wireAncestor >= 0 && wireAncestor < openHere {
+		t.Errorf("init still leads with wiring the directory above, the advice that produced the blended history in #27:\n%s", out)
+	}
+	// Offering the ancestor-wide option is fine; offering it without saying the
+	// project's own history goes elsewhere is what made it look like the fix.
+	if strings.Contains(out, "rgt init --agent claude") && !strings.Contains(out, filepath.Join(workspace, ".regent")) {
+		t.Errorf("init offers to wire %s without naming where the history would then land:\n%s", workspace, out)
+	}
+}
+
 // e2eRunExpectingFailure is e2eRun inverted: the non-zero exit is the assertion
 // rather than an abort. Kept separate from e2eRun so that a test which merely
 // forgets to check an error can never quietly pass through it.
