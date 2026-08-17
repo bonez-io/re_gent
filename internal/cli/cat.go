@@ -13,6 +13,8 @@ func CatCmd() *cobra.Command {
 	var pretty bool
 
 	cmd := &cobra.Command{
+		// A debugging tool: runnable by name, not advertised in help.
+		Hidden:       true,
 		Use:          "cat <hash>",
 		Short:        "Dump an object by hash",
 		Long:         "Debug command: reads and displays the content of any object in the store.",

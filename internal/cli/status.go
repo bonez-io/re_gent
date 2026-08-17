@@ -18,6 +18,11 @@ func StatusCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := openStoreFromCWD()
 			if err != nil {
+				// See log: connected-but-not-yet-pulled is a state to report,
+				// not an error to fail on.
+				if reportNotPulled(cmd.OutOrStdout(), err) {
+					return nil
+				}
 				return err
 			}
 
@@ -34,6 +39,11 @@ func StatusCmd() *cobra.Command {
 			}
 
 			if len(sessions) == 0 {
+				// See writeSessionsText: for a connected project the sessions
+				// exist, they are simply not on this machine.
+				if reportEmptyServerModeCache(cmd.OutOrStdout()) {
+					return nil
+				}
 				fmt.Println("No sessions recorded yet.")
 				return nil
 			}

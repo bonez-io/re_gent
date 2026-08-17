@@ -23,10 +23,42 @@ type sessionsJSONOutput struct {
 }
 
 type sessionJSON struct {
-	SessionID    string `json:"session_id"`
-	StepCount    int    `json:"step_count"`
-	LastActivity string `json:"last_activity"`
-	AgentID      string `json:"agent_id"`
+	SessionID    string             `json:"session_id"`
+	StepCount    int                `json:"step_count"`
+	LastActivity string             `json:"last_activity"`
+	AgentID      string             `json:"agent_id"`
+	Author       *sessionAuthorJSON `json:"author,omitempty"`
+}
+
+// sessionAuthorJSON is the human who started a session. It matches the shape
+// the server's /api/sessions already emits so the viewer reads one format from
+// either source. Omitted entirely — rather than emitted empty — when no step in
+// the session names anyone, which keeps the session listed but unattributed.
+type sessionAuthorJSON struct {
+	Name  string `json:"name,omitempty"`
+	Email string `json:"email,omitempty"`
+}
+
+// authorJSONFor converts an index author into the wire shape, returning nil for
+// the anonymous case.
+func authorJSONFor(a store.Author) *sessionAuthorJSON {
+	if a.Name == "" && a.Email == "" {
+		return nil
+	}
+	return &sessionAuthorJSON{Name: a.Name, Email: a.Email}
+}
+
+// formatAuthor renders an author for a terminal reader. Either half may be
+// missing, so the two are combined rather than assumed present.
+func formatAuthor(a store.Author) string {
+	switch {
+	case a.Name != "" && a.Email != "":
+		return fmt.Sprintf("%s <%s>", a.Name, a.Email)
+	case a.Name != "":
+		return a.Name
+	default:
+		return a.Email
+	}
 }
 
 type sessionJSONStats struct {
@@ -45,6 +77,12 @@ func SessionsCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := openStoreFromCWD()
 			if err != nil {
+				// See log: a connected project that has fetched nothing yet is
+				// reported, not failed. JSON callers keep the error, because a
+				// prose report in place of a document is worse than an error.
+				if outputFormat != sessionsFormatJSON && reportNotPulled(cmd.OutOrStdout(), err) {
+					return nil
+				}
 				return err
 			}
 
@@ -76,6 +114,11 @@ func SessionsCmd() *cobra.Command {
 
 func writeSessionsText(w io.Writer, sessions []index.SessionInfo) error {
 	if len(sessions) == 0 {
+		// "No sessions recorded yet" is false for a connected project: they are
+		// recorded, just not here.
+		if reportEmptyServerModeCache(w) {
+			return nil
+		}
 		fmt.Fprintln(w, "No sessions recorded yet.")
 		return nil
 	}
@@ -85,6 +128,9 @@ func writeSessionsText(w io.Writer, sessions []index.SessionInfo) error {
 	for _, sess := range sessions {
 		fmt.Fprintf(w, "%s %s\n", style.Label("Session:"), sess.ID)
 		fmt.Fprintf(w, "  %s     %s\n", style.Label("Origin:"), sess.Origin)
+		if author := formatAuthor(sess.Author); author != "" {
+			fmt.Fprintf(w, "  %s     %s\n", style.Label("Author:"), author)
+		}
 		if sess.Model != "" {
 			fmt.Fprintf(w, "  %s      %s\n", style.Label("Model:"), sess.Model)
 		}
@@ -130,6 +176,7 @@ func writeSessionsJSON(w io.Writer, s *store.Store, idx *index.DB, sessions []in
 			StepCount:    stats.StepCount,
 			LastActivity: sess.LastSeenAt.UTC().Format(time.RFC3339),
 			AgentID:      stats.AgentID,
+			Author:       authorJSONFor(sess.Author),
 		})
 	}
 

@@ -191,12 +191,22 @@ func (s *Server) summarizeSession(st *store.Store, repoID, sessionID string, tip
 	return summary, true
 }
 
-// sessionAuthor returns the human who ran a session: the first non-empty author
-// across the walked steps (newest first), so a tip step captured before a git
-// identity was set still resolves to whoever ran the earlier work. Returns nil
-// when no step carries an author, which the summary then omits.
+// sessionAuthor returns the human who ran a session: the earliest step that
+// names anyone. steps arrives newest-first from walkSession, so this walks it
+// in reverse.
+//
+// The direction is the whole point. Reading newest-first would hand a session
+// to whoever touched it last, so the name a teammate sees would change as the
+// session grew. A session belongs to whoever started it.
+//
+// Walking forward past author-less steps rather than stopping at the very first
+// one covers a session that began before a git identity was set: it reports the
+// earliest person who can be named instead of reporting nobody.
+//
+// Returns nil when no step carries an author, which the summary then omits.
 func sessionAuthor(steps []*store.Step) *authorJSON {
-	for _, step := range steps {
+	for i := len(steps) - 1; i >= 0; i-- {
+		step := steps[i]
 		if step == nil {
 			continue
 		}

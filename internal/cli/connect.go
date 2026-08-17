@@ -12,12 +12,13 @@ import (
 
 	"github.com/regent-vcs/regent/internal/config"
 	"github.com/regent-vcs/regent/internal/index"
+	"github.com/regent-vcs/regent/internal/remote"
 	"github.com/regent-vcs/regent/internal/store"
 	"github.com/spf13/cobra"
 )
 
 // ErrNotSignedIn is returned when no auth token is found in the global config.
-var ErrNotSignedIn = fmt.Errorf("not signed in\n\nRun: rgt login <server-url>")
+var ErrNotSignedIn = fmt.Errorf("the server refused this request as unauthenticated,\nand rgt has no sign-in command to fix that with.\n\nThis server is configured to require credentials; ask whoever runs it.")
 
 // connectParams bundles everything runConnect needs; injectable for testing.
 type connectParams struct {
@@ -25,21 +26,29 @@ type connectParams struct {
 	projectRoot string
 	configPath  string // global config path; "" means default
 	httpClient  *http.Client
+	// repoID overrides the identity that would otherwise be derived from the
+	// project's git remote. Empty means derive.
+	repoID string
 }
 
 // ConnectCmd returns the cobra command for `rgt connect`.
 func ConnectCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "connect <server-url>",
-		Short: "Register this repo with a re_gent server and wire Claude hooks",
-		Long: `Register this repo with a remote re_gent server.
+		Use:   "connect [server-url]",
+		Short: "Connect this project to a re_gent server and wire agent hooks",
+		Long: `Connect this project to a re_gent server.
 
-connect checks that you are signed in (see: rgt login), registers the repo to
-obtain a repo_id, writes the remote URL and repo_id to .regent/config.toml, and
-installs Claude Code hooks. Running connect more than once is safe: hooks are
-merged rather than duplicated and existing config is preserved.`,
+Run it inside the project you want wired. Run anywhere else it names the fix
+and changes nothing, rather than searching the directories below for projects
+nobody asked it to touch. Disconnecting is its own command, rgt disconnect.
+
+The server URL is remembered after the first successful run, so later runs can
+omit it. Running connect more than once is safe: hooks are merged rather than
+duplicated and existing config is preserved.
+
+connect replaces setup, which did the same job with different answers.`,
 		SilenceUsage: true,
-		Args:         cobra.ExactArgs(1),
+		Args:         cobra.MaximumNArgs(1),
 		Annotations: map[string]string{
 			"commandOrder": "1",
 		},
@@ -48,19 +57,69 @@ merged rather than duplicated and existing config is preserved.`,
 			if err != nil {
 				return fmt.Errorf("get working directory: %w", err)
 			}
-			serverURL := strings.TrimRight(args[0], "/")
-
-			// Standing inside a project (or one already wired) connects it —
-			// the common case, unchanged.
-			if isProjectDir(cwd) {
-				return runConnect(connectParams{serverURL: serverURL, projectRoot: cwd})
+			// The URL is optional because setup's was: a machine that has
+			// connected once already knows its server, and making connect
+			// demand the argument again would have been a regression dressed
+			// up as a simplification.
+			explicit := ""
+			if len(args) > 0 {
+				explicit = args[0]
 			}
-			// Otherwise offer the projects below here, so wiring several does
-			// not mean cd-ing into each one and retyping the command.
-			return connectPicked(serverURL, cwd, cmd.OutOrStdout(), cmd.InOrStdin(), interactive())
+			serverURL, err := resolveServerURL(explicit)
+			if err != nil {
+				return err
+			}
+
+			// An identity supplied here is checked before anything is written
+			// or registered. A name the server will reject must fail with the
+			// name in the message, not as a 400 halfway through connecting.
+			explicitID, _ := cmd.Flags().GetString("as")
+			if explicitID != "" {
+				if err := remote.ValidateRepoID(explicitID); err != nil {
+					return fmt.Errorf("cannot use %q as this project's identity: %w", explicitID, err)
+				}
+			}
+
+			// Standing inside a project connects it — the common case, and the
+			// one the installer takes.
+			if isProjectDir(cwd) {
+				return connectHere(serverURL, cwd, explicitID, cmd.OutOrStdout(), isTerminal(os.Stdin))
+			}
+			// Anywhere else, say so and stop. See notAProject.
+			return notAProject(cwd, serverURL)
 		},
 	}
+	// Derivation is a guess and it will be wrong for someone: a fork's remote,
+	// a monorepo whose subdirectories are separate projects, a checkout with no
+	// remote whose derived id is a hash nobody can read. This is how they say
+	// otherwise. It is recorded in the binding, so it is said once.
+	cmd.Flags().String("as", "", "identity to register this project under, instead of deriving one from its git remote")
 	return cmd
+}
+
+// connectHere wires the one project the user is standing in — the only project
+// connect ever touches now that the picker is gone (#28).
+//
+// It connects and never disconnects. Marking an already-connected project used
+// to mean "unwire it", because a tick in a list expresses a state rather than a
+// verb; that reading is what made the picker destructive, and it is why
+// connecting a project twice used to remove its hooks. `rgt disconnect` is the
+// only way to unwire one.
+//
+// canPrompt is false wherever there is no person to answer — under
+// `curl | sh`, in CI, in a devcontainer — and the share question is simply not
+// asked there.
+func connectHere(serverURL, dir, repoID string, out io.Writer, canPrompt bool) error {
+	fmt.Fprintf(out, "\n== %s ==\n", filepath.Base(dir))
+	if err := runConnect(connectParams{serverURL: serverURL, projectRoot: dir, repoID: repoID}); err != nil {
+		fmt.Fprintf(out, "  ! %v\n", err)
+		return fmt.Errorf("%s could not be connected", filepath.Base(dir))
+	}
+	rememberServer(serverURL)
+	if canPrompt {
+		shareWithTeam([]string{dir})
+	}
+	return nil
 }
 
 func runConnect(p connectParams) error {
@@ -112,13 +171,30 @@ func runConnect(p connectParams) error {
 	if err != nil {
 		return fmt.Errorf("read repo config: %w", err)
 	}
-	if repoCfg.Remote.URL == p.serverURL && repoCfg.Remote.RepoID != "" {
-		fmt.Printf("  - Already connected to %s (repo_id: %s)\n", p.serverURL, repoCfg.Remote.RepoID)
-		return connectWireHooks(p.projectRoot)
+	switch {
+	case repoCfg.Remote.URL == p.serverURL && repoCfg.Remote.RepoID != "":
+		// Local config is a claim about the server, not proof of it. A server
+		// restored from backup, wiped, or replaced by a different deployment at
+		// the same address has no record of this project — and trusting the
+		// file would leave every future upload rejected for an unknown repo,
+		// with nothing on screen to say so.
+		if serverKnowsRepo(p.serverURL, repoCfg.Remote.RepoID, p.httpClient, token) {
+			fmt.Printf("  - Already connected to %s (repo_id: %s)\n", p.serverURL, repoCfg.Remote.RepoID)
+			return connectWireHooks(p.projectRoot)
+		}
+		fmt.Printf("  ⚠ %s has no record of this project (repo_id: %s) — re-registering it.\n",
+			p.serverURL, repoCfg.Remote.RepoID)
+
+	case repoCfg.Remote.URL != "" && repoCfg.Remote.RepoID != "":
+		// Moving to a different server. This is a move, not a disconnect: the
+		// hooks stay, capture never stops. Naming the old server is the only
+		// warning the user gets that their history did not travel with them.
+		fmt.Printf("  → Moving this project from %s to %s.\n", repoCfg.Remote.URL, p.serverURL)
+		fmt.Printf("    History already on %s stays there — it is not copied across.\n", repoCfg.Remote.URL)
 	}
 
 	// 4. Register the repo with the server.
-	repoID, err := registerRepo(p.serverURL, token, p.projectRoot, p.httpClient)
+	repoID, err := registerRepo(p.serverURL, token, p.projectRoot, p.repoID, p.httpClient)
 	if err != nil {
 		return fmt.Errorf("register repo: %w", err)
 	}
@@ -132,7 +208,16 @@ func runConnect(p connectParams) error {
 	}
 	fmt.Printf("  ✓ Wrote remote config\n")
 
-	// 6. Wire Claude hooks (merge/dedupe).
+	// 6. Carry over history recorded before this moment.
+	//
+	// The binding just written moves every read to a machine-local cache keyed
+	// to this server. Without this step, everything captured before now stays in
+	// the project's own .regent/ where nothing reads it, nothing uploads it and
+	// nothing mentions it — `rgt log --session <id>` exits 1 for a session that
+	// worked a minute ago. See carryover.go.
+	carryOverLocalHistory(os.Stdout, s, carryOverConfig(p, repoID, token))
+
+	// 7. Wire Claude hooks (merge/dedupe).
 	return connectWireHooks(p.projectRoot)
 }
 
@@ -163,20 +248,73 @@ func connectWireHooks(projectRoot string) error {
 	fmt.Printf("  ⚠ Restart any Claude Code / Codex session already open in this repo —\n")
 	fmt.Printf("    agents load hooks at startup, so a running session won't capture until\n")
 	fmt.Printf("    you restart it. (New sessions, and teammates who clone, are unaffected.)\n")
+	// What this claims and what a clone actually does have to be the same thing.
+	// The hook written into .claude/settings.json names this machine's rgt and
+	// falls back to whatever `rgt` PATH resolves (see sharedHookCommand), so the
+	// teammate's requirement is not "installed" but "on PATH" — and if it is
+	// not, `rgt doctor` names the missing binary rather than leaving them to
+	// discover the silence. Saying "installed" was the shorter sentence and the
+	// wrong one (#23).
 	fmt.Printf("  → To auto-wire teammates: commit .regent/config.toml and .claude/settings.json\n")
-	fmt.Printf("    (the rest of .regent/ is git-ignored). Then a clone + `rgt` installed is all\n")
-	fmt.Printf("    they need — no connect step.\n")
+	fmt.Printf("    (the rest of .regent/ is git-ignored). A clone with `rgt` on PATH captures\n")
+	fmt.Printf("    with no connect step; if it is not, `rgt doctor` there says so.\n")
+	fmt.Printf("    Codex hooks in .codex/config.toml are this machine's only — teammates run\n")
+	fmt.Printf("    `rgt init --agent codex` themselves.\n")
 	return nil
+}
+
+// serverKnowsRepo asks the server whether it still has a record of this repo.
+//
+// A failure to reach the server, or anything unexpected in the reply, returns
+// true — "assume it knows". The alternative is worse in exactly the case that
+// matters: on a flaky network or a server mid-restart, returning false would
+// re-register a project that was fine, on every connect, forever.
+func serverKnowsRepo(serverURL, repoID string, client *http.Client, token string) bool {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(serverURL, "/")+"/repos", nil)
+	if err != nil {
+		return true
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return true
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return true
+	}
+	var body struct {
+		Repos []string `json:"repos"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return true
+	}
+	for _, r := range body.Repos {
+		if r == repoID {
+			return true
+		}
+	}
+	return false
 }
 
 // registerRepo POSTs to <serverURL>/repos and returns the assigned repo_id.
 // A 401/403 response is converted to ErrNotSignedIn.
-func registerRepo(serverURL, token, projectRoot string, client *http.Client) (string, error) {
+// requested, when non-empty, is an identity the user named explicitly and which
+// has already been validated; otherwise one is derived from the project.
+func registerRepo(serverURL, token, projectRoot, requested string, client *http.Client) (string, error) {
 	if client == nil {
 		client = http.DefaultClient
 	}
 
-	repoID := deriveRepoID(projectRoot)
+	repoID := requested
+	if repoID == "" {
+		repoID = deriveRepoID(projectRoot)
+	}
 	body, _ := json.Marshal(map[string]string{"repo_id": repoID})
 	req, err := http.NewRequest(http.MethodPost, serverURL+"/repos", bytes.NewReader(body))
 	if err != nil {
@@ -215,36 +353,6 @@ func registerRepo(serverURL, token, projectRoot string, client *http.Client) (st
 		return "", fmt.Errorf("server returned empty repo_id")
 	}
 	return result.RepoID, nil
-}
-
-// deriveRepoID turns a project directory into a server-legal repo id: lowercase,
-// characters restricted to [a-z0-9._-], starting with an alphanumeric, max 64
-// bytes. Mirrors the server's repoIDRE (^[a-z0-9][a-z0-9._-]{0,63}$) so a repo
-// registers under a stable, human-readable name derived from its folder.
-func deriveRepoID(projectRoot string) string {
-	base := strings.ToLower(filepath.Base(projectRoot))
-	var b strings.Builder
-	for _, r := range base {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('-')
-		}
-	}
-	id := strings.TrimLeft(b.String(), "._-")
-	if len(id) > 64 {
-		id = id[:64]
-	}
-	if id == "" {
-		return "repo"
-	}
-	if reservedRepoIDs[id] {
-		// A folder literally named e.g. "repos"/"aux"/"nul" derives an id the
-		// server rejects as reserved; suffix it so connect doesn't 400.
-		return id + "-repo"
-	}
-	return id
 }
 
 // reservedRepoIDs mirrors the server's reserved set (internal/server/server.go):

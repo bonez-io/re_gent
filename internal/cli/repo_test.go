@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/regent-vcs/regent/internal/remote"
 	"github.com/regent-vcs/regent/internal/store"
 )
 
@@ -54,7 +55,17 @@ func TestOpenStoreFromCWDUsesTheServerCacheWhenConfigured(t *testing.T) {
 	t.Setenv("REGENT_REPO_ID", "demo")
 	t.Setenv("REGENT_CACHE_DIR", cacheRoot)
 
-	cacheDir := filepath.Join(cacheRoot, "repos", "demo")
+	// Ask for the cache path rather than rebuilding it here. The layout gained
+	// a per-server segment, and a test that spells the path out by hand is a
+	// second definition of it that drifts from the first.
+	cacheDir, err := remote.CacheDirFor(remote.Config{
+		ServerURL: "https://regent.example.com",
+		RepoID:    "demo",
+		CacheDir:  cacheRoot,
+	})
+	if err != nil {
+		t.Fatalf("CacheDirFor: %v", err)
+	}
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		t.Fatalf("mkdir cache: %v", err)
 	}
@@ -83,8 +94,14 @@ func TestOpenStoreFromCWDExplainsAMissingCache(t *testing.T) {
 	}
 	// 'rgt init' would be the wrong advice in server mode; the cache is
 	// rebuilt from the server, which is the source of truth.
-	if !strings.Contains(err.Error(), "rgt sync --pull") {
-		t.Fatalf("error should point at 'rgt sync --pull', got: %v", err)
+	//
+	// The advice used to be 'rgt sync --pull <ref>', which asked for a ref name
+	// this machine has no way of knowing — it has pushed nothing, so its spool
+	// lists nothing, and there was no call that asked the server what exists.
+	// 'rgt pull' discovers that itself, so it is the command that can actually
+	// be run from here.
+	if !strings.Contains(err.Error(), "rgt pull") {
+		t.Fatalf("error should point at 'rgt pull', got: %v", err)
 	}
 	if strings.Contains(err.Error(), "rgt init") {
 		t.Fatalf("error must not suggest 'rgt init' in server mode, got: %v", err)

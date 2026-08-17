@@ -32,7 +32,8 @@ func fetchInstallScript(t *testing.T, baseURL string) string {
 //
 // The stub is served as the binary rather than merely placed on PATH: the
 // installer now always downloads, so anything on PATH would be overwritten by
-// the real binary — which would launch the picker and block the test forever.
+// the real binary — which would reach a real server and wire the test's
+// working directory for real.
 func runInstaller(t *testing.T, workDir string) (out string, calls string, serverURL string) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -40,6 +41,10 @@ func runInstaller(t *testing.T, workDir string) (out string, calls string, serve
 	}
 
 	home := t.TempDir()
+	installDir := filepath.Join(home, "bin")
+	if err := os.MkdirAll(installDir, 0o755); err != nil {
+		t.Fatalf("create install dir: %v", err)
+	}
 	callLog := filepath.Join(home, "calls.log")
 
 	// A shell script stands in for the binary: it runs anywhere, records every
@@ -61,7 +66,7 @@ func runInstaller(t *testing.T, workDir string) (out string, calls string, serve
 
 	cmd := exec.Command("sh", scriptPath)
 	cmd.Dir = workDir
-	cmd.Env = append(os.Environ(), "HOME="+home, "PATH="+os.Getenv("PATH"))
+	cmd.Env = append(os.Environ(), "HOME="+home, "PATH="+os.Getenv("PATH"), "REGENT_INSTALL_DIR="+installDir)
 	// Never let a hang become a hung suite; the stub should return at once.
 	done := make(chan struct{})
 	var combined []byte
@@ -102,7 +107,7 @@ func TestInstallAlwaysReinstalls(t *testing.T) {
 	}
 }
 
-// TestInstallHandsOverToSetup is the one-command onboarding promise: installing
+// TestInstallHandsOverToConnect is the one-command onboarding promise: installing
 // leads straight into wiring, so nobody has to run a separate command.
 //
 // This test previously branched on whether a terminal existed, asserting that
@@ -111,10 +116,10 @@ func TestInstallAlwaysReinstalls(t *testing.T) {
 // onboarding happens in devcontainers, over SSH and in CI, so the no-terminal
 // path is the main path, not a degraded one. The branch is gone and the
 // promise is now unconditional.
-func TestInstallHandsOverToSetup(t *testing.T) {
+func TestInstallHandsOverToConnect(t *testing.T) {
 	_, calls, url := runInstaller(t, t.TempDir())
 
-	if want := "setup " + url; !strings.Contains(calls, want) {
+	if want := "connect " + url; !strings.Contains(calls, want) {
 		t.Errorf("installer should hand over to %q; calls were:\n%s", want, calls)
 	}
 }
@@ -132,7 +137,7 @@ func TestInstallHandsOverToSetup(t *testing.T) {
 func TestInstallWiresWithoutATerminal(t *testing.T) {
 	out, calls, url := runInstaller(t, t.TempDir())
 
-	if want := "setup " + url; !strings.Contains(calls, want) {
+	if want := "connect " + url; !strings.Contains(calls, want) {
 		t.Errorf("installer must wire the project with or without a terminal;\nwanted a call to %q\ncalls were:\n%s\ninstaller output was:\n%s", want, calls, out)
 	}
 }
@@ -150,7 +155,7 @@ func TestInstallWiresWithoutATerminal(t *testing.T) {
 // nothing.
 //
 // Depending on a terminal at all is the defect. Wiring is now unconditional and
-// rgt setup decides, so any reappearance of /dev/tty here is a regression.
+// rgt connect decides, so any reappearance of /dev/tty here is a regression.
 func TestInstallScriptDoesNotDependOnATerminal(t *testing.T) {
 	_, _, ts := newTestServer(t)
 	if script := fetchInstallScript(t, ts.URL); strings.Contains(script, "/dev/tty") {
@@ -183,6 +188,10 @@ func TestInstallFailsWhenVerificationFails(t *testing.T) {
 	}
 
 	home := t.TempDir()
+	installDir := filepath.Join(home, "bin")
+	if err := os.MkdirAll(installDir, 0o755); err != nil {
+		t.Fatalf("create install dir: %v", err)
+	}
 
 	// This stub succeeds at everything except doctor, reproducing the case
 	// that matters: setup appeared to work, verification says it did not.
@@ -201,7 +210,7 @@ func TestInstallFailsWhenVerificationFails(t *testing.T) {
 
 	cmd := exec.Command("sh", scriptPath)
 	cmd.Dir = t.TempDir()
-	cmd.Env = append(os.Environ(), "HOME="+home, "PATH="+os.Getenv("PATH"))
+	cmd.Env = append(os.Environ(), "HOME="+home, "PATH="+os.Getenv("PATH"), "REGENT_INSTALL_DIR="+installDir)
 	out, err := cmd.CombinedOutput()
 
 	if err == nil {

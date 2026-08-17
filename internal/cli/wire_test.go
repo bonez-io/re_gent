@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/regent-vcs/regent/internal/capture"
@@ -182,6 +183,9 @@ func TestResolveHookBinaryFallsBackWhenLookupFails(t *testing.T) {
 //
 // The team path must wire every detected agent, exactly as init does.
 func TestConnectWiresEveryDetectedAgentNotJustClaude(t *testing.T) {
+	t.Setenv("REGENT_AUTHOR_NAME", "Test User")
+	t.Setenv("REGENT_AUTHOR_EMAIL", "test@example.com")
+
 	root := t.TempDir()
 	// runConnect creates .regent/ before wiring; this test starts after that.
 	mustMkdir(t, filepath.Join(root, ".regent"))
@@ -209,6 +213,75 @@ func TestConnectWiresEveryDetectedAgentNotJustClaude(t *testing.T) {
 				t.Errorf("doctor would fail the install: %s — %s", f.Name, f.Detail)
 			}
 		}
+	}
+}
+
+// `rgt init`, `rgt connect` and `rgt doctor` all describe a shadowing ancestor,
+// and they all describe it through claudeShadowRemedy. These pin what that text
+// is allowed to recommend.
+//
+// The old text offered two options in a neutral voice and put the wrong one
+// last, where it reads as the conclusion: "Either open the agent in this
+// project, or wire that directory too: cd <ancestor> && rgt init --agent
+// claude". A real user took the printed command, and it did what it says —
+// created a .regent/ at the ancestor, into which every project underneath now
+// records one blended history (#27).
+func TestShadowRemedyLeadsWithOpeningTheAgentInTheProject(t *testing.T) {
+	workspace := "/Users/dev/Documents/GitHub"
+	project := filepath.Join(workspace, "tsenta-agent")
+
+	remedy := claudeShadowRemedy(project, claudeWorkspaceShadow{Dir: workspace})
+
+	openHere := strings.Index(remedy, "cd "+project)
+	wireAncestor := strings.Index(remedy, "rgt init --agent claude")
+	if openHere < 0 {
+		t.Fatalf("the remedy never tells the user to open the agent in the project:\n%s", remedy)
+	}
+	if wireAncestor >= 0 && wireAncestor < openHere {
+		t.Errorf("the remedy still leads with wiring the ancestor, which is the advice that broke a real install:\n%s", remedy)
+	}
+}
+
+// Mentioning the ancestor-wide option is fine. Mentioning it without saying
+// what it costs is what made it look like the fix.
+func TestShadowRemedyStatesWhatWiringTheAncestorCosts(t *testing.T) {
+	workspace := "/Users/dev/Documents/GitHub"
+	project := filepath.Join(workspace, "tsenta-agent")
+
+	remedy := claudeShadowRemedy(project, claudeWorkspaceShadow{Dir: workspace})
+
+	if !strings.Contains(remedy, "rgt init --agent claude") {
+		t.Skip("the remedy no longer offers the ancestor-wide option, so there is no consequence to state")
+	}
+	// The consequence is that this project's history goes somewhere else. Naming
+	// that directory is the load-bearing part: it is what the user would
+	// otherwise have to derive from the architecture.
+	if !strings.Contains(remedy, filepath.Join(workspace, ".regent")) {
+		t.Errorf("the ancestor-wide option is offered without naming where the history would land:\n%s", remedy)
+	}
+	if !strings.Contains(remedy, "every project") {
+		t.Errorf("the ancestor-wide option is offered without saying it blends every project below it:\n%s", remedy)
+	}
+}
+
+// The second failure in #27, at the text layer. Once the ancestor is wired,
+// re-offering "wire the ancestor" is advice to do what has already been done —
+// and it was the thing that went wrong. What is left to say is where the work
+// is going now, and how to stop it.
+func TestShadowRemedyForAWiredAncestorDoesNotReofferWiringIt(t *testing.T) {
+	workspace := "/Users/dev/Documents/GitHub"
+	project := filepath.Join(workspace, "tsenta-agent")
+
+	remedy := claudeShadowRemedy(project, claudeWorkspaceShadow{Dir: workspace, Wired: true})
+
+	if strings.Contains(remedy, "rgt init --agent claude") {
+		t.Errorf("the remedy tells the user to wire an ancestor that is already wired:\n%s", remedy)
+	}
+	if !strings.Contains(remedy, filepath.Join(workspace, ".regent")) {
+		t.Errorf("the remedy never says where the work is actually being recorded:\n%s", remedy)
+	}
+	if !strings.Contains(remedy, "cd "+project) {
+		t.Errorf("the remedy never gives the user a way out:\n%s", remedy)
 	}
 }
 
@@ -270,6 +343,51 @@ func TestHookOutcomeCarriesInstalledNotRequested(t *testing.T) {
 	}
 }
 
+// One broken agent must not cost the user the others.
+//
+// wireAgents walks its targets in order and returns at the first failure, so a
+// project carrying a stale `.codex` file gets no Claude hooks either — and the
+// user is told only about Codex. Which agent survives depends on the order
+// resolveAgentTargets happened to produce, which is not something a user can
+// see or reason about.
+//
+// The dispatcher is meant to be the one place that decides what gets wired and
+// what gets reported. Deciding "nothing further" on behalf of unrelated agents
+// is not that. Every requested agent is attempted, the failures are surfaced
+// together, and the summary lists exactly the ones that were written.
+func TestWireAgentsContinuesPastAFailedAgent(t *testing.T) {
+	root := t.TempDir()
+
+	// Block Codex, and request it first, so a failure there is what stands
+	// between the user and their Claude hooks.
+	if err := os.WriteFile(filepath.Join(root, ".codex"), []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("seed blocker: %v", err)
+	}
+
+	installed, err := wireAgents(root, []agentTarget{agentCodex, agentClaude})
+	if err == nil {
+		t.Fatal("wireAgents returned nil error despite Codex being unwritable")
+	}
+
+	if !hasAgent(installed, agentClaude) {
+		t.Errorf("installed = %v; Claude was requested and writable, and was skipped because an earlier agent failed", installed)
+	}
+	if hasAgent(installed, agentCodex) {
+		t.Error("installed claims codex, but its write failed")
+	}
+
+	// The error has to name the agent that failed — a user reading it needs to
+	// know which config to fix, not merely that something did not work.
+	if !strings.Contains(err.Error(), "Codex") {
+		t.Errorf("error does not name the failing agent: %v", err)
+	}
+
+	// And the wiring it did do must be real, not merely reported.
+	if _, statErr := os.Stat(filepath.Join(root, ".claude", "settings.json")); statErr != nil {
+		t.Errorf("Claude reported installed but settings.json is absent: %v", statErr)
+	}
+}
+
 // A teammate pasting an install command must never be told hooks are wired when
 // the write failed. wireAgents surfaces the error rather than swallowing it,
 // and reports the targets it managed before the failure.
@@ -288,5 +406,27 @@ func TestWireAgentsReturnsErrorWhenWriteFails(t *testing.T) {
 	}
 	if len(installed) != 0 {
 		t.Errorf("installed = %v, want none", installed)
+	}
+}
+
+// The same filename assumption, one layer down and with worse consequences.
+//
+// resolveHookBinary refuses to embed the running binary's path unless the file
+// is called "rgt", so a build under any other name writes a bare "rgt" into the
+// user's hooks. That hook then invokes whatever "rgt" PATH happens to find —
+// an older build, a different project's copy, or nothing at all — and capture
+// stops without a word. Observed: hooks silently pointing at a binary from a
+// week earlier that had since been deleted.
+//
+// The name was never the real question. The question is whether this path will
+// still be here tomorrow, and the tests below this one answer that directly.
+func TestResolveHookBinaryUsesTheRunningPathWhateverTheBinaryIsCalled(t *testing.T) {
+	for _, exe := range []string{
+		"/Users/dev/.local/bin/rgt-dev",
+		"/opt/homebrew/bin/rgt2",
+	} {
+		if got := resolveHookBinary(exe, nil); got != exe {
+			t.Errorf("resolveHookBinary(%q) = %q; the hook now invokes whatever PATH resolves, not this binary", exe, got)
+		}
 	}
 }

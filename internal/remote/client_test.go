@@ -257,3 +257,38 @@ func TestClientRejectsMalformedHashes(t *testing.T) {
 		}
 	}
 }
+
+// A teammate who has pushed nothing has nothing to name. Every other client
+// method takes a ref the caller already knows, which is exactly the knowledge a
+// fresh clone does not have — so discovery is its own call.
+func TestClientListsTheRefsTheServerHolds(t *testing.T) {
+	srv := remotetest.New()
+	defer srv.Close()
+	c := newTestClient(t, srv)
+	ctx := context.Background()
+
+	step, err := c.PutObject(ctx, []byte(`{"tree":""}`))
+	if err != nil {
+		t.Fatalf("PutObject: %v", err)
+	}
+	for _, name := range []string{"sessions/claude_code--ada", "sessions/claude_code--grace"} {
+		if err := c.UpdateRef(ctx, name, "", step); err != nil {
+			t.Fatalf("UpdateRef %s: %v", name, err)
+		}
+	}
+
+	refs, err := c.ListRefs(ctx, "sessions")
+	if err != nil {
+		t.Fatalf("ListRefs: %v", err)
+	}
+	if len(refs) != 2 {
+		t.Fatalf("ListRefs returned %d ref(s), want 2: %v", len(refs), refs)
+	}
+	// Names come back relative to the directory asked for, matching
+	// store.ListRefs, so callers can qualify them one way.
+	for _, name := range []string{"claude_code--ada", "claude_code--grace"} {
+		if refs[name] != step {
+			t.Errorf("ListRefs[%q] = %q, want %s", name, refs[name], step)
+		}
+	}
+}

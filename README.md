@@ -234,9 +234,12 @@ rgt completion fish > ~/.config/fish/completions/rgt.fish
 ```bash
 git clone https://github.com/regent-vcs/regent
 cd regent
-go build -o rgt ./cmd/rgt
-sudo mv rgt /usr/local/bin/
+make install
+rgt version
 ```
+
+`make install` writes only to Go's bin directory. It never replaces a Homebrew
+or other package-manager installation elsewhere on `PATH`.
 
 ### Binary Releases
 
@@ -261,35 +264,43 @@ Hooks auto-configure on `rgt init`. No manual setup required.
 
 | Command | Description |
 |---------|-------------|
+| `rgt connect [server-url]` | Connect the project you are standing in to a server and wire agent hooks. Run outside a project it names the fix and changes nothing. The URL is remembered after the first run. Replaces the former `rgt setup`. |
+| `rgt connect --as <name>` | Register this project under a name you choose instead of one derived from its git remote. Recorded in the project binding, so it is said once. |
 | `rgt init` | Initialize `.regent/` in current directory |
 | `rgt log` | Show step history (supports `--session`, `-n`, `--json`, `--graph`) |
 | `rgt sessions` | List all active sessions |
 | `rgt status` | Show current repository state |
 | `rgt show <step>` | Display full context for a step (tool call + conversation) |
 | `rgt blame <path>[:<line>]` | Show per-line provenance for a file |
-| `rgt cat <hash>` | Inspect any object by hash |
+| `rgt repair blame` | Recompute every stored blame map with the current diff. `rgt blame` is annotated at write time, so a diff fix does not reach maps already on disk; `rgt show` diffs at query time and needs no repair. Idempotent and safe to interrupt. |
+| `rgt cat <hash>` | Inspect any object by hash (debugging tool; runnable but not listed in `rgt --help`) |
 | `rgt serve` | Serve re_gent repositories over HTTP (`--addr`, `--data`) |
 | `rgt push` | Push session history to a repo on a server (`--url`, `--repo`, `--session`) |
 | `rgt version` | Print version information |
 | `rgt completion` | Generate shell completion scripts |
 | `rgt sync` | Deliver queued server-mode capture (`--status`, `--pull`, `--repair`) |
+| `rgt pull [ref]` | Fetch the project's history from the server into this machine's cache. With no ref it asks the server what exists. |
 
 ---
 
 ## Server Mode
 
-re_gent can run with a re_gent server as the source of truth instead of a local `.regent/`
-directory — hooks talk to the server directly and the repository needs no local store at all.
-Capture is spooled to a machine-local cache when the server is unreachable, so an outage never
-blocks a live agent turn.
+re_gent can run with a re_gent server as the source of truth. The repository keeps only its
+`.regent/config.toml` server binding; history is stored in a machine-local cache and delivered by
+the hooks. Capture is spooled when the server is unreachable, so an outage never blocks a live
+agent turn.
 
 ```bash
-export REGENT_SERVER_URL=https://regent.example.com
+export REGENT_SERVER_URL=http://127.0.0.1:7654
 export REGENT_REPO_ID=my-project
 
 rgt sync --status   # what is queued (no network)
 rgt sync            # drain the queue now
+rgt pull            # fetch the team's history into this machine's cache
 ```
+
+A teammate who clones a connected project runs `rgt pull` once and then reads the team's
+sessions with the ordinary history commands, offline.
 
 See **[docs/server-mode.md](docs/server-mode.md)** for the configuration reference, the consistency
 guarantee, and the full failure-mode table (network blip, server down, partial write, divergence,
@@ -297,39 +308,27 @@ cache loss) with the accepted risks stated explicitly.
 
 ---
 
-## Self-host your server (Docker)
+## Local development server (Docker)
 
-Run your own re_gent server anywhere with Docker, then point repos at it.
-
-**With the published image:**
+Start a loopback-only server for local development:
 
 ```bash
-# 1. Start a secured server — capture the token so you can reuse it
-TOKEN=$(openssl rand -hex 32); echo "server token: $TOKEN"
-docker run -d --name regent-server \
-  -p 7654:7654 -v regent-data:/data \
-  -e REGENT_SERVER_TOKEN="$TOKEN" \
-  ghcr.io/regent-vcs/regent-server:latest
+make server
+curl http://127.0.0.1:7654/healthz
 
-# 2. Connect a project to it in one command
+# Connect a project
 cd ~/code/my-project
-rgt connect http://your-host:7654 --token "$TOKEN"
+rgt connect http://127.0.0.1:7654
 
-# 3. Push its history up
+# Push or pull history
 rgt push
+rgt pull
 ```
 
-**From source** (build and run locally, one command):
-
-```bash
-git clone https://github.com/regent-vcs/regent && cd regent
-REGENT_SERVER_TOKEN=$(openssl rand -hex 32) make server   # or: docker compose up -d --build
-```
-
-The server persists repos in the `regent-data` volume and exposes an unauthenticated
-`GET /healthz` for container/orchestrator probes. Leave `REGENT_SERVER_TOKEN` unset only on a
-trusted local network; set it to a long random value for anything reachable, and terminate TLS
-at a reverse proxy before exposing it to the internet.
+The server is currently unauthenticated, and Compose binds it to `127.0.0.1`.
+Remote deployment, authentication, TLS, and Terraform are intentionally not
+part of this local baseline yet. `make server-down` stops it; the named Docker
+volume preserves its data between runs.
 
 ---
 

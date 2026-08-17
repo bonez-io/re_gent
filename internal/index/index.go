@@ -67,6 +67,8 @@ func createSchema(db *sql.DB) error {
 		tool_use_id TEXT NOT NULL,
 		tree_hash   TEXT NOT NULL,
 		transcript_hash TEXT,
+		author_name  TEXT,
+		author_email TEXT,
 		usage_input_tokens          INTEGER,
 		usage_output_tokens         INTEGER,
 		usage_cache_creation_tokens INTEGER,
@@ -164,6 +166,8 @@ func migrateSchema(db *sql.DB) error {
 			`ALTER TABLE steps ADD COLUMN origin TEXT NOT NULL DEFAULT 'claude_code'`,
 			`ALTER TABLE steps ADD COLUMN turn_id TEXT`,
 			`ALTER TABLE steps ADD COLUMN agent_id TEXT`,
+			`ALTER TABLE steps ADD COLUMN author_name TEXT`,
+			`ALTER TABLE steps ADD COLUMN author_email TEXT`,
 			`ALTER TABLE steps ADD COLUMN usage_input_tokens INTEGER`,
 			`ALTER TABLE steps ADD COLUMN usage_output_tokens INTEGER`,
 			`ALTER TABLE steps ADD COLUMN usage_cache_creation_tokens INTEGER`,
@@ -454,9 +458,10 @@ func (idx *DB) IndexStep(stepHash store.Hash, step *store.Step, tree *store.Tree
 	_, err = tx.Exec(`
 		INSERT OR REPLACE INTO steps
 		(id, parent_id, session_id, origin, turn_id, agent_id, ts_nanos, tool_name, tool_use_id, tree_hash, transcript_hash,
+		 author_name, author_email,
 		 usage_input_tokens, usage_output_tokens, usage_cache_creation_tokens, usage_cache_read_tokens,
 		 usage_api_calls, usage_subagents)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		stepHash,
 		step.Parent,
@@ -469,6 +474,8 @@ func (idx *DB) IndexStep(stepHash store.Hash, step *store.Step, tree *store.Tree
 		primaryCause.ToolUseID,
 		step.Tree,
 		step.Transcript,
+		step.Author.Name,
+		step.Author.Email,
 		stepUsage.InputTokens,
 		stepUsage.OutputTokens,
 		stepUsage.CacheCreationTokens,
@@ -678,12 +685,27 @@ func (idx *DB) CountSteps(sessionID string) (int, error) {
 
 // ListAllSessions returns all sessions
 func (idx *DB) ListAllSessions() ([]SessionInfo, error) {
+	// A session belongs to whoever started it: the earliest step that names an
+	// author. Attribution must not move to whoever touched the session last,
+	// so this is deliberately ORDER BY ts_nanos ASC and not the tip step.
+	//
+	// The join is a LEFT JOIN because a session captured with no git identity
+	// has no such step, and must still be listed — with no author rather than
+	// not at all.
 	rows, err := idx.db.Query(`
-		SELECT id, origin, started_at, last_seen_at, head_step_id,
-		       model, permission_mode, transcript_path,
-		       forked_from_session, forked_from_step, fork_detected_at
-		FROM sessions
-		ORDER BY last_seen_at DESC
+		SELECT s.id, s.origin, s.started_at, s.last_seen_at, s.head_step_id,
+		       s.model, s.permission_mode, s.transcript_path,
+		       s.forked_from_session, s.forked_from_step, s.fork_detected_at,
+		       a.author_name, a.author_email
+		FROM sessions s
+		LEFT JOIN steps a ON a.id = (
+			SELECT id FROM steps
+			WHERE session_id = s.id
+			  AND (COALESCE(author_name, '') != '' OR COALESCE(author_email, '') != '')
+			ORDER BY ts_nanos ASC, id ASC
+			LIMIT 1
+		)
+		ORDER BY s.last_seen_at DESC
 	`)
 	if err != nil {
 		return nil, err
@@ -697,12 +719,21 @@ func (idx *DB) ListAllSessions() ([]SessionInfo, error) {
 		var headStepID, model, permissionMode, transcriptPath sql.NullString
 		var forkedFromSession, forkedFromStep sql.NullString
 		var forkDetectedAt sql.NullInt64
+		var authorName, authorEmail sql.NullString
 
 		err := rows.Scan(&s.ID, &s.Origin, &startedAt, &lastSeenAt, &headStepID,
 			&model, &permissionMode, &transcriptPath,
-			&forkedFromSession, &forkedFromStep, &forkDetectedAt)
+			&forkedFromSession, &forkedFromStep, &forkDetectedAt,
+			&authorName, &authorEmail)
 		if err != nil {
 			return nil, err
+		}
+
+		if authorName.Valid {
+			s.Author.Name = authorName.String
+		}
+		if authorEmail.Valid {
+			s.Author.Email = authorEmail.String
 		}
 
 		s.StartedAt = time.Unix(0, startedAt)
@@ -762,6 +793,7 @@ type SessionInfo struct {
 	Model             string
 	PermissionMode    string
 	TranscriptPath    string
+	Author            store.Author
 	ForkedFromSession string
 	ForkedFromStep    store.Hash
 	ForkDetectedAt    *time.Time // pointer for nullable

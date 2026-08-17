@@ -5,15 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
-	"github.com/charmbracelet/huh"
 	"github.com/pelletier/go-toml/v2"
-	"github.com/regent-vcs/regent/internal/capture"
 	"github.com/regent-vcs/regent/internal/index"
+	"github.com/regent-vcs/regent/internal/remote"
 	"github.com/regent-vcs/regent/internal/store"
 	"github.com/regent-vcs/regent/internal/style"
 	"github.com/spf13/cobra"
@@ -45,8 +45,8 @@ const (
 func InitCmd() *cobra.Command {
 	var skipHook bool
 	var skipSkills bool
+	var withSkills bool
 	var agent string
-	var interactiveHooks bool
 
 	cmd := &cobra.Command{
 		Use:          "init",
@@ -68,11 +68,11 @@ func InitCmd() *cobra.Command {
 			}
 			input := bufio.NewReader(os.Stdin)
 
-			printHeader()
-
 			reinit := pathExists(filepath.Join(cwd, ".regent"))
+			// Resolved before anything is printed, because it decides what the
+			// whole of step 1 is even about. See serverBinding.
+			binding := resolveServerBinding(cwd)
 
-			printStep(1, 3, "Initialize Repository")
 			if reinit {
 				s, err := store.Open(filepath.Join(cwd, ".regent"))
 				if err != nil {
@@ -84,8 +84,9 @@ func InitCmd() *cobra.Command {
 				}
 				defer func() { _ = idx.Close() }()
 
-				fmt.Printf("  %s .regent/ already exists (skipping creation)\n", style.DimText("-"))
-				fmt.Println()
+				if !binding.bound() {
+					fmt.Printf("  %s Using existing .regent/\n", style.DimText("-"))
+				}
 			} else {
 				s, err := store.Init(cwd)
 				if err != nil {
@@ -102,36 +103,33 @@ func InitCmd() *cobra.Command {
 					fmt.Printf("  %s Could not create .regent/.gitignore: %v\n", style.Warning(""), err)
 				}
 
-				fmt.Printf("  %s Created .regent/ directory\n", style.Success(""))
-				fmt.Printf("  %s Initialized object store\n", style.Success(""))
-				fmt.Printf("  %s Created SQLite index\n", style.Success(""))
-				fmt.Println()
+				if !binding.bound() {
+					fmt.Printf("  %s Initialized .regent/\n", style.Success(""))
+				}
+			}
+			if binding.bound() {
+				printServerBinding(binding)
 			}
 
-			printStep(2, 3, "Configure Agent Hooks")
 			if reinit {
 				printExistingHooks(cwd)
 			}
-			outcome, hookErr := configureHooks(cwd, targets, hookOptions{
-				skip:        skipHook,
-				interactive: interactiveHooks,
-			})
+			outcome, hookErr := configureHooks(cwd, targets, hookOptions{skip: skipHook})
 			if hookErr != nil {
 				fmt.Printf("  %s Could not configure hooks: %v\n", style.Warning(""), hookErr)
 				printManualInstructions(targets)
 			}
 
-			printStep(3, 3, "Install Agent Skills")
-			if skipSkills {
-				fmt.Printf("  %s Skill installation skipped\n", style.DimText("-"))
-			} else if err := offerSkillInstall(cwd, outcome.installed, input); err != nil {
-				fmt.Printf("  %s Could not install skills: %v\n", style.Warning(""), err)
+			if withSkills && !skipSkills {
+				if err := offerSkillInstall(cwd, outcome.installed, input); err != nil {
+					fmt.Printf("  %s Could not install skills: %v\n", style.Warning(""), err)
+				}
 			}
 
 			// The summary reports what was installed, not what was detected,
 			// and the exit code follows it. A run that wired nothing must not
 			// look like a success to a script, a devcontainer, or a teammate.
-			printSummary(cwd, outcome)
+			printSummary(cwd, outcome, binding)
 			if hookErr != nil {
 				return fmt.Errorf("configure hooks: %w", hookErr)
 			}
@@ -144,131 +142,82 @@ func InitCmd() *cobra.Command {
 
 	cmd.Flags().BoolVar(&skipHook, "skip-hook", false, "Skip automatic hook configuration")
 	cmd.Flags().BoolVar(&skipSkills, "skip-skills", false, "Skip agent skill installation")
+	_ = cmd.Flags().MarkHidden("skip-skills") // compatibility: skills are opt-in now
+	cmd.Flags().BoolVar(&withSkills, "skills", false, "Offer to install optional agent skills")
 	cmd.Flags().StringVar(&agent, "agent", string(agentAuto), "Agent hooks to configure: auto, claude, codex, opencode, pi, both, all")
-	cmd.Flags().BoolVar(&interactiveHooks, "interactive", false, "Choose agents from a menu instead of wiring every detected agent")
 
 	return cmd
 }
 
-func printHeader() {
-	fmt.Println()
-	fmt.Println(style.DividerFull(""))
-	fmt.Printf("  %s - Version Control for AI Agent Activity\n", style.Brand("re_gent"))
-	fmt.Println(style.DividerFull(""))
-	fmt.Println()
+// serverBinding names the server a project's history belongs to.
+//
+// The zero value means "not bound", which is local mode and the default. Both
+// fields are required for the same reason remote.Config.Enabled() requires
+// both: half a binding is a typo, and a typo must read as local mode rather
+// than as a server nobody can name.
+type serverBinding struct {
+	url    string
+	repoID string
 }
 
-func printStep(current, total int, title string) {
-	fmt.Println(style.SectionHeader(fmt.Sprintf("Step %d/%d: %s", current, total, title)))
+func (b serverBinding) bound() bool { return b.url != "" && b.repoID != "" }
+
+// resolveServerBinding answers "where does this project's history live?" using
+// the same resolution capture and the read commands use, so init cannot
+// describe a project differently from the way it will actually behave.
+//
+// A configuration that fails to load is reported as unbound. Being wrong in
+// that direction costs a line of output; being wrong the other way would have
+// init announce a server for a project that has none.
+func resolveServerBinding(cwd string) serverBinding {
+	cfg, err := remote.LoadConfigForCWD(remote.OSEnv, cwd)
+	if err != nil || !cfg.Enabled() {
+		return serverBinding{}
+	}
+	return serverBinding{url: cfg.ServerURL, repoID: cfg.RepoID}
+}
+
+// printServerBinding replaces the local-initialisation narration for a project
+// whose history lives on a server.
+//
+// `rgt init` in a connected project used to print the same three lines as a
+// fresh local one — "Created .regent/ directory", "Initialized object store",
+// "Created SQLite index" — and then close by naming .regent/ as "Repository".
+// None of the user's history is there: once a [remote] binding exists the
+// server is the source of truth and the local directory holds the binding plus
+// a disposable cache. Reported while setting up a project that was already
+// connected, where nothing in the output distinguished the two situations.
+func printServerBinding(binding serverBinding) {
+	fmt.Printf("  %s Connected to %s (repo: %s)\n", style.Success(""), binding.url, binding.repoID)
+	fmt.Printf("  %s This project's history is recorded on that server, not in a local repository here.\n", style.DimText("-"))
 	fmt.Println()
 }
 
 // printSummary takes a hookOutcome rather than []agentTarget so that the
 // requested agents cannot be passed here by mistake. See hookOutcome.
-func printSummary(projectRoot string, outcome hookOutcome) {
+func printSummary(projectRoot string, outcome hookOutcome, binding serverBinding) {
 	headline, ok := summaryStatus(outcome)
 
-	fmt.Println()
-	fmt.Println(style.DividerFull(""))
 	if ok {
-		fmt.Printf("  %s %s\n", style.Success(""), headline)
+		fmt.Printf("\n%s %s\n", style.Success(""), headline)
 	} else {
-		fmt.Printf("  %s %s\n", style.Warning(""), headline)
+		fmt.Printf("\n%s %s\n", style.Warning(""), headline)
 	}
-	fmt.Println(style.DividerFull(""))
-	fmt.Println()
 	if !ok {
-		fmt.Println("Nothing will be captured until an agent hook is configured.")
-		fmt.Println("  - Run: rgt init --agent claude")
-		fmt.Println("  - Or check what is wired: rgt doctor")
-		fmt.Println()
+		fmt.Println("Run: rgt init --agent <claude|codex|opencode|pi>")
+		fmt.Println("Check: rgt doctor")
 		return
 	}
-	fmt.Println("Next steps:")
-	fmt.Println("  - Start an agent session in this directory")
-	fmt.Println("  - Make changes with Claude Code, Codex, OpenCode, or Pi")
-	fmt.Println("  - Run: rgt log")
-	fmt.Println("  - Run: rgt blame <file>")
-	if len(outcome.installed) > 0 {
-		fmt.Println("  - Agent skills: log, blame, show")
+	// Name the place the user's history will actually be. Printing the local
+	// .regent/ path for a server-bound project sends them to a directory that
+	// holds a cache and a config file and none of their work.
+	if binding.bound() {
+		fmt.Printf("%s %s\n", style.Label("Server:"), binding.url)
+		fmt.Printf("%s %s\n", style.Label("Repo:"), binding.repoID)
+	} else {
+		fmt.Printf("%s %s\n", style.Label("Repository:"), filepath.Join(projectRoot, ".regent"))
 	}
-	if hasAgent(outcome.installed, agentCodex) {
-		fmt.Println("  - Codex may ask you to trust this project and the re_gent hooks")
-	}
-	fmt.Println()
-	fmt.Printf("%s %s\n", style.Label("Repository:"), filepath.Join(projectRoot, ".regent"))
-	fmt.Println()
-}
-
-func offerHookInstall(projectRoot string, targets []agentTarget, _ *bufio.Reader) ([]agentTarget, error) {
-	fmt.Printf("%s captures step history automatically via agent hooks.\n", style.Brand("re_gent"))
-	fmt.Println()
-
-	options := make([]huh.Option[agentTarget], 0, len(targets))
-	for _, target := range targets {
-		switch target {
-		case agentClaude:
-			options = append(options, huh.NewOption("Claude Code   (.claude/settings.json)", agentClaude))
-		case agentCodex:
-			options = append(options, huh.NewOption("Codex         (.codex/config.toml)", agentCodex))
-		case agentOpenCode:
-			options = append(options, huh.NewOption("OpenCode      (opencode.jsonc + npm plugin)", agentOpenCode))
-		case agentPi:
-			options = append(options, huh.NewOption("Pi            (.pi/settings.json package)", agentPi))
-		}
-	}
-
-	var selected []agentTarget
-	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewMultiSelect[agentTarget]().
-				Title("Select agents to configure").
-				Description("Use arrow keys to navigate, space to toggle, enter to confirm").
-				Options(options...).
-				Value(&selected),
-		),
-	)
-
-	if err := form.Run(); err != nil {
-		return nil, fmt.Errorf("agent selection: %w", err)
-	}
-
-	if len(selected) == 0 {
-		fmt.Printf("  %s Skipped - you can configure hooks manually later\n", style.DimText("-"))
-		fmt.Println()
-		return nil, nil
-	}
-
-	for _, target := range selected {
-		switch target {
-		case agentClaude:
-			result, err := installClaudeHook(projectRoot)
-			if err != nil {
-				return nil, err
-			}
-			printHookInstallWarning(result)
-			fmt.Printf("  %s Claude Code hooks configured\n", style.Success(""))
-		case agentCodex:
-			result, err := installCodexHook(projectRoot)
-			if err != nil {
-				return nil, err
-			}
-			printHookInstallWarning(result)
-			fmt.Printf("  %s Codex hooks configured\n", style.Success(""))
-		case agentOpenCode:
-			if err := installOpenCodeHook(projectRoot); err != nil {
-				return nil, err
-			}
-			fmt.Printf("  %s OpenCode plugin installed\n", style.Success(""))
-		case agentPi:
-			installed := installPiHook(projectRoot)
-			if installed {
-				fmt.Printf("  %s Pi extension package installed\n", style.Success(""))
-			}
-		}
-	}
-	fmt.Println()
-	return selected, nil
+	fmt.Println("Restart your agent in this directory, then run: rgt doctor")
 }
 
 func printHookInstallWarning(result hookInstallResult) {
@@ -279,6 +228,18 @@ func printHookInstallWarning(result hookInstallResult) {
 }
 
 func installClaudeHook(projectRoot string) (hookInstallResult, error) {
+	return installClaudeHookWith(projectRoot, hookBinary())
+}
+
+// installClaudeHookWith writes the Claude hook for a named binary.
+//
+// The binary is a parameter rather than resolved inside, because the situation
+// this file is most exposed to cannot be reproduced otherwise: a settings.json
+// written on someone else's machine, naming a path that exists only there. Under
+// `go test` the running executable is an ephemeral build, so resolveHookBinary
+// deliberately returns the bare name and no test could produce the file a
+// teammate actually clones. See TestACommittedHookRunsOnATeammatesMachineToo.
+func installClaudeHookWith(projectRoot, binary string) (hookInstallResult, error) {
 	var result hookInstallResult
 	claudeDir := filepath.Join(projectRoot, ".claude")
 	settingsPath := filepath.Join(claudeDir, "settings.json")
@@ -305,9 +266,9 @@ func installClaudeHook(projectRoot string) (hookInstallResult, error) {
 		settings["hooks"] = hooks
 	}
 
-	mergeHookCommand(hooks, "UserPromptSubmit", claudeUserHook())
-	mergeHookCommand(hooks, "Stop", claudeAssistantHook())
-	mergeHookCommand(hooks, "PostToolBatch", claudeToolBatchHook())
+	mergeHookCommand(hooks, "UserPromptSubmit", sharedHookCommand(binary, claudeUserHookArgs))
+	mergeHookCommand(hooks, "Stop", sharedHookCommand(binary, claudeAssistantHookArgs))
+	mergeHookCommand(hooks, "PostToolBatch", sharedHookCommand(binary, claudeToolBatchHookArgs))
 	removeRegentHookCommands(hooks, "PostToolUse")
 
 	output, err := json.MarshalIndent(settings, "", "  ")
@@ -597,7 +558,7 @@ func filterRegentHookCommands(groups []interface{}) []interface{} {
 				continue
 			}
 			command, _ := hookMap["command"].(string)
-			if capture.IsRegentCommand(command) {
+			if isRegentHookCommand(command) {
 				continue
 			}
 			nextHookEntries = append(nextHookEntries, hookEntry)
@@ -644,7 +605,7 @@ func printExistingHooks(projectRoot string) {
 							entries, _ := normalizeHookArray(gm["hooks"])
 							for _, e := range entries {
 								if em, ok := e.(map[string]interface{}); ok {
-									if cmd, _ := em["command"].(string); capture.IsRegentCommand(cmd) {
+									if cmd, _ := em["command"].(string); isRegentHookCommand(cmd) {
 										fmt.Printf("  %s Claude Code\n", style.Success(""))
 										goto doneClaudeCheck
 									}
@@ -670,7 +631,7 @@ doneClaudeCheck:
 							entries, _ := normalizeHookArray(gm["hooks"])
 							for _, e := range entries {
 								if em, ok := e.(map[string]interface{}); ok {
-									if cmd, _ := em["command"].(string); capture.IsRegentCommand(cmd) {
+									if cmd, _ := em["command"].(string); isRegentHookCommand(cmd) {
 										fmt.Printf("  %s Codex\n", style.Success(""))
 										goto doneCodexCheck
 									}
@@ -913,14 +874,28 @@ func hasAgent(targets []agentTarget, target agentTarget) bool {
 	return false
 }
 
-func confirmedDefaultYes(input *bufio.Reader) (bool, error) {
-	response, err := input.ReadString('\n')
-	if err != nil {
+// confirmedDefaultYes reads a yes/no answer, treating a bare enter as yes.
+//
+// It delegates to readAnswer rather than reading to a newline itself. This
+// package had two confirmation readers that disagreed about what enter looks
+// like: readAnswer accepts a carriage return as well, because after a
+// full-screen picker hands the terminal back that is what a keypress arrives
+// as, and a newline-only read waits forever for a key the user already pressed.
+// This function never got that fix, so the skills prompt behind it inherited
+// the hang.
+//
+// An answer that arrives without any terminator is still an answer — the reader
+// simply ended — so a partial read is honoured. Only a genuinely empty read is
+// an error, which keeps the prompt from silently defaulting to yes when stdin
+// is the installing script rather than a person.
+func confirmedDefaultYes(input io.Reader) (bool, error) {
+	answer, err := readAnswer(input)
+	if err != nil && answer == "" {
 		return false, err
 	}
 
-	response = strings.TrimSpace(strings.ToLower(response))
-	return response == "" || response == "y" || response == "yes", nil
+	answer = strings.TrimSpace(strings.ToLower(answer))
+	return answer == "" || answer == "y" || answer == "yes", nil
 }
 
 func backupFile(path string) (string, error) {

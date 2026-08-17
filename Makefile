@@ -11,14 +11,13 @@ help:
 	@echo "  make lint         - Run golangci-lint"
 	@echo "  make fmt          - Format code with gofmt"
 	@echo "  make clean        - Remove build artifacts"
-	@echo "  make install      - Install rgt to GOPATH/bin"
+	@echo "  make install      - Install this local build to Go's bin directory"
 	@echo "  make dist         - Build the release artifact for this OS/arch via goreleaser (./dist)"
 	@echo "  make install-dist - Build dist and install that binary to GOPATH/bin"
 	@echo ""
-	@echo "  Self-hosted server (Docker):"
+	@echo "  Local development server (Docker):"
 	@echo "  make server      - Build & start the server (docker compose up -d)"
-	@echo "                     Runs open (no auth) — fine on a private network/VPN."
-	@echo "                     Set REGENT_SERVER_TOKEN=… only if the server is public."
+	@echo "                     Local development only; binds to 127.0.0.1."
 	@echo "  make server-down - Stop the server"
 	@echo "  make server-logs - Follow server logs"
 	@echo ""
@@ -71,39 +70,25 @@ clean:
 	rm -f coverage.txt coverage.html
 	rm -rf dist/
 
-# GOBIN mirrors what `go install` targets, so `install` and `install-dist`
-# land the binary in the same place.
-GOBIN ?= $(shell go env GOPATH)/bin
+# Respect an explicitly configured Go bin directory and otherwise use GOPATH/bin.
+# Passing GOBIN to `go install` keeps the build target and verification target
+# identical. The install never rewrites some other package manager's binary.
+GOBIN ?= $(shell bin=$$(go env GOBIN); if [ -n "$$bin" ]; then echo "$$bin"; else echo "$$(go env GOPATH)/bin"; fi)
 
 install:
-	go install -ldflags "$(LDFLAGS)" ./cmd/rgt
+	@mkdir -p "$(GOBIN)"
+	GOBIN="$(GOBIN)" go install -ldflags "$(LDFLAGS)" ./cmd/rgt
 	@target="$(GOBIN)/rgt"; \
-	shadow_failed=0; \
-	found_target=0; old_ifs="$$IFS"; IFS=':'; \
-	for dir in $$PATH; do \
-		if [ "$$dir" = "$(GOBIN)" ]; then found_target=1; continue; fi; \
-		if [ "$$found_target" = 1 ]; then continue; fi; \
-		candidate="$$dir/rgt"; \
-		if [ -e "$$candidate" ] || [ -L "$$candidate" ]; then \
-			IFS="$$old_ifs"; \
-			echo "found rgt earlier in PATH, shadowing the build just installed: $$candidate"; \
-			if rm -f "$$candidate" 2>/dev/null && install -m 0755 "$$target" "$$candidate" 2>/dev/null; then \
-				echo "  -> replaced with the freshly built binary"; \
-			else \
-				echo "  -> could not overwrite (no permission); remove or update it yourself, e.g. 'brew uninstall regent'"; \
-				shadow_failed=1; \
-			fi; \
-			IFS=':'; \
-		fi; \
-	done; \
-	IFS="$$old_ifs"; \
-	resolved=$$(command -v rgt 2>/dev/null); \
-	if [ -z "$$resolved" ]; then \
-		echo "warning: $$target was built but no 'rgt' is on your PATH; add $(GOBIN) to PATH"; \
-	elif [ "$$shadow_failed" = 1 ]; then \
-		echo "warning: rgt still resolves to $$resolved, not $$target"; \
+	"$$target" version; \
+	resolved=$$(command -v rgt 2>/dev/null || true); \
+	if [ "$$resolved" = "$$target" ]; then \
+		echo "Installed local rgt -> $$target"; \
+	elif [ -z "$$resolved" ]; then \
+		echo "Installed local rgt -> $$target"; \
+		echo "Add $(GOBIN) to PATH to run it as 'rgt'."; \
 	else \
-		echo "Installed -> rgt is on PATH at $$resolved and up to date"; \
+		echo "Installed local rgt -> $$target"; \
+		echo "Note: 'rgt' currently resolves to $$resolved; put $(GOBIN) earlier in PATH to use this build."; \
 	fi
 
 # Builds the release artifact for the host OS/arch only (--single-target),
@@ -118,16 +103,15 @@ install-dist: dist
 	install -m 0755 "$$bin" "$(GOBIN)/rgt"; \
 	echo "Installed $$bin -> $(GOBIN)/rgt"
 
-# --- Self-hosted server (Docker) -------------------------------------------
-# Start the object/ref server in a container. Runs OPEN (no auth) by default,
-# which is fine on a private network/VPN. Set REGENT_SERVER_TOKEN to require
-# bearer-token auth ONLY if the server is publicly reachable:
-#   REGENT_SERVER_TOKEN=$(openssl rand -hex 32) make server
+# --- Local development server (Docker) -------------------------------------
+# Start the object/ref server in a container for local development. The server
+# is currently open and Compose binds it to loopback only. Remote deployment,
+# authentication, TLS, and Terraform are intentionally deferred.
 server:
 	docker compose up -d --build
 	@echo ""
 	@echo "re_gent server is up on http://localhost:$${REGENT_PORT:-7654} (health: /healthz)."
-	@echo "Runs open (no auth) — fine on a private network/VPN. Set REGENT_SERVER_TOKEN=… only if the server is public."
+	@echo "Local development server (open, loopback-only)."
 	@echo "Connect a repo to it:"
 	@echo "  rgt connect http://localhost:$${REGENT_PORT:-7654}"
 
