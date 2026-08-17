@@ -12,6 +12,7 @@ import (
 
 	"github.com/regent-vcs/regent/internal/config"
 	"github.com/regent-vcs/regent/internal/index"
+	"github.com/regent-vcs/regent/internal/remote"
 	"github.com/regent-vcs/regent/internal/store"
 	"github.com/spf13/cobra"
 )
@@ -25,6 +26,9 @@ type connectParams struct {
 	projectRoot string
 	configPath  string // global config path; "" means default
 	httpClient  *http.Client
+	// repoID overrides the identity that would otherwise be derived from the
+	// project's git remote. Empty means derive.
+	repoID string
 }
 
 // ConnectCmd returns the cobra command for `rgt connect`.
@@ -67,15 +71,30 @@ connect replaces setup, which did the same job with different answers.`,
 				return err
 			}
 
+			// An identity supplied here is checked before anything is written
+			// or registered. A name the server will reject must fail with the
+			// name in the message, not as a 400 halfway through connecting.
+			explicitID, _ := cmd.Flags().GetString("as")
+			if explicitID != "" {
+				if err := remote.ValidateRepoID(explicitID); err != nil {
+					return fmt.Errorf("cannot use %q as this project's identity: %w", explicitID, err)
+				}
+			}
+
 			// Standing inside a project connects it — the common case, and the
 			// one the installer takes.
 			if isProjectDir(cwd) {
-				return connectHere(serverURL, cwd, cmd.OutOrStdout(), isTerminal(os.Stdin))
+				return connectHere(serverURL, cwd, explicitID, cmd.OutOrStdout(), isTerminal(os.Stdin))
 			}
 			// Otherwise offer the projects below here.
 			return connectPicked(serverURL, cwd, cmd.OutOrStdout(), isTerminal(os.Stdin), chooseWithPicker, shareWithTeam)
 		},
 	}
+	// Derivation is a guess and it will be wrong for someone: a fork's remote,
+	// a monorepo whose subdirectories are separate projects, a checkout with no
+	// remote whose derived id is a hash nobody can read. This is how they say
+	// otherwise. It is recorded in the binding, so it is said once.
+	cmd.Flags().String("as", "", "identity to register this project under, instead of deriving one from its git remote")
 	return cmd
 }
 
@@ -85,12 +104,12 @@ connect replaces setup, which did the same job with different answers.`,
 // that the single-project and multi-project routes cannot drift: the toggle
 // behaviour, the per-project reporting, and the share offer are the same code
 // on both.
-func connectHere(serverURL, dir string, out io.Writer, canPrompt bool) error {
+func connectHere(serverURL, dir, repoID string, out io.Writer, canPrompt bool) error {
 	share := shareWithTeam
 	if !canPrompt {
 		share = nil
 	}
-	wired, unwired, failed := applyConnections(serverURL, []string{dir}, out, false)
+	wired, unwired, failed := applyConnections(serverURL, []string{dir}, out, false, repoID)
 	if failed > 0 {
 		return fmt.Errorf("%s could not be connected", filepath.Base(dir))
 	}
@@ -178,7 +197,7 @@ func runConnect(p connectParams) error {
 	}
 
 	// 4. Register the repo with the server.
-	repoID, err := registerRepo(p.serverURL, token, p.projectRoot, p.httpClient)
+	repoID, err := registerRepo(p.serverURL, token, p.projectRoot, p.repoID, p.httpClient)
 	if err != nil {
 		return fmt.Errorf("register repo: %w", err)
 	}
@@ -270,12 +289,17 @@ func serverKnowsRepo(serverURL, repoID string, client *http.Client, token string
 
 // registerRepo POSTs to <serverURL>/repos and returns the assigned repo_id.
 // A 401/403 response is converted to ErrNotSignedIn.
-func registerRepo(serverURL, token, projectRoot string, client *http.Client) (string, error) {
+// requested, when non-empty, is an identity the user named explicitly and which
+// has already been validated; otherwise one is derived from the project.
+func registerRepo(serverURL, token, projectRoot, requested string, client *http.Client) (string, error) {
 	if client == nil {
 		client = http.DefaultClient
 	}
 
-	repoID := deriveRepoID(projectRoot)
+	repoID := requested
+	if repoID == "" {
+		repoID = deriveRepoID(projectRoot)
+	}
 	body, _ := json.Marshal(map[string]string{"repo_id": repoID})
 	req, err := http.NewRequest(http.MethodPost, serverURL+"/repos", bytes.NewReader(body))
 	if err != nil {

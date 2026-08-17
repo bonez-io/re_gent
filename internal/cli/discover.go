@@ -148,7 +148,11 @@ type shareFunc func(projects []string)
 //
 // One project's failure must not strand the rest, so failures are counted and
 // the loop continues.
-func applyConnections(serverURL string, picked []string, out io.Writer, allowDisconnect bool) (wired []string, unwired, failed int) {
+// repoID, when non-empty, is the identity to register under instead of a
+// derived one. It only ever arrives from the single-project route: naming one
+// identity for a batch of projects picked from a list would give them all the
+// same one, which is the collision this identity work exists to remove.
+func applyConnections(serverURL string, picked []string, out io.Writer, allowDisconnect bool, repoID string) (wired []string, unwired, failed int) {
 	for _, p := range picked {
 		fmt.Fprintf(out, "\n== %s ==\n", filepath.Base(p))
 		if allowDisconnect && isConnected(p) {
@@ -160,7 +164,7 @@ func applyConnections(serverURL string, picked []string, out io.Writer, allowDis
 			unwired++
 			continue
 		}
-		if err := runConnect(connectParams{serverURL: serverURL, projectRoot: p}); err != nil {
+		if err := runConnect(connectParams{serverURL: serverURL, projectRoot: p, repoID: repoID}); err != nil {
 			failed++
 			fmt.Fprintf(out, "  ! %v\n", err)
 			continue
@@ -207,7 +211,7 @@ func connectPicked(serverURL, root string, out io.Writer, canPrompt bool, choose
 		return fmt.Errorf("nothing selected — no projects were connected")
 	}
 
-	wired, unwired, failed := applyConnections(serverURL, picked, out, true)
+	wired, unwired, failed := applyConnections(serverURL, picked, out, true, "")
 	if failed > 0 {
 		return fmt.Errorf("%d of %d project(s) failed to connect", failed, len(picked))
 	}

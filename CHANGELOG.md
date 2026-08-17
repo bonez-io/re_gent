@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- A project is identified by the repository it belongs to, not by the folder it
+  sits in. Identity comes from the normalised git remote, so the same
+  repository cloned over https or ssh is one project, two unrelated checkouts
+  both called `api` are two, and renaming your folder changes nothing. A
+  repository with no remote falls back to its root commit; a directory that is
+  not a repository keeps its folder name. Identity is frozen into the project
+  binding once connected and is never re-derived underneath a project.
+- `rgt connect --as <name>` registers a project under a name you choose. It is
+  recorded in the binding, so it is given once rather than repeated.
+- The machine-local server-mode cache is keyed by server as well as project.
+  One cache was shared by every server a project had been pointed at, blending
+  their histories and crossing their upload watermarks. **Existing caches will
+  not be found at the new path**; they are disposable by design, but anything
+  spooled and not yet uploaded under the old path is not migrated.
+
 ### Fixed
 - `rgt blame` named the line after the one that changed. The line diff paired
   two encoders that do not decode each other's output, so every chunk came
