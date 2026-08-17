@@ -1,10 +1,16 @@
 package cli
 
 import (
+	"bytes"
+	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/regent-vcs/regent/internal/hook"
+	"github.com/regent-vcs/regent/internal/store"
 )
 
 // rgt doctor is the verification step. It exists because setup can succeed
@@ -113,6 +119,94 @@ func TestDiagnoseReportsGitIdentityHealthyWhenConfigured(t *testing.T) {
 	if !strings.Contains(f.Detail, "Ada Lovelace") {
 		t.Errorf("git identity detail = %q, want it to name the identity in use", f.Detail)
 	}
+}
+
+// Doctor answers "who will these steps be attributed to". The hook path that
+// actually writes steps used to never ask: it built the step with no Author at
+// all, so on a machine where doctor reported identity as healthy every recorded
+// step was anonymous, permanently, and nothing said so.
+//
+// The identity here is set through REGENT_AUTHOR_NAME, which only
+// capture.ResolveAuthor knows how to read. A writer that resolved identity by
+// any other route — shelling out to git config itself, reading a different
+// variable — would disagree with doctor here and fail this test. That is the
+// point: these two must stay one lookup, not two that can drift.
+func TestRecordedStepCarriesTheIdentityDoctorReports(t *testing.T) {
+	workspace := t.TempDir()
+	withoutGitIdentity(t, workspace)
+	t.Setenv("REGENT_AUTHOR_NAME", "Ada Lovelace")
+	t.Setenv("REGENT_AUTHOR_EMAIL", "ada@example.com")
+
+	finding := identityFinding()
+	if !finding.OK {
+		t.Fatalf("doctor found no identity, so there are not two halves to compare: %s", finding.Detail)
+	}
+
+	step := recordStepThroughHook(t, workspace, "identity-session")
+
+	if got := formatAuthor(step.Author); got != finding.Detail {
+		t.Errorf("step was recorded as %q but doctor reports %q; the writer and the check read identity from different places", got, finding.Detail)
+	}
+}
+
+// The other direction of the same agreement, and the reason this is not fixed
+// by inventing an author: with nothing configured, doctor says so and the step
+// carries no author. Filling in a hostname or a login here would make doctor's
+// warning a lie and put a name on work nobody claimed.
+func TestRecordedStepHasNoAuthorWhenDoctorFindsNoIdentity(t *testing.T) {
+	workspace := t.TempDir()
+	withoutGitIdentity(t, workspace)
+
+	if finding := identityFinding(); finding.OK {
+		t.Fatalf("identity isolation failed; doctor still sees %q", finding.Detail)
+	}
+
+	step := recordStepThroughHook(t, workspace, "anonymous-session")
+
+	if step.Author.Name != "" || step.Author.Email != "" {
+		t.Errorf("step recorded author %q with no identity configured; doctor promised none", formatAuthor(step.Author))
+	}
+}
+
+// recordStepThroughHook drives the real hook entry point over a fresh workspace
+// and returns the step it wrote, so tests assert on what was persisted rather
+// than on what the code path looked like on the way there.
+func recordStepThroughHook(t *testing.T, workspace, sessionID string) *store.Step {
+	t.Helper()
+
+	s, err := store.Init(workspace)
+	if err != nil {
+		t.Fatalf("store.Init: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "touched.txt"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("seed workspace file: %v", err)
+	}
+
+	var stdin bytes.Buffer
+	payload := hook.Payload{
+		SessionID:    sessionID,
+		ToolUseID:    "tool_write_1",
+		ToolName:     "Write",
+		ToolInput:    json.RawMessage(`{"file_path":"touched.txt"}`),
+		ToolResponse: json.RawMessage(`{"success":true}`),
+		CWD:          workspace,
+	}
+	if err := json.NewEncoder(&stdin).Encode(payload); err != nil {
+		t.Fatalf("encode payload: %v", err)
+	}
+	if err := hook.Run(&stdin, io.Discard); err != nil {
+		t.Fatalf("hook.Run: %v", err)
+	}
+
+	head, err := s.ReadRef("sessions/" + sessionID)
+	if err != nil {
+		t.Fatalf("read session ref: %v", err)
+	}
+	step, err := s.ReadStep(head)
+	if err != nil {
+		t.Fatalf("read step %s: %v", head, err)
+	}
+	return step
 }
 
 // withoutGitIdentity makes identity resolution deterministic: no environment
