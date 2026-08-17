@@ -283,7 +283,7 @@ func TestAPILogReconstructsStepShape(t *testing.T) {
 	_, argsHash := putObject(t, ts, repo, argsData)
 	resultData := []byte(`{"ok":true,"bytes":10}`)
 	_, resultHash := putObject(t, ts, repo, resultData)
-	convData := []byte(fmt.Sprintf(`[{"type":"user","text":%q,"ts":1},{"type":"reasoning","text":"thinking","ts":2}]`, prompt))
+	convData := []byte(fmt.Sprintf(`[{"type":"user","text":%q,"ts":1},{"type":"reasoning","text":"thinking","ts":2},{"type":"tool_call","tool_name":"Write","tool_use_id":"tu-1","tool_input":%q,"ts":3}]`, prompt, argsHash))
 	_, convHash := putObject(t, ts, repo, convData)
 
 	stepTS := time.Date(2026, 8, 2, 9, 15, 0, 0, time.UTC).UnixNano()

@@ -90,8 +90,8 @@ type Step struct {
 	SecondaryParent Hash `json:"secondary_parent,omitempty"` // merge second parent
 	Tree            Hash `json:"tree"`
 	Transcript      Hash `json:"transcript,omitempty"`
-	// Conversation is a content-addressed blob holding the turn's conversation
-	// (the user prompt plus assistant/reasoning text) so it survives being
+	// Conversation is a content-addressed blob holding the turn's normalized
+	// conversation (text plus tool-message references) so it survives being
 	// pushed to a server that has no local SQLite index to reconstruct it from.
 	// omitempty keeps steps written before this field existed byte-identical.
 	Conversation   Hash     `json:"conversation,omitempty"`

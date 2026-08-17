@@ -1,8 +1,10 @@
 package test
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -10,6 +12,30 @@ import (
 	// without a compile-time edge to the CLI the test cache serves stale passes.
 	_ "github.com/regent-vcs/regent/internal/cli"
 )
+
+func conversationFromLog(t *testing.T, output string) []any {
+	t.Helper()
+	var log struct {
+		Steps []struct {
+			Messages []json.RawMessage `json:"messages"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal([]byte(output), &log); err != nil {
+		t.Fatalf("decode log conversation: %v\n%s", err, output)
+	}
+	if len(log.Steps) != 1 {
+		t.Fatalf("log steps = %d, want 1\n%s", len(log.Steps), output)
+	}
+	messages := make([]any, 0, len(log.Steps[0].Messages))
+	for _, raw := range log.Steps[0].Messages {
+		var message any
+		if err := json.Unmarshal(raw, &message); err != nil {
+			t.Fatalf("decode log message: %v\n%s", err, raw)
+		}
+		messages = append(messages, message)
+	}
+	return messages
+}
 
 // The read half of the team story, at the #6 seam: one developer records and
 // pushes, a second clone of the same project reads it back.
@@ -98,6 +124,41 @@ func TestE2ESecondCloneCanPullAndReadTheTeamsHistory(t *testing.T) {
 	// has to show it too.
 	if listing := e2eRunEnv(t, rgt, clone, cloneEnv, nil, "sessions"); !strings.Contains(listing, canonical) {
 		t.Errorf("sessions on the second clone does not list the pulled session:\n%s", listing)
+	}
+}
+
+func TestE2EFreshMachinePullRestoresCompleteConversation(t *testing.T) {
+	rgt := buildTestBinary(t)
+	srv := startTestServer(t)
+
+	author := gitProject(t, "conversation-project", "https://github.com/acme/conversation-project.git")
+	authorEnv := machineEnv(t, srv.URL)
+	e2eRunEnv(t, rgt, author, authorEnv, nil, "connect", srv.URL)
+	captureTurn(t, rgt, author, authorEnv, "conversation-session", "t1", "conversation.go")
+
+	const canonical = "claude_code--conversation-session"
+	originalLog := e2eRunEnv(t, rgt, author, authorEnv, nil, "log", "--session", canonical, "--json")
+	originalConversation := conversationFromLog(t, originalLog)
+	if len(originalConversation) == 0 {
+		t.Fatalf("recording machine has no conversation precondition:\n%s", originalLog)
+	}
+
+	clone := gitProject(t, "conversation-project", "https://github.com/acme/conversation-project.git")
+	cloneEnv := machineEnv(t, srv.URL)
+	e2eRunEnv(t, rgt, clone, cloneEnv, nil, "connect", srv.URL)
+	e2eRunEnv(t, rgt, clone, cloneEnv, nil, "pull")
+
+	pulledLog := e2eRunEnv(t, rgt, clone, cloneEnv, nil, "log", "--session", canonical, "--json")
+	pulledConversation := conversationFromLog(t, pulledLog)
+	if !reflect.DeepEqual(pulledConversation, originalConversation) {
+		t.Errorf("fresh-machine conversation differs from recording machine\noriginal: %#v\npulled:   %#v", originalConversation, pulledConversation)
+	}
+
+	step := parseLogJSON(t, originalLog).Steps[0]
+	originalShow := e2eRunEnv(t, rgt, author, authorEnv, nil, "show", step.Hash)
+	pulledShow := e2eRunEnv(t, rgt, clone, cloneEnv, nil, "show", step.Hash)
+	if pulledShow != originalShow {
+		t.Errorf("fresh-machine show output differs from recording machine\n--- original ---\n%s\n--- pulled ---\n%s", originalShow, pulledShow)
 	}
 }
 
