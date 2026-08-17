@@ -44,6 +44,7 @@ func wireAgents(projectRoot string, targets []agentTarget) ([]agentTarget, error
 			}
 			printHookInstallWarning(result)
 			reportWired("Claude Code", filepath.Join(projectRoot, ".claude", "settings.json"))
+			reportClaudeSettingsScope(projectRoot)
 			installed = append(installed, agentClaude)
 
 		case agentCodex:
@@ -206,6 +207,64 @@ func hookCommand(args string) string {
 // without trusting it.
 func reportWired(agent, path string) {
 	fmt.Printf("  %s %s hooks configured -> %s\n", style.Success(""), agent, path)
+}
+
+// reportClaudeSettingsScope warns when the settings just written are not the
+// ones the agent will read.
+//
+// Claude Code loads .claude/settings.json from the directory it was opened in.
+// We write it at the project root, which is not necessarily that directory:
+// open the agent at a workspace root above the project — a monorepo, a
+// checkout holding several projects — and the hooks are never loaded, so
+// capture silently never starts. Naming the written path was not enough,
+// because the path looks right; what is wrong is which directory the agent is
+// rooted at, and only the user knows that.
+//
+// Where the settings *should* live is deliberately not decided here. Writing
+// them to the ancestor would impose re_gent's hooks on every other project
+// underneath it, which is a bigger claim than a project-level init is entitled
+// to make. So both directories are named and the choice stays with the user.
+func reportClaudeSettingsScope(projectRoot string) {
+	shadow := shadowingClaudeWorkspace(projectRoot)
+	if shadow == "" {
+		return
+	}
+	fmt.Printf("  %s An agent opened at %s will not load them.\n", style.Warning(""), shadow)
+	fmt.Printf("    Claude Code reads .claude/settings.json from the directory it was opened in,\n")
+	fmt.Printf("    and that one has its own .claude/ with no re_gent hook. Either open the agent\n")
+	fmt.Printf("    in this project, or wire that directory too:\n")
+	fmt.Printf("      cd %s && rgt init --agent claude\n", shadow)
+}
+
+// shadowingClaudeWorkspace returns the nearest directory above projectRoot that
+// an agent could be opened at and would then not load this project's hooks, or
+// "" when there is no such directory.
+//
+// A .claude/ directory is the marker of a place an agent gets opened, so the
+// nearest ancestor holding one is the candidate. It is only a problem when that
+// directory has no re_gent hook of its own — an ancestor that is already wired
+// captures the work either way, and warning about it would be noise.
+//
+// The user's home directory is skipped: ~/.claude is user scope and Claude Code
+// loads it wherever it is opened, so it can never be the reason a hook fails to
+// fire. Almost every machine has one, and treating it as a shadow would make
+// this warning fire on every project on the box.
+func shadowingClaudeWorkspace(projectRoot string) string {
+	home, _ := os.UserHomeDir()
+	dir := filepath.Dir(projectRoot)
+	for {
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		if dir != home && pathExists(filepath.Join(dir, ".claude")) {
+			if claudeSettingsFileHasRegentHook(filepath.Join(dir, ".claude", "settings.json")) {
+				return ""
+			}
+			return dir
+		}
+		dir = parent
+	}
 }
 
 // hookOptions selects how configureHooks behaves. The zero value is the

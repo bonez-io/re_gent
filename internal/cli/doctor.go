@@ -177,7 +177,36 @@ func claudeHookFinding(projectRoot string) doctorFinding {
 		}
 	}
 
+	// A hook in the right file is not the same fact as a hook the agent loads.
+	// This check reads the same path init wrote and used to stop here, which is
+	// how a project whose agent is opened one directory up got a clean bill of
+	// health while capture never started. See shadowingClaudeWorkspace.
+	if shadow := shadowingClaudeWorkspace(projectRoot); shadow != "" {
+		return doctorFinding{
+			Name: "claude hooks",
+			OK:   false,
+			Detail: fmt.Sprintf(
+				"wrote %s\nan agent opened at %s loads its own .claude/settings.json instead, and that one has no re_gent hook — nothing would be captured there\nwire that directory too: cd %s && rgt init --agent claude",
+				path, shadow, shadow),
+		}
+	}
+
 	return doctorFinding{Name: "claude hooks", OK: true, Detail: path}
+}
+
+// claudeSettingsFileHasRegentHook answers claudeSettingsHaveRegentHook's
+// question for a path. A missing or unparseable file counts as "no hook",
+// because to the agent that would load it the effect is the same.
+func claudeSettingsFileHasRegentHook(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var settings map[string]interface{}
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return false
+	}
+	return claudeSettingsHaveRegentHook(settings)
 }
 
 // claudeSettingsHaveRegentHook walks the settings shape Claude Code uses:
@@ -272,14 +301,17 @@ func hasFailures(findings []doctorFinding) bool {
 	return false
 }
 
+// printFindings indents every line of a detail, not just the first.
+//
+// A finding whose explanation is two facts and a command to run reads as three
+// lines; the single-line version put the third one hard against the left margin
+// where it no longer looked like part of the finding above it.
 func printFindings(findings []doctorFinding) {
 	fmt.Println()
 	for _, f := range findings {
 		if f.OK {
 			fmt.Printf("  %s %s\n", style.Success(""), f.Name)
-			if f.Detail != "" {
-				fmt.Printf("      %s\n", style.DimText(f.Detail))
-			}
+			printDetail(f.Detail, style.DimText)
 			continue
 		}
 		// Warnings and failures used to render identically, which left the
@@ -290,9 +322,16 @@ func printFindings(findings []doctorFinding) {
 			marker = style.Warning("")
 		}
 		fmt.Printf("  %s %s\n", marker, f.Name)
-		if f.Detail != "" {
-			fmt.Printf("      %s\n", f.Detail)
-		}
+		printDetail(f.Detail, func(line string) string { return line })
 	}
 	fmt.Println()
+}
+
+func printDetail(detail string, render func(string) string) {
+	if detail == "" {
+		return
+	}
+	for _, line := range strings.Split(detail, "\n") {
+		fmt.Printf("      %s\n", render(line))
+	}
 }
