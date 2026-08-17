@@ -234,9 +234,12 @@ rgt completion fish > ~/.config/fish/completions/rgt.fish
 ```bash
 git clone https://github.com/regent-vcs/regent
 cd regent
-go build -o rgt ./cmd/rgt
-sudo mv rgt /usr/local/bin/
+make install
+rgt version
 ```
+
+`make install` writes only to Go's bin directory. It never replaces a Homebrew
+or other package-manager installation elsewhere on `PATH`.
 
 ### Binary Releases
 
@@ -282,13 +285,13 @@ Hooks auto-configure on `rgt init`. No manual setup required.
 
 ## Server Mode
 
-re_gent can run with a re_gent server as the source of truth instead of a local `.regent/`
-directory — hooks talk to the server directly and the repository needs no local store at all.
-Capture is spooled to a machine-local cache when the server is unreachable, so an outage never
-blocks a live agent turn.
+re_gent can run with a re_gent server as the source of truth. The repository keeps only its
+`.regent/config.toml` server binding; history is stored in a machine-local cache and delivered by
+the hooks. Capture is spooled when the server is unreachable, so an outage never blocks a live
+agent turn.
 
 ```bash
-export REGENT_SERVER_URL=https://regent.example.com
+export REGENT_SERVER_URL=http://127.0.0.1:7654
 export REGENT_REPO_ID=my-project
 
 rgt sync --status   # what is queued (no network)
@@ -305,42 +308,27 @@ cache loss) with the accepted risks stated explicitly.
 
 ---
 
-## Self-host your server (Docker)
+## Local development server (Docker)
 
-Run your own re_gent server anywhere with Docker, then point repos at it.
-
-**With the published image:**
+Start a loopback-only server for local development:
 
 ```bash
-# 1. Start the server
-docker run -d --name regent-server \
-  -p 7654:7654 -v regent-data:/data \
-  ghcr.io/regent-vcs/regent-server:latest
+make server
+curl http://127.0.0.1:7654/healthz
 
-# 2. Connect a project to it in one command
+# Connect a project
 cd ~/code/my-project
-rgt connect http://your-host:7654
+rgt connect http://127.0.0.1:7654
 
-# 3. Push its history up
+# Push or pull history
 rgt push
+rgt pull
 ```
 
-**From source** (build and run locally, one command):
-
-> **On authentication:** the server performs none, and `rgt` has no sign-in
-> command — run it on a network you trust, or put your own reverse proxy in
-> front of it. If a server does answer `401`, `rgt connect` reports that and
-> stops; there is currently no client-side way to supply credentials.
-
-```bash
-git clone https://github.com/regent-vcs/regent && cd regent
-REGENT_SERVER_TOKEN=$(openssl rand -hex 32) make server   # or: docker compose up -d --build
-```
-
-The server persists repos in the `regent-data` volume and exposes an unauthenticated
-`GET /healthz` for container/orchestrator probes. Leave `REGENT_SERVER_TOKEN` unset only on a
-trusted local network; set it to a long random value for anything reachable, and terminate TLS
-at a reverse proxy before exposing it to the internet.
+The server is currently unauthenticated, and Compose binds it to `127.0.0.1`.
+Remote deployment, authentication, TLS, and Terraform are intentionally not
+part of this local baseline yet. `make server-down` stops it; the named Docker
+volume preserves its data between runs.
 
 ---
 

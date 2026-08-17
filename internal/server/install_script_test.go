@@ -41,6 +41,10 @@ func runInstaller(t *testing.T, workDir string) (out string, calls string, serve
 	}
 
 	home := t.TempDir()
+	installDir := filepath.Join(home, "bin")
+	if err := os.MkdirAll(installDir, 0o755); err != nil {
+		t.Fatalf("create install dir: %v", err)
+	}
 	callLog := filepath.Join(home, "calls.log")
 
 	// A shell script stands in for the binary: it runs anywhere, records every
@@ -62,7 +66,7 @@ func runInstaller(t *testing.T, workDir string) (out string, calls string, serve
 
 	cmd := exec.Command("sh", scriptPath)
 	cmd.Dir = workDir
-	cmd.Env = append(os.Environ(), "HOME="+home, "PATH="+os.Getenv("PATH"))
+	cmd.Env = append(os.Environ(), "HOME="+home, "PATH="+os.Getenv("PATH"), "REGENT_INSTALL_DIR="+installDir)
 	// Never let a hang become a hung suite; the stub should return at once.
 	done := make(chan struct{})
 	var combined []byte
@@ -184,6 +188,10 @@ func TestInstallFailsWhenVerificationFails(t *testing.T) {
 	}
 
 	home := t.TempDir()
+	installDir := filepath.Join(home, "bin")
+	if err := os.MkdirAll(installDir, 0o755); err != nil {
+		t.Fatalf("create install dir: %v", err)
+	}
 
 	// This stub succeeds at everything except doctor, reproducing the case
 	// that matters: setup appeared to work, verification says it did not.
@@ -202,7 +210,7 @@ func TestInstallFailsWhenVerificationFails(t *testing.T) {
 
 	cmd := exec.Command("sh", scriptPath)
 	cmd.Dir = t.TempDir()
-	cmd.Env = append(os.Environ(), "HOME="+home, "PATH="+os.Getenv("PATH"))
+	cmd.Env = append(os.Environ(), "HOME="+home, "PATH="+os.Getenv("PATH"), "REGENT_INSTALL_DIR="+installDir)
 	out, err := cmd.CombinedOutput()
 
 	if err == nil {

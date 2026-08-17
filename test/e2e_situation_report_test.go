@@ -221,9 +221,9 @@ func runRGTHermeticRaw(t *testing.T, rgtPath, dir string, args ...string) (strin
 	cmd.Dir = dir
 	// NO_COLOR because some assertions here are about which status symbol a line
 	// carries, and an escape sequence sits between the symbol and the text.
-	env := []string{"HOME=" + t.TempDir(), "NO_COLOR=1"}
+	env := []string{"HOME=" + t.TempDir(), "NO_COLOR=1", "PATH=/usr/bin:/bin:/usr/sbin:/sbin"}
 	for _, entry := range os.Environ() {
-		if strings.HasPrefix(entry, "REGENT_") || strings.HasPrefix(entry, "HOME=") || strings.HasPrefix(entry, "NO_COLOR=") {
+		if strings.HasPrefix(entry, "REGENT_") || strings.HasPrefix(entry, "HOME=") || strings.HasPrefix(entry, "NO_COLOR=") || strings.HasPrefix(entry, "PATH=") {
 			continue
 		}
 		env = append(env, entry)

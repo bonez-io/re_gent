@@ -100,15 +100,18 @@ func runInstallerVerification(t *testing.T, m machine) installRun {
 
 	cmd := exec.Command("sh", scriptPath)
 	cmd.Dir = workDir
+	installDir := filepath.Join(t.TempDir(), "bin")
+	mustMkdirAll(t, installDir)
 	// A deliberately bare environment: this is the fresh VPS, the container
-	// image, the CI runner. HOME is a temp dir so the install lands in
-	// $HOME/.local/bin, the git config files are /dev/null so no identity can
+	// image, the CI runner. REGENT_INSTALL_DIR keeps the install inside the test,
+	// the git config files are /dev/null so no identity can
 	// leak in from the developer running the suite, and PATH is the system
 	// minimum so a `claude` or `codex` binary on the real machine cannot change
 	// which agents doctor decides to check.
 	cmd.Env = []string{
 		"HOME=" + t.TempDir(),
 		"PATH=/usr/bin:/bin:/usr/sbin:/sbin",
+		"REGENT_INSTALL_DIR=" + installDir,
 		"GIT_CONFIG_GLOBAL=" + os.DevNull,
 		"GIT_CONFIG_SYSTEM=" + os.DevNull,
 		"NO_COLOR=1",

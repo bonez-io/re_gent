@@ -59,5 +59,10 @@ simple.py
 # Scratch worktrees for parallel agent runs; never part of the repo.
 .claude/worktrees/
 
+# Machine-local agent setup generated while dogfooding this repository.
+/.opencode/
+/.pi/
+/opencode.jsonc
+
 # rgt writes these when it rewrites hook config; never commit them.
 .claude/settings.json.bak-*

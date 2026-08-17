@@ -45,6 +45,7 @@ const (
 func InitCmd() *cobra.Command {
 	var skipHook bool
 	var skipSkills bool
+	var withSkills bool
 	var agent string
 
 	cmd := &cobra.Command{
@@ -67,14 +68,11 @@ func InitCmd() *cobra.Command {
 			}
 			input := bufio.NewReader(os.Stdin)
 
-			printHeader()
-
 			reinit := pathExists(filepath.Join(cwd, ".regent"))
 			// Resolved before anything is printed, because it decides what the
 			// whole of step 1 is even about. See serverBinding.
 			binding := resolveServerBinding(cwd)
 
-			printStep(1, 3, "Initialize Repository")
 			if reinit {
 				s, err := store.Open(filepath.Join(cwd, ".regent"))
 				if err != nil {
@@ -87,8 +85,7 @@ func InitCmd() *cobra.Command {
 				defer func() { _ = idx.Close() }()
 
 				if !binding.bound() {
-					fmt.Printf("  %s .regent/ already exists (skipping creation)\n", style.DimText("-"))
-					fmt.Println()
+					fmt.Printf("  %s Using existing .regent/\n", style.DimText("-"))
 				}
 			} else {
 				s, err := store.Init(cwd)
@@ -107,17 +104,13 @@ func InitCmd() *cobra.Command {
 				}
 
 				if !binding.bound() {
-					fmt.Printf("  %s Created .regent/ directory\n", style.Success(""))
-					fmt.Printf("  %s Initialized object store\n", style.Success(""))
-					fmt.Printf("  %s Created SQLite index\n", style.Success(""))
-					fmt.Println()
+					fmt.Printf("  %s Initialized .regent/\n", style.Success(""))
 				}
 			}
 			if binding.bound() {
 				printServerBinding(binding)
 			}
 
-			printStep(2, 3, "Configure Agent Hooks")
 			if reinit {
 				printExistingHooks(cwd)
 			}
@@ -127,11 +120,10 @@ func InitCmd() *cobra.Command {
 				printManualInstructions(targets)
 			}
 
-			printStep(3, 3, "Install Agent Skills")
-			if skipSkills {
-				fmt.Printf("  %s Skill installation skipped\n", style.DimText("-"))
-			} else if err := offerSkillInstall(cwd, outcome.installed, input); err != nil {
-				fmt.Printf("  %s Could not install skills: %v\n", style.Warning(""), err)
+			if withSkills && !skipSkills {
+				if err := offerSkillInstall(cwd, outcome.installed, input); err != nil {
+					fmt.Printf("  %s Could not install skills: %v\n", style.Warning(""), err)
+				}
 			}
 
 			// The summary reports what was installed, not what was detected,
@@ -150,22 +142,11 @@ func InitCmd() *cobra.Command {
 
 	cmd.Flags().BoolVar(&skipHook, "skip-hook", false, "Skip automatic hook configuration")
 	cmd.Flags().BoolVar(&skipSkills, "skip-skills", false, "Skip agent skill installation")
+	_ = cmd.Flags().MarkHidden("skip-skills") // compatibility: skills are opt-in now
+	cmd.Flags().BoolVar(&withSkills, "skills", false, "Offer to install optional agent skills")
 	cmd.Flags().StringVar(&agent, "agent", string(agentAuto), "Agent hooks to configure: auto, claude, codex, opencode, pi, both, all")
 
 	return cmd
-}
-
-func printHeader() {
-	fmt.Println()
-	fmt.Println(style.DividerFull(""))
-	fmt.Printf("  %s - Version Control for AI Agent Activity\n", style.Brand("re_gent"))
-	fmt.Println(style.DividerFull(""))
-	fmt.Println()
-}
-
-func printStep(current, total int, title string) {
-	fmt.Println(style.SectionHeader(fmt.Sprintf("Step %d/%d: %s", current, total, title)))
-	fmt.Println()
 }
 
 // serverBinding names the server a project's history belongs to.
@@ -217,34 +198,16 @@ func printServerBinding(binding serverBinding) {
 func printSummary(projectRoot string, outcome hookOutcome, binding serverBinding) {
 	headline, ok := summaryStatus(outcome)
 
-	fmt.Println()
-	fmt.Println(style.DividerFull(""))
 	if ok {
-		fmt.Printf("  %s %s\n", style.Success(""), headline)
+		fmt.Printf("\n%s %s\n", style.Success(""), headline)
 	} else {
-		fmt.Printf("  %s %s\n", style.Warning(""), headline)
+		fmt.Printf("\n%s %s\n", style.Warning(""), headline)
 	}
-	fmt.Println(style.DividerFull(""))
-	fmt.Println()
 	if !ok {
-		fmt.Println("Nothing will be captured until an agent hook is configured.")
-		fmt.Println("  - Run: rgt init --agent claude")
-		fmt.Println("  - Or check what is wired: rgt doctor")
-		fmt.Println()
+		fmt.Println("Run: rgt init --agent <claude|codex|opencode|pi>")
+		fmt.Println("Check: rgt doctor")
 		return
 	}
-	fmt.Println("Next steps:")
-	fmt.Println("  - Start an agent session in this directory")
-	fmt.Println("  - Make changes with Claude Code, Codex, OpenCode, or Pi")
-	fmt.Println("  - Run: rgt log")
-	fmt.Println("  - Run: rgt blame <file>")
-	if len(outcome.installed) > 0 {
-		fmt.Println("  - Agent skills: log, blame, show")
-	}
-	if hasAgent(outcome.installed, agentCodex) {
-		fmt.Println("  - Codex may ask you to trust this project and the re_gent hooks")
-	}
-	fmt.Println()
 	// Name the place the user's history will actually be. Printing the local
 	// .regent/ path for a server-bound project sends them to a directory that
 	// holds a cache and a config file and none of their work.
@@ -254,7 +217,7 @@ func printSummary(projectRoot string, outcome hookOutcome, binding serverBinding
 	} else {
 		fmt.Printf("%s %s\n", style.Label("Repository:"), filepath.Join(projectRoot, ".regent"))
 	}
-	fmt.Println()
+	fmt.Println("Restart your agent in this directory, then run: rgt doctor")
 }
 
 func printHookInstallWarning(result hookInstallResult) {

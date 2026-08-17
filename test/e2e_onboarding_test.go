@@ -70,6 +70,12 @@ func TestE2EInitSucceedsWhenAnAgentIsWired(t *testing.T) {
 	if !strings.Contains(out, "Initialization complete") {
 		t.Errorf("init wired Claude but did not report completion:\n%s", out)
 	}
+	if strings.Contains(out, "Agent skills:") {
+		t.Errorf("init reported optional skills even though they were skipped:\n%s", out)
+	}
+	if strings.Contains(out, "Step 1/3") {
+		t.Errorf("init regressed to the verbose three-step installer output:\n%s", out)
+	}
 	if _, err := os.Stat(filepath.Join(project, ".claude", "settings.json")); err != nil {
 		t.Errorf("init reported success but wrote no Claude settings: %v", err)
 	}

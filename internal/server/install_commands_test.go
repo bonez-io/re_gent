@@ -24,8 +24,9 @@ func TestInstallScriptOnlyCallsCommandsTheBinaryStillHas(t *testing.T) {
 	_, _, ts := newTestServer(t)
 	script := fetchInstallScript(t, ts.URL)
 
-	// Lines that invoke rgt directly, e.g. `rgt connect "$URL" || {`.
-	verbLine := regexp.MustCompile(`(?m)^\s*rgt\s+([a-z][a-z-]*)`)
+	// Lines that invoke rgt directly or behind a shell failure guard, e.g.
+	// `if ! rgt connect "$URL"; then`.
+	verbLine := regexp.MustCompile(`(?m)^\s*(if\s+!\s+)?rgt\s+([a-z][a-z-]*)`)
 	matches := verbLine.FindAllStringSubmatch(script, -1)
 	if len(matches) == 0 {
 		t.Fatal("no rgt invocations found in the install script; this test is checking nothing")
@@ -33,7 +34,7 @@ func TestInstallScriptOnlyCallsCommandsTheBinaryStillHas(t *testing.T) {
 
 	rgt := buildRealBinary(t)
 	for _, m := range matches {
-		verb := m[1]
+		verb := m[2]
 		// Invoked for real, not with --help: cobra answers --help before it
 		// reaches a command's RunE, so a removed command still prints a
 		// friendly help page. The first version of this test did that and

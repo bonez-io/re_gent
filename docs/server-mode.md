@@ -1,7 +1,8 @@
 # Server mode
 
 Server mode moves re_gent's source of truth off the client. Hooks talk to a re_gent server
-directly, and the working tree needs **no `.regent/` directory at all**.
+directly. The repository keeps only its small `.regent/config.toml` binding; objects, refs,
+and query state live in the machine-local cache and are disposable.
 
 This document is the operational contract for that mode: what it guarantees, how it behaves when
 the network or the server misbehaves, and what you do about each case.
@@ -29,7 +30,7 @@ editing shared state):
 |---|---|---|
 | `REGENT_SERVER_URL` | Base URL of the server. Scheme must be `http` or `https`. | — (required) |
 | `REGENT_REPO_ID` | Repository name registered with the server. Letters, digits, `.`, `_`, `-`; max 64; must start with a letter or digit. | — (required) |
-| `REGENT_TOKEN` | Bearer token. Never logged — only ever rendered through `Redact`. | empty |
+| `REGENT_TOKEN` | Reserved for future authenticated remote deployments; the current local server is open. | empty |
 | `REGENT_SERVER_TIMEOUT` | Network budget for one hook invocation. Clamped to 60s. | `5s` |
 | `REGENT_CACHE_DIR` | Overrides the machine-local cache location. | `<user cache>/regent` |
 
@@ -39,7 +40,6 @@ Or `~/.regent/config.toml`:
 [server]
 url     = "https://regent.example.com"
 repo_id = "my-project"
-token   = "..."
 timeout = "5s"
 ```
 
@@ -53,10 +53,10 @@ is the documented kill switch, and it is what the test suites use to stay hermet
 | Objects + refs | The server | **Yes** | No |
 | Machine-local cache | `<user cache>/regent/repos/<server>/<repo_id>/` | No — a disposable mirror | Yes, then `rgt pull` |
 | Outbox (spool) | `<cache>/spool/` | No — derived state | Yes, but unsent work is then re-pushed wholesale |
-| Working tree | Your repo | n/a | The repo needs **no** `.regent/` |
+| Server binding | `<repo>/.regent/config.toml` | **Yes** | No — teammates may share it through Git |
 
-The cache lives outside the repository on purpose: server mode must leave the working tree
-untouched, and a test asserts no `.regent*` entry is ever created there.
+The cache lives outside the repository on purpose: server mode keeps captured history out of
+the working tree. Only the small server binding belongs in the repository.
 
 **The outbox stores no payloads.** It holds only durable high-water marks (`spool/refs/<escaped
 ref>` = the tip most recently *confirmed* by the server), markers for loose objects, and a
