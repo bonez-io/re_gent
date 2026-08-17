@@ -213,6 +213,75 @@ func TestConnectWiresEveryDetectedAgentNotJustClaude(t *testing.T) {
 	}
 }
 
+// `rgt init`, `rgt connect` and `rgt doctor` all describe a shadowing ancestor,
+// and they all describe it through claudeShadowRemedy. These pin what that text
+// is allowed to recommend.
+//
+// The old text offered two options in a neutral voice and put the wrong one
+// last, where it reads as the conclusion: "Either open the agent in this
+// project, or wire that directory too: cd <ancestor> && rgt init --agent
+// claude". A real user took the printed command, and it did what it says —
+// created a .regent/ at the ancestor, into which every project underneath now
+// records one blended history (#27).
+func TestShadowRemedyLeadsWithOpeningTheAgentInTheProject(t *testing.T) {
+	workspace := "/Users/dev/Documents/GitHub"
+	project := filepath.Join(workspace, "tsenta-agent")
+
+	remedy := claudeShadowRemedy(project, claudeWorkspaceShadow{Dir: workspace})
+
+	openHere := strings.Index(remedy, "cd "+project)
+	wireAncestor := strings.Index(remedy, "rgt init --agent claude")
+	if openHere < 0 {
+		t.Fatalf("the remedy never tells the user to open the agent in the project:\n%s", remedy)
+	}
+	if wireAncestor >= 0 && wireAncestor < openHere {
+		t.Errorf("the remedy still leads with wiring the ancestor, which is the advice that broke a real install:\n%s", remedy)
+	}
+}
+
+// Mentioning the ancestor-wide option is fine. Mentioning it without saying
+// what it costs is what made it look like the fix.
+func TestShadowRemedyStatesWhatWiringTheAncestorCosts(t *testing.T) {
+	workspace := "/Users/dev/Documents/GitHub"
+	project := filepath.Join(workspace, "tsenta-agent")
+
+	remedy := claudeShadowRemedy(project, claudeWorkspaceShadow{Dir: workspace})
+
+	if !strings.Contains(remedy, "rgt init --agent claude") {
+		t.Skip("the remedy no longer offers the ancestor-wide option, so there is no consequence to state")
+	}
+	// The consequence is that this project's history goes somewhere else. Naming
+	// that directory is the load-bearing part: it is what the user would
+	// otherwise have to derive from the architecture.
+	if !strings.Contains(remedy, filepath.Join(workspace, ".regent")) {
+		t.Errorf("the ancestor-wide option is offered without naming where the history would land:\n%s", remedy)
+	}
+	if !strings.Contains(remedy, "every project") {
+		t.Errorf("the ancestor-wide option is offered without saying it blends every project below it:\n%s", remedy)
+	}
+}
+
+// The second failure in #27, at the text layer. Once the ancestor is wired,
+// re-offering "wire the ancestor" is advice to do what has already been done —
+// and it was the thing that went wrong. What is left to say is where the work
+// is going now, and how to stop it.
+func TestShadowRemedyForAWiredAncestorDoesNotReofferWiringIt(t *testing.T) {
+	workspace := "/Users/dev/Documents/GitHub"
+	project := filepath.Join(workspace, "tsenta-agent")
+
+	remedy := claudeShadowRemedy(project, claudeWorkspaceShadow{Dir: workspace, Wired: true})
+
+	if strings.Contains(remedy, "rgt init --agent claude") {
+		t.Errorf("the remedy tells the user to wire an ancestor that is already wired:\n%s", remedy)
+	}
+	if !strings.Contains(remedy, filepath.Join(workspace, ".regent")) {
+		t.Errorf("the remedy never says where the work is actually being recorded:\n%s", remedy)
+	}
+	if !strings.Contains(remedy, "cd "+project) {
+		t.Errorf("the remedy never gives the user a way out:\n%s", remedy)
+	}
+}
+
 // This is the guard for the risk that made the absolute-path change dangerous
 // rather than trivial.
 //

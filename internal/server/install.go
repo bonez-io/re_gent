@@ -192,6 +192,27 @@ if ! rgt doctor; then
   warn "Nothing will be captured until those problems are fixed."
   exit 1
 fi
+
+# ---------------------------------------------------------------------------
+# 7. End on the one thing the installer cannot do.
+# ---------------------------------------------------------------------------
+# Everything above this line, the paste did. Loading the hooks is the agent's
+# job, and it only loads the ones belonging to the directory it was started in
+# — so an agent opened above this project loads that directory's settings and,
+# because capture resolves its store from the session's working directory,
+# records its work there instead. That is #27, in both of the wrong places it
+# ended: a project that captured nothing, and then a project whose history was
+# quietly accumulating one directory up.
+#
+# So the run ends with an instruction rather than a summary. It is the same
+# instruction whether or not doctor found a shadowing directory above — doctor
+# names that case specifically, and this is the move that answers it either way.
+printf '\n'
+info "One thing left, and only you can do it: open your agent IN this project."
+info "  cd $(pwd) && claude        # or codex, or whichever agent you use"
+info "Started from a directory above this one, the agent loads that directory's"
+info "hooks and records its work there instead of here."
+info "Agents read hooks at startup, so restart any session already open here."
 printf '\n'
 `))
 

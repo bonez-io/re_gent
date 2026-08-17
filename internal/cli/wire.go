@@ -266,48 +266,120 @@ func reportWired(agent, path string) {
 // Where the settings *should* live is deliberately not decided here. Writing
 // them to the ancestor would impose re_gent's hooks on every other project
 // underneath it, which is a bigger claim than a project-level init is entitled
-// to make. So both directories are named and the choice stays with the user.
+// to make. So both directories are named and the choice stays with the user —
+// but the recommendation is no longer neutral between them, because the two
+// outcomes are not equivalent. See claudeShadowRemedy.
 func reportClaudeSettingsScope(projectRoot string) {
 	shadow := shadowingClaudeWorkspace(projectRoot)
-	if shadow == "" {
+	if !shadow.found() {
 		return
 	}
-	fmt.Printf("  %s An agent opened at %s will not load them.\n", style.Warning(""), shadow)
-	fmt.Printf("    Claude Code reads .claude/settings.json from the directory it was opened in,\n")
-	fmt.Printf("    and that one has its own .claude/ with no re_gent hook. Either open the agent\n")
-	fmt.Printf("    in this project, or wire that directory too:\n")
-	fmt.Printf("      cd %s && rgt init --agent claude\n", shadow)
+	fmt.Printf("  %s An agent opened at %s will not load them.\n", style.Warning(""), shadow.Dir)
+	for _, line := range strings.Split(claudeShadowRemedy(projectRoot, shadow), "\n") {
+		fmt.Printf("    %s\n", line)
+	}
 }
 
 // shadowingClaudeWorkspace returns the nearest directory above projectRoot that
 // an agent could be opened at and would then not load this project's hooks, or
-// "" when there is no such directory.
+// the zero value when there is no such directory.
 //
 // A .claude/ directory is the marker of a place an agent gets opened, so the
-// nearest ancestor holding one is the candidate. It is only a problem when that
-// directory has no re_gent hook of its own — an ancestor that is already wired
-// captures the work either way, and warning about it would be noise.
+// nearest ancestor holding one is the candidate.
+//
+// Whether that ancestor is itself wired is reported, not used to dismiss it.
+// This used to return "no shadow here" the moment the ancestor had a re_gent
+// hook, on the reasoning that an already-wired ancestor "captures the work
+// either way". It does capture — into the ancestor's own .regent/, because
+// capture.Open resolves its store from the agent session's working directory
+// (cwd/.regent, no upward walk). So the work lands one directory up, blended
+// with every other project under it, this project's .regent/ stays empty, and
+// doctor printed four green ticks over it (#27). "Captured somewhere" and "this
+// project is fine" are two facts, and only the caller can decide what to say
+// about the difference.
 //
 // The user's home directory is skipped: ~/.claude is user scope and Claude Code
 // loads it wherever it is opened, so it can never be the reason a hook fails to
 // fire. Almost every machine has one, and treating it as a shadow would make
 // this warning fire on every project on the box.
-func shadowingClaudeWorkspace(projectRoot string) string {
+func shadowingClaudeWorkspace(projectRoot string) claudeWorkspaceShadow {
 	home, _ := os.UserHomeDir()
 	dir := filepath.Dir(projectRoot)
 	for {
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return ""
+			return claudeWorkspaceShadow{}
 		}
 		if dir != home && pathExists(filepath.Join(dir, ".claude")) {
-			if claudeSettingsFileHasRegentHook(filepath.Join(dir, ".claude", "settings.json")) {
-				return ""
+			return claudeWorkspaceShadow{
+				Dir:   dir,
+				Wired: claudeSettingsFileHasRegentHook(filepath.Join(dir, ".claude", "settings.json")),
 			}
-			return dir
 		}
 		dir = parent
 	}
+}
+
+// claudeWorkspaceShadow names an ancestor directory an agent could be opened at
+// instead of this project, and says whether that directory is itself wired.
+//
+// The two fields carry the two outcomes apart, because they are not the same
+// loss. Unwired, a session opened there captures nothing anywhere. Wired, it
+// captures — somewhere else. The first is a failure and the second a warning,
+// and collapsing them is what produced both halves of #27.
+type claudeWorkspaceShadow struct {
+	Dir   string
+	Wired bool
+}
+
+// found reports whether there is such an ancestor at all.
+func (s claudeWorkspaceShadow) found() bool { return s.Dir != "" }
+
+// claudeShadowRemedy is the advice `rgt init`, `rgt connect` and `rgt doctor`
+// all print about a shadowing ancestor. One builder, because three commands
+// describing the same situation in three ways is how the wrong one survived.
+//
+// It leads with opening the agent inside the project, which is the layout the
+// whole model is built for: hook loaded from the project, cwd inside it,
+// history in its own .regent/. The previous advice led with
+// `cd <ancestor> && rgt init --agent claude` and called it the fix. It is not:
+// capture resolves a project from the session's working directory, so wiring
+// the ancestor makes every project underneath record into one blended history
+// at the top, where `rgt log` in the project shows nothing and `rgt blame` on
+// one of its files reads a session that also touched four other repos. A real
+// user followed that advice and landed in a worse state than they started (#27).
+//
+// The ancestor-wide alternative is still named — it is a legitimate choice for
+// someone who genuinely wants one history across a workspace — but with its
+// consequence attached, and only while it is still a choice. Once the ancestor
+// is wired, the consequence has already happened and is described in the past
+// tense by shadowConsequence instead.
+func claudeShadowRemedy(projectRoot string, shadow claudeWorkspaceShadow) string {
+	lines := []string{
+		shadowConsequence(shadow),
+		fmt.Sprintf("open the agent inside this project — cd %s && claude — and its work is recorded in %s",
+			projectRoot, filepath.Join(projectRoot, ".regent")),
+	}
+	if !shadow.Wired {
+		lines = append(lines, fmt.Sprintf(
+			"wiring %s instead (rgt init --agent claude there) also captures, but into a single history at %s shared by every project under it — rgt log and rgt blame in this project would still show nothing",
+			shadow.Dir, filepath.Join(shadow.Dir, ".regent")))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// shadowConsequence states what happens today, which is the fact the user is
+// actually missing. Naming the directory the work lands in is what turns an
+// empty `rgt log` from a mystery into an explanation.
+func shadowConsequence(shadow claudeWorkspaceShadow) string {
+	if shadow.Wired {
+		return fmt.Sprintf(
+			"an agent opened at %s loads that directory's .claude/settings.json, not this project's. It is wired, so the work is recorded — in %s, blended with every other project below it, while this project's own .regent/ stays empty",
+			shadow.Dir, filepath.Join(shadow.Dir, ".regent"))
+	}
+	return fmt.Sprintf(
+		"an agent opened at %s loads that directory's .claude/settings.json, not this project's, and that one has no re_gent hook — nothing would be captured, there or here",
+		shadow.Dir)
 }
 
 // hookOptions selects how configureHooks behaves. The zero value is the

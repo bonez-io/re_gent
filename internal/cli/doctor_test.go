@@ -316,6 +316,108 @@ func TestClaudeHookIsRecognisedWhateverTheBinaryIsCalled(t *testing.T) {
 	}
 }
 
+// The user's exact situation, reported ten minutes after the one-line install
+// (#27). Claude Code is kept open at ~/Documents/GitHub; the project is
+// ~/Documents/GitHub/tsenta-agent. The install wired the project, doctor
+// objected that the ancestor was unwired and advised wiring it, they did — and
+// doctor then printed four green ticks over a project whose .regent/ had been
+// empty ever since, because every step was landing in the ancestor's.
+//
+// Both directories are wired here. That is the state the old advice produced,
+// and the state in which shadowingClaudeWorkspace returned "" — reading "the
+// ancestor has a hook" as "this project is fine". They are different questions:
+// capture resolves its store from the agent session's working directory
+// (capture.Open opens cwd/.regent, with no upward walk), so a session opened at
+// the ancestor records there and nothing this project can be told about its own
+// settings.json changes that.
+func TestDoctorIsNotHealthyWhenAWiredAncestorCapturesInstead(t *testing.T) {
+	workspace := t.TempDir()
+	mustMkdir(t, filepath.Join(workspace, ".claude"))
+	mustWrite(t, filepath.Join(workspace, ".claude", "settings.json"), wiredClaudeSettings)
+	mustMkdir(t, filepath.Join(workspace, ".regent"))
+
+	project := filepath.Join(workspace, "tsenta-agent")
+	mustMkdir(t, filepath.Join(project, ".claude"))
+	mustWrite(t, filepath.Join(project, ".claude", "settings.json"), wiredClaudeSettings)
+	mustMkdir(t, filepath.Join(project, ".regent"))
+
+	finding := claudeHookFinding(project)
+
+	if finding.OK {
+		t.Errorf("doctor reports this project healthy, but an agent opened at %s records into %s and rgt log here stays empty: %s",
+			workspace, filepath.Join(workspace, ".regent"), finding.Detail)
+	}
+	// Not healthy is half the promise. The other half is that the report says
+	// where the work actually goes, which is the one fact that makes the empty
+	// log explicable rather than mysterious.
+	//
+	// Asserted on the ancestor's .regent/ and not on the ancestor itself: the
+	// project path has the ancestor path as a prefix, so merely naming the
+	// project would satisfy a Contains check on it. Found by mutation — the
+	// looser assertion survived a revert to the original bug.
+	if !strings.Contains(finding.Detail, filepath.Join(workspace, ".regent")) {
+		t.Errorf("doctor never names the directory the work would be recorded in: %s", finding.Detail)
+	}
+}
+
+// The severity half, and it decides the installer's exit code: `curl … | sh`
+// ends in `rgt doctor` and unwinds on non-zero.
+//
+// A wired ancestor is a warning, not a failure, because capture genuinely
+// works — the steps are recorded, just at the ancestor and blended with every
+// other project under it. Failing here would print "Nothing will be captured
+// until those problems are fixed" over a machine where things are in fact being
+// captured, and would abort an install that had already done everything an
+// installer can do. The remaining move — opening the agent inside the project —
+// is not one rgt can make.
+func TestAWiredAncestorWarnsWithoutUnwindingTheInstall(t *testing.T) {
+	workspace := t.TempDir()
+	mustMkdir(t, filepath.Join(workspace, ".claude"))
+	mustWrite(t, filepath.Join(workspace, ".claude", "settings.json"), wiredClaudeSettings)
+
+	project := filepath.Join(workspace, "tsenta-agent")
+	mustMkdir(t, filepath.Join(project, ".claude"))
+	mustWrite(t, filepath.Join(project, ".claude", "settings.json"), wiredClaudeSettings)
+
+	finding := claudeHookFinding(project)
+
+	if finding.Severity != severityWarning {
+		t.Errorf("a wired ancestor is fatal to doctor's exit code, so the one-line install aborts on a machine that is capturing: %s", finding.Detail)
+	}
+	if hasFailures([]doctorFinding{finding}) {
+		t.Error("hasFailures true for a wired ancestor; the installer would report a working setup as ruined")
+	}
+}
+
+// The other direction, and the reason the case above is only a warning: with
+// the ancestor unwired, a session opened there loads its own settings.json,
+// finds no re_gent hook, and captures nothing anywhere. That is total loss and
+// must keep blocking.
+func TestAnUnwiredAncestorStillFailsDoctor(t *testing.T) {
+	workspace := t.TempDir()
+	mustMkdir(t, filepath.Join(workspace, ".claude"))
+	mustWrite(t, filepath.Join(workspace, ".claude", "settings.json"), `{"hooks":{}}`)
+
+	project := filepath.Join(workspace, "tsenta-agent")
+	mustMkdir(t, filepath.Join(project, ".claude"))
+	mustWrite(t, filepath.Join(project, ".claude", "settings.json"), wiredClaudeSettings)
+
+	finding := claudeHookFinding(project)
+
+	if finding.OK {
+		t.Errorf("doctor reports healthy while an agent opened at %s would capture nothing at all: %s", workspace, finding.Detail)
+	}
+	if finding.Severity != severityFailure {
+		t.Error("an unwired shadowing ancestor no longer blocks; the install would exit 0 having arranged for nothing to be captured")
+	}
+}
+
+// wiredClaudeSettings is the shape wireAgents leaves behind: a settings file
+// whose hook invokes one of re_gent's subcommands. Spelled with the bare name
+// on purpose — isRegentHookCommand identifies our hooks by the subcommand, not
+// the binary's path, so this is as real a hook as an absolute one.
+const wiredClaudeSettings = `{"hooks":{"PostToolUse":[{"hooks":[{"type":"command","command":"rgt tool-batch-hook"}]}]}}`
+
 // The other half of the same judgement, and the reason the check exists: a
 // settings file full of somebody else's hooks must still report that nothing
 // of ours is wired. Without this, "always OK" would satisfy the test above and

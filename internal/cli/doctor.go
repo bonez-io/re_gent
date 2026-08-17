@@ -342,17 +342,33 @@ func claudeHookFinding(projectRoot string) doctorFinding {
 		}
 	}
 
-	// A hook in the right file is not the same fact as a hook the agent loads.
-	// This check reads the same path init wrote and used to stop here, which is
-	// how a project whose agent is opened one directory up got a clean bill of
-	// health while capture never started. See shadowingClaudeWorkspace.
-	if shadow := shadowingClaudeWorkspace(projectRoot); shadow != "" {
+	// A hook in the right file is not the same fact as a hook the agent loads,
+	// and neither is the same fact as a hook that records *here*. This check
+	// reads the same path init wrote and used to stop here, which is how a
+	// project whose agent is opened one directory up got a clean bill of health
+	// while capture never started. See shadowingClaudeWorkspace.
+	//
+	// Severity splits on whether the ancestor is wired, because the two states
+	// differ in what is true, and doctor's exit code is the one-line installer's
+	// exit code (see findingSeverity):
+	//
+	//   - Unwired: a session opened up there captures nothing, anywhere. There
+	//     is no sense in which this machine is recording, so it blocks.
+	//   - Wired: the steps are recorded, in the ancestor's .regent/ rather than
+	//     this one's. Failing would abort the install with "nothing will be
+	//     captured" over a machine that is capturing, and the move that fixes it
+	//     — opening the agent inside the project — is not one rgt can make on
+	//     the user's behalf. It warns, loudly, and never reports OK (#27).
+	if shadow := shadowingClaudeWorkspace(projectRoot); shadow.found() {
+		severity := severityFailure
+		if shadow.Wired {
+			severity = severityWarning
+		}
 		return doctorFinding{
-			Name: "claude hooks",
-			OK:   false,
-			Detail: fmt.Sprintf(
-				"wrote %s\nan agent opened at %s loads its own .claude/settings.json instead, and that one has no re_gent hook — nothing would be captured there\nwire that directory too: cd %s && rgt init --agent claude",
-				path, shadow, shadow),
+			Name:     "claude hooks",
+			OK:       false,
+			Severity: severity,
+			Detail:   fmt.Sprintf("wrote %s\n%s", path, claudeShadowRemedy(projectRoot, shadow)),
 		}
 	}
 
