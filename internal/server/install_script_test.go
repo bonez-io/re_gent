@@ -102,7 +102,7 @@ func TestInstallAlwaysReinstalls(t *testing.T) {
 	}
 }
 
-// TestInstallHandsOverToSetup is the one-command onboarding promise: installing
+// TestInstallHandsOverToConnect is the one-command onboarding promise: installing
 // leads straight into wiring, so nobody has to run a separate command.
 //
 // This test previously branched on whether a terminal existed, asserting that
@@ -111,10 +111,10 @@ func TestInstallAlwaysReinstalls(t *testing.T) {
 // onboarding happens in devcontainers, over SSH and in CI, so the no-terminal
 // path is the main path, not a degraded one. The branch is gone and the
 // promise is now unconditional.
-func TestInstallHandsOverToSetup(t *testing.T) {
+func TestInstallHandsOverToConnect(t *testing.T) {
 	_, calls, url := runInstaller(t, t.TempDir())
 
-	if want := "setup " + url; !strings.Contains(calls, want) {
+	if want := "connect " + url; !strings.Contains(calls, want) {
 		t.Errorf("installer should hand over to %q; calls were:\n%s", want, calls)
 	}
 }
@@ -132,7 +132,7 @@ func TestInstallHandsOverToSetup(t *testing.T) {
 func TestInstallWiresWithoutATerminal(t *testing.T) {
 	out, calls, url := runInstaller(t, t.TempDir())
 
-	if want := "setup " + url; !strings.Contains(calls, want) {
+	if want := "connect " + url; !strings.Contains(calls, want) {
 		t.Errorf("installer must wire the project with or without a terminal;\nwanted a call to %q\ncalls were:\n%s\ninstaller output was:\n%s", want, calls, out)
 	}
 }
@@ -150,7 +150,7 @@ func TestInstallWiresWithoutATerminal(t *testing.T) {
 // nothing.
 //
 // Depending on a terminal at all is the defect. Wiring is now unconditional and
-// rgt setup decides, so any reappearance of /dev/tty here is a regression.
+// rgt connect decides, so any reappearance of /dev/tty here is a regression.
 func TestInstallScriptDoesNotDependOnATerminal(t *testing.T) {
 	_, _, ts := newTestServer(t)
 	if script := fetchInstallScript(t, ts.URL); strings.Contains(script, "/dev/tty") {
