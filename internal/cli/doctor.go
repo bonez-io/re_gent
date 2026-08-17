@@ -12,11 +12,34 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// findingSeverity separates the two kinds of bad news doctor can deliver.
+//
+// The distinction exists because doctor's exit code is also the installer's
+// exit code: `curl … | sh` ends in `rgt doctor` and unwinds on a non-zero
+// status. Without the distinction, everything doctor disliked was grounds to
+// abort a working install — which is what happened to unconfigured git
+// identity, the one condition a fresh VPS, container image or CI runner is
+// almost guaranteed to be in.
+type findingSeverity int
+
+const (
+	// severityFailure means capture cannot work until this is fixed: no
+	// repository, no hooks, no agent host. The zero value, so a finding that
+	// says nothing about severity blocks — new checks have to opt in to being
+	// merely advisory, never out of it by omission.
+	severityFailure findingSeverity = iota
+	// severityWarning means capture works but something about it is degraded.
+	// Worth interrupting a person for, not worth undoing an install for.
+	severityWarning
+)
+
 // doctorFinding is one checked fact about this machine.
 type doctorFinding struct {
-	Name   string
-	OK     bool
-	Detail string
+	Name string
+	OK   bool
+	// Severity is only consulted when OK is false.
+	Severity findingSeverity
+	Detail   string
 }
 
 // DoctorCmd reports whether re_gent is actually wired up here.
@@ -46,7 +69,11 @@ func DoctorCmd() *cobra.Command {
 			findings := diagnose(cwd)
 			printFindings(findings)
 
-			if !allOK(findings) {
+			// Only failure-level findings set the exit code. Doctor's question
+			// is "will this project capture anything", and a warning is a
+			// finding where the answer is still yes. Warnings are printed
+			// either way — they are reported, just not fatal.
+			if hasFailures(findings) {
 				return fmt.Errorf("re_gent is not fully wired up in %s", cwd)
 			}
 			return nil
@@ -89,15 +116,22 @@ func diagnose(projectRoot string) []doctorFinding {
 // second identity system would be a login to build, run, and keep in sync. The
 // weakness of that choice is silence: with git identity unset, every step is
 // still recorded, just anonymously, and nothing says so until someone looks at
-// a session listing months later and finds no one to ask. Failing here is the
+// a session listing months later and finds no one to ask. Saying it here is the
 // signal at the only moment it is still cheap to act on.
+//
+// It is a warning and not a failure. Capture works without it — the steps are
+// recorded, only unattributed — and doctor is the last line of the `curl … |
+// sh` installer, so failing here aborted installs on precisely the machines
+// that have no identity to find: fresh VPS, container image, CI runner. The
+// install had already done everything it needed to do by the time this ran.
 func identityFinding() doctorFinding {
 	author := capture.ResolveAuthor()
 	if author.Name == "" && author.Email == "" {
 		return doctorFinding{
-			Name:   "git identity",
-			OK:     false,
-			Detail: "no git identity configured; sessions will be recorded with no author. Run git config --global user.name \"Your Name\" and git config --global user.email you@example.com",
+			Name:     "git identity",
+			OK:       false,
+			Severity: severityWarning,
+			Detail:   "no git identity configured; steps will be recorded anonymously, with no author. Run git config --global user.name \"Your Name\" and git config --global user.email you@example.com",
 		}
 	}
 	return doctorFinding{Name: "git identity", OK: true, Detail: formatAuthor(author)}
@@ -214,6 +248,9 @@ func agentPresent(projectRoot, markerDir, binary string) bool {
 	return pathExists(filepath.Join(projectRoot, markerDir)) || commandExists(binary)
 }
 
+// allOK reports whether every check passed, warnings included. It answers "is
+// there anything to tell the user", which is a different question from whether
+// doctor should fail — see hasFailures.
 func allOK(findings []doctorFinding) bool {
 	for _, f := range findings {
 		if !f.OK {
@@ -221,6 +258,18 @@ func allOK(findings []doctorFinding) bool {
 		}
 	}
 	return true
+}
+
+// hasFailures reports whether anything found would stop capture from working.
+// This, and not allOK, is what decides doctor's exit code, and through it
+// whether the one-line installer treats the install as ruined.
+func hasFailures(findings []doctorFinding) bool {
+	for _, f := range findings {
+		if !f.OK && f.Severity == severityFailure {
+			return true
+		}
+	}
+	return false
 }
 
 func printFindings(findings []doctorFinding) {
@@ -233,7 +282,14 @@ func printFindings(findings []doctorFinding) {
 			}
 			continue
 		}
-		fmt.Printf("  %s %s\n", style.Warning(""), f.Name)
+		// Warnings and failures used to render identically, which left the
+		// reader to work out from the prose which lines were the reason the
+		// command exited non-zero. The marker now says it.
+		marker := style.Error("")
+		if f.Severity == severityWarning {
+			marker = style.Warning("")
+		}
+		fmt.Printf("  %s %s\n", marker, f.Name)
 		if f.Detail != "" {
 			fmt.Printf("      %s\n", f.Detail)
 		}
