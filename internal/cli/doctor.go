@@ -348,26 +348,31 @@ func claudeHookFinding(projectRoot string) doctorFinding {
 	// project whose agent is opened one directory up got a clean bill of health
 	// while capture never started. See shadowingClaudeWorkspace.
 	//
-	// Severity splits on whether the ancestor is wired, because the two states
-	// differ in what is true, and doctor's exit code is the one-line installer's
-	// exit code (see findingSeverity):
+	// It is a warning whether or not the ancestor is wired, because in neither
+	// case does doctor know the thing that would make it a verdict: which
+	// directory the user opens their agent in. It can only see that some
+	// ancestor has a .claude/ — true on any machine where an agent was ever
+	// started above this project, and true of a directory holding nothing but
+	// the settings.local.json Claude Code writes by itself.
 	//
-	//   - Unwired: a session opened up there captures nothing, anywhere. There
-	//     is no sense in which this machine is recording, so it blocks.
-	//   - Wired: the steps are recorded, in the ancestor's .regent/ rather than
-	//     this one's. Failing would abort the install with "nothing will be
-	//     captured" over a machine that is capturing, and the move that fixes it
-	//     — opening the agent inside the project — is not one rgt can make on
-	//     the user's behalf. It warns, loudly, and never reports OK (#27).
+	// This first shipped as a failure when the ancestor was unwired, reasoning
+	// that a session opened up there would capture nothing anywhere. The
+	// reasoning holds; the certainty did not. The owner of this repo opens his
+	// agent inside his projects, and the one-line installer ended "Setup ran,
+	// but verification failed. Nothing will be captured until those problems
+	// are fixed." over a project that captures perfectly — the same "reports
+	// something other than what is true" defect this check was built to remove,
+	// aimed the other way. Doctor's exit code is the installer's exit code (see
+	// findingSeverity), so a false verdict here unwinds a good install.
+	//
+	// It never reports OK. The hazard is real and has to be said; it is simply
+	// not something doctor is in a position to decide (#27, and #29 for letting
+	// the user record the answer once).
 	if shadow := shadowingClaudeWorkspace(projectRoot); shadow.found() {
-		severity := severityFailure
-		if shadow.Wired {
-			severity = severityWarning
-		}
 		return doctorFinding{
 			Name:     "claude hooks",
 			OK:       false,
-			Severity: severity,
+			Severity: severityWarning,
 			Detail:   fmt.Sprintf("wrote %s\n%s", path, claudeShadowRemedy(projectRoot, shadow)),
 		}
 	}

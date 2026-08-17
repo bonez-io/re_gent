@@ -377,8 +377,12 @@ func shadowConsequence(shadow claudeWorkspaceShadow) string {
 			"an agent opened at %s loads that directory's .claude/settings.json, not this project's. It is wired, so the work is recorded — in %s, blended with every other project below it, while this project's own .regent/ stays empty",
 			shadow.Dir, filepath.Join(shadow.Dir, ".regent"))
 	}
+	// Conditional, not a verdict. Whether this bites depends on where the user
+	// opens their agent, which nothing here can see — stating it flatly told
+	// someone who opens the agent inside the project that nothing would be
+	// captured, while it was being captured correctly.
 	return fmt.Sprintf(
-		"an agent opened at %s loads that directory's .claude/settings.json, not this project's, and that one has no re_gent hook — nothing would be captured, there or here",
+		"if you open your agent at %s, it loads that directory's .claude/settings.json rather than this project's, and that one has no re_gent hook — nothing would be captured, there or here",
 		shadow.Dir)
 }
 

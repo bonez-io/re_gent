@@ -141,8 +141,16 @@ func TestE2EInitAndDoctorReportSettingsTheAgentAboveWillNotLoad(t *testing.T) {
 	if !namesDirectoryAlone(doctorOut, workspacePath, project) {
 		t.Errorf("doctor does not report the mismatch init warned about:\n%s", doctorOut)
 	}
-	if err == nil {
-		t.Errorf("doctor exited 0 with capture that will never start:\n%s", doctorOut)
+	// And it exits zero. The project is wired; whether the workspace root above
+	// it matters depends on where the user opens their agent, which doctor
+	// cannot see. This asserted failure until the repo owner — who opens his
+	// agent inside his projects — was told by the one-line installer that
+	// nothing would be captured, over a project that was capturing correctly.
+	// Doctor's exit code is the installer's exit code, so the false verdict
+	// unwound a good install. The warning above is the report; this is the
+	// absence of a verdict.
+	if err != nil {
+		t.Errorf("doctor exited non-zero over a correctly wired project, because of where an agent might be opened:\n%s", doctorOut)
 	}
 }
 

@@ -393,7 +393,27 @@ func TestAWiredAncestorWarnsWithoutUnwindingTheInstall(t *testing.T) {
 // the ancestor unwired, a session opened there loads its own settings.json,
 // finds no re_gent hook, and captures nothing anywhere. That is total loss and
 // must keep blocking.
-func TestAnUnwiredAncestorStillFailsDoctor(t *testing.T) {
+// A project that is correctly wired must never be declared broken because of
+// where an agent *might* be opened.
+//
+// Doctor cannot see which directory the user opens their agent in. It can only
+// see that some ancestor has a .claude/ — true on any machine where an agent
+// was ever started above this project, and true of a directory holding nothing
+// but the settings.local.json Claude Code writes by itself. Turning that into
+// "nothing will be captured" tells a user doing exactly the right thing that
+// their setup is broken, and exits the one-line installer non-zero over a
+// project that captures perfectly.
+//
+// That is the same "reports something other than what is true" failure the rest
+// of this file exists to remove, pointed the other way. This replaced an
+// earlier test asserting the opposite, written while the unwired ancestor was
+// assumed to be where the agent runs.
+//
+// From a real install: the owner opens the agent inside the project, the
+// project's own hook is present, its binary resolves — and the installer still
+// ended "Setup ran, but verification failed. Nothing will be captured until
+// those problems are fixed."
+func TestAWiredProjectIsNotDeclaredBrokenBecauseAnAncestorMightBeOpened(t *testing.T) {
 	workspace := t.TempDir()
 	mustMkdir(t, filepath.Join(workspace, ".claude"))
 	mustWrite(t, filepath.Join(workspace, ".claude", "settings.json"), `{"hooks":{}}`)
@@ -404,11 +424,13 @@ func TestAnUnwiredAncestorStillFailsDoctor(t *testing.T) {
 
 	finding := claudeHookFinding(project)
 
-	if finding.OK {
-		t.Errorf("doctor reports healthy while an agent opened at %s would capture nothing at all: %s", workspace, finding.Detail)
+	if finding.Severity == severityFailure {
+		t.Errorf("doctor blocks a correctly wired project over where an agent might be opened, which it cannot know; the one-line install exits non-zero saying nothing will be captured:\n%s", finding.Detail)
 	}
-	if finding.Severity != severityFailure {
-		t.Error("an unwired shadowing ancestor no longer blocks; the install would exit 0 having arranged for nothing to be captured")
+	// It must still say something. The ancestor is a real hazard, just not a
+	// verdict — and silence here is the original bug coming back.
+	if finding.OK {
+		t.Errorf("doctor says nothing at all about %s; a user who does open their agent there gets no warning", workspace)
 	}
 }
 

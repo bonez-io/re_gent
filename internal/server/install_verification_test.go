@@ -215,8 +215,16 @@ func TestInstallShadowedByAnUnwiredWorkspaceLeadsWithOpeningTheAgentHere(t *test
 		workspaceClaudeSettings: nothingWired,
 	})
 
-	if run.exitedZero {
-		t.Errorf("install exited 0 while an agent opened at %s would capture nothing at all.\noutput:\n%s", run.workspace, run.out)
+	// The install must NOT unwind here. Whether the ancestor matters depends on
+	// where the user opens their agent, which nothing in the install can see;
+	// this project is wired and its binary resolves. Asserting failure was
+	// asserting a fact we do not have — the repo owner, who opens his agent
+	// inside his projects, got "Setup ran, but verification failed. Nothing
+	// will be captured until those problems are fixed." over a project that
+	// captures perfectly. What the install owes him is the warning and the one
+	// action left, not a verdict.
+	if !run.exitedZero {
+		t.Errorf("install exited non-zero over a project that is wired correctly, because of where an agent might be opened.\noutput:\n%s", run.out)
 	}
 	openHere := strings.Index(run.out, "open the agent inside this project")
 	if openHere < 0 {
