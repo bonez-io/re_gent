@@ -145,6 +145,15 @@ func TestSyncDeliversAndThenReportsClean(t *testing.T) {
 	if !strings.Contains(out, "Up to date") {
 		t.Errorf("status after delivery = %q, want 'Up to date'", out)
 	}
+
+	out, err = runSyncCapturingOutput(t, f.cfg, syncOptions{})
+	if err != nil {
+		t.Fatalf("second runSync: %v", err)
+	}
+	const cleanMessage = "Up to date — all captured steps are already synced.\n"
+	if out != cleanMessage {
+		t.Errorf("clean sync output = %q, want %q", out, cleanMessage)
+	}
 }
 
 func TestSyncReportsFailureWithoutLosingWork(t *testing.T) {

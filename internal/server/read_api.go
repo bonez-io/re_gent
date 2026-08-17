@@ -365,6 +365,12 @@ func (s *Server) stepToJSON(st *store.Store, repoID string, hash store.Hash, ste
 func (s *Server) conversationMessages(st *store.Store, repoID string, convHash store.Hash) []MessageJSON {
 	out := []MessageJSON{}
 	for _, e := range s.conversationEntries(st, repoID, convHash) {
+		// Tool calls/results are exposed through the step's causes. Modern
+		// conversation blobs also carry them to preserve local ordering after a
+		// pull, but the read API's message shape only represents text roles.
+		if e.Type != "user" && e.Type != "assistant" && e.Type != "reasoning" {
+			continue
+		}
 		out = append(out, MessageJSON{
 			Type:    e.Type,
 			Message: MessageBody{Role: e.Type, Content: e.Text},

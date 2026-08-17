@@ -204,7 +204,7 @@ func runPush(ctx context.Context, out io.Writer, cache *store.Store, client remo
 		return syncFailure(res.Err())
 	}
 	if len(res.Refs) == 0 && res.Objects == 0 {
-		fmt.Fprintln(out, "Nothing queued: the server has everything captured locally.")
+		fmt.Fprintln(out, "Up to date — all captured steps are already synced.")
 	}
 	return nil
 }
@@ -291,10 +291,10 @@ func rebuildDerived(cache *store.Store, idx *index.DB, tip store.Hash) (int, err
 		if err != nil {
 			return 0, err
 		}
-		if err := idx.UpsertSession(index.SessionUpdate{ID: step.SessionID, Origin: step.Origin}); err != nil {
+		if err := idx.IndexStep(stepHash, step, tree); err != nil {
 			return 0, err
 		}
-		if err := idx.IndexStep(stepHash, step, tree); err != nil {
+		if err := rebuildConversation(cache, idx, stepHash, step); err != nil {
 			return 0, err
 		}
 		if err := capture.ComputeAndWriteBlame(cache, step.Parent, stepHash, step.Tree); err != nil {

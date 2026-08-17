@@ -177,17 +177,23 @@ func TestRecorder_StepPersistsConversationBlob(t *testing.T) {
 		t.Fatalf("unmarshal conversation blob: %v", err)
 	}
 
-	var foundPrompt bool
+	var foundPrompt, foundToolCall, foundToolResult bool
 	for _, e := range entries {
-		if e.Type == "tool_call" || e.Type == "tool_result" {
-			t.Fatalf("conversation blob must not contain tool messages, got %q", e.Type)
-		}
 		if e.Type == "user" && e.Text == prompt {
 			foundPrompt = true
+		}
+		if e.Type == "tool_call" && e.ToolUseID == "call_1" && e.ToolInput != "" {
+			foundToolCall = true
+		}
+		if e.Type == "tool_result" && e.ToolUseID == "call_1" && e.ToolOutput != "" {
+			foundToolResult = true
 		}
 	}
 	if !foundPrompt {
 		t.Fatalf("conversation blob missing the user prompt; entries = %#v", entries)
+	}
+	if !foundToolCall || !foundToolResult {
+		t.Fatalf("conversation blob missing normalized tool rows; entries = %#v", entries)
 	}
 }
 

@@ -788,28 +788,35 @@ func causesFromMessages(messages []index.Message) []store.Cause {
 	return causes
 }
 
-// conversationEntry is one user/assistant/reasoning message preserved in a
-// step's conversation blob.
+// conversationEntry is one normalized message preserved in a step's portable
+// conversation blob. Tool payloads remain content-addressed blobs; storing
+// their hashes here preserves the original sequence without duplicating data.
 type conversationEntry struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-	TS   int64  `json:"ts,omitempty"`
+	Type       string `json:"type"`
+	Text       string `json:"text,omitempty"`
+	TS         int64  `json:"ts,omitempty"`
+	ToolName   string `json:"tool_name,omitempty"`
+	ToolUseID  string `json:"tool_use_id,omitempty"`
+	ToolInput  string `json:"tool_input,omitempty"`
+	ToolOutput string `json:"tool_output,omitempty"`
 }
 
-// conversationBlob content-addresses the turn's conversation — the user prompt
-// and the assistant/reasoning narration — and returns its hash. Tool calls and
-// results are skipped because they already travel with the step as Causes. It
-// returns an empty hash and writes nothing when the turn has no such messages,
-// which keeps steps without conversation text byte-identical.
+// conversationBlob content-addresses the turn's normalized conversation and
+// returns its hash. It returns an empty hash and writes nothing when the turn
+// has no messages, which keeps steps without conversation byte-identical.
 func conversationBlob(s *store.Store, messages []index.Message) (store.Hash, error) {
 	var entries []conversationEntry
 	for _, msg := range messages {
 		switch msg.MessageType {
-		case "user", "assistant", "reasoning":
+		case "user", "assistant", "reasoning", "tool_call", "tool_result":
 			entries = append(entries, conversationEntry{
-				Type: msg.MessageType,
-				Text: msg.ContentText,
-				TS:   msg.Timestamp,
+				Type:       msg.MessageType,
+				Text:       msg.ContentText,
+				TS:         msg.Timestamp,
+				ToolName:   msg.ToolName,
+				ToolUseID:  msg.ToolUseID,
+				ToolInput:  msg.ToolInput,
+				ToolOutput: msg.ToolOutput,
 			})
 		}
 	}
