@@ -187,7 +187,10 @@ func offerShare(projects []string, in io.Reader) {
 		if !isDir(filepath.Join(p, ".git")) {
 			continue // not a git repo; nothing to share through
 		}
-		fmt.Printf("\nShare %s with your team? Commits %s (no push) [y/N]: ",
+		// .gitignore is named because sharing the binding requires changing it:
+		// it lives inside the directory projects exclude. Committing a file the
+		// user was not told about is how a helpful step becomes a surprise.
+		fmt.Printf("\nShare %s with your team? Commits %s (plus .gitignore, if it excludes the binding; no push) [y/N]: ",
 			filepath.Base(p), strings.Join(sharedFiles, " and "))
 		answer, err := readAnswer(in)
 		if err != nil && answer == "" {
@@ -254,7 +257,25 @@ func commitWiring(dir string) error {
 	if len(present) == 0 {
 		return fmt.Errorf("nothing to commit")
 	}
-	if out, err := git(append([]string{"add", "--"}, present...)...); err != nil {
+
+	// The binding lives inside the directory the project excludes, so sharing it
+	// means changing that exclusion. Doing it here rather than at init time is
+	// deliberate: this is the moment the user said yes to sharing, and rewriting
+	// somebody's .gitignore is not something a setup step should do uninvited.
+	narrowed, err := narrowRegentExclusion(dir)
+	if err != nil {
+		return fmt.Errorf("narrow .regent/ exclusion: %w", err)
+	}
+	if narrowed {
+		present = append(present, ".gitignore")
+	}
+
+	// -f because narrowing the root .gitignore is not the end of the ways a
+	// project can exclude this path: a global core.excludesFile, .git/info/exclude,
+	// or a pattern this cannot safely rewrite. The user asked for the binding to
+	// be shared; refusing over an ignore rule would leave the clone knowing
+	// nothing, which is the failure being fixed (#12).
+	if out, err := git(append([]string{"add", "-f", "--"}, present...)...); err != nil {
 		return fmt.Errorf("git add: %s", firstLine(out))
 	}
 	args := append([]string{"commit", "-m", "Wire re_gent to the team server", "--"}, present...)
@@ -265,6 +286,60 @@ func commitWiring(dir string) error {
 		return fmt.Errorf("%s", firstLine(out))
 	}
 	return nil
+}
+
+// regentExclusionLines are the spellings of "exclude the whole .regent
+// directory" that a root .gitignore is written with.
+var regentExclusionLines = map[string]bool{
+	".regent": true, ".regent/": true, "/.regent": true, "/.regent/": true,
+}
+
+// narrowedRegentExclusion is what replaces them: the directory stays visible so
+// git descends into it, its contents are excluded, and the binding is
+// re-included by name.
+const narrowedRegentExclusion = `# re_gent local state — machine-specific, like .git/ itself.
+# config.toml is the exception: it is the server binding teammates inherit on clone.
+.regent/*
+!.regent/config.toml
+!.regent/.gitignore`
+
+// narrowRegentExclusion rewrites a project's root .gitignore so the server
+// binding is reachable, and reports whether it changed anything.
+//
+// A root-level `.regent/` excludes the directory, and git does not descend into
+// an excluded directory. The .regent/.gitignore that re-includes config.toml is
+// therefore never read, and the previous attempt to share the binding through
+// that nested file could not have worked — verified against real repositories.
+// Narrowing the pattern to the directory's *contents* is what makes any
+// re-inclusion apply at all.
+//
+// Only the exact whole-directory spellings are touched. A project that wrote
+// something more specific meant something more specific, and silently rewriting
+// it would be a worse failure than the one being fixed.
+func narrowRegentExclusion(projectRoot string) (bool, error) {
+	path := filepath.Join(projectRoot, ".gitignore")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		// No root .gitignore is not a problem to solve: nothing is excluding the
+		// binding, so nothing needs narrowing.
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	lines := strings.Split(string(data), "\n")
+	changed := false
+	for i, line := range lines {
+		if regentExclusionLines[strings.TrimSpace(line)] {
+			lines[i] = narrowedRegentExclusion
+			changed = true
+		}
+	}
+	if !changed {
+		return false, nil
+	}
+	return true, os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o644)
 }
 
 func firstLine(s string) string {
