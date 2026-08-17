@@ -175,6 +175,65 @@ func TestAPISessionsIncludesAuthor(t *testing.T) {
 	}
 }
 
+// TestAPISessionsAttributesToFirstStepAuthor pins which of two identifiable
+// authors a shared session belongs to. The existing coverage only has one
+// candidate — the tip is author-less — so it passes under either rule and says
+// nothing about direction.
+//
+// A session belongs to whoever started it. Reading newest-first instead would
+// re-attribute the session every time a different person touched it, so the
+// name a teammate sees would change under them as the session grew.
+func TestAPISessionsAttributesToFirstStepAuthor(t *testing.T) {
+	_, _, ts := newTestServer(t)
+	const repo = "alpha"
+	const sessionID = "claude_code--sharedsess"
+
+	rootStep := store.Step{
+		Tree:           "deadbeef",
+		SessionID:      sessionID,
+		Origin:         "claude_code",
+		Author:         store.Author{Name: "Ada Lovelace", Email: "ada@team.dev"},
+		TimestampNanos: time.Date(2026, 8, 2, 10, 0, 0, 0, time.UTC).UnixNano(),
+	}
+	rootHash := putStep(t, ts, repo, rootStep)
+
+	tipStep := store.Step{
+		Tree:           "cafebabe",
+		Parent:         rootHash,
+		SessionID:      sessionID,
+		Origin:         "claude_code",
+		Author:         store.Author{Name: "Grace Hopper", Email: "grace@team.dev"},
+		TimestampNanos: time.Date(2026, 8, 2, 11, 0, 0, 0, time.UTC).UnixNano(),
+	}
+	tipHash := putStep(t, ts, repo, tipStep)
+
+	if code, _ := postRef(t, ts, repo, "sessions/"+sessionID, "", string(tipHash)); code != http.StatusOK {
+		t.Fatalf("set session ref: status %d", code)
+	}
+
+	status, body := getAPI(t, ts, "/"+repo+"/api/sessions", "")
+	if status != http.StatusOK {
+		t.Fatalf("GET /api/sessions: status %d, body %s", status, body)
+	}
+	var got sessionsResponse
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("decode sessions: %v (body %s)", err, body)
+	}
+	if len(got.Sessions) != 1 {
+		t.Fatalf("sessions=%d, want 1 (body %s)", len(got.Sessions), body)
+	}
+	author := got.Sessions[0].Author
+	if author == nil {
+		t.Fatalf("author is nil (body %s)", body)
+	}
+	if author.Name != "Ada Lovelace" {
+		t.Errorf("author.name = %q, want the author who started the session, %q", author.Name, "Ada Lovelace")
+	}
+	if author.Email != "ada@team.dev" {
+		t.Errorf("author.email = %q, want %q", author.Email, "ada@team.dev")
+	}
+}
+
 // TestAPISessionsOmitsEmptyAuthor asserts a session whose steps carry no author
 // (older data, or a host with no git identity) omits the author field entirely
 // rather than emitting an empty object the viewer would have to special-case.

@@ -40,8 +40,8 @@ VOLUME /data
 EXPOSE 7654
 USER regent
 
-# Set REGENT_SERVER_TOKEN at runtime to require bearer-token auth (see
-# `rgt serve --help`). Left unset, the server runs open (local-dev default).
+# The current server is open. docker-compose.yml binds it to loopback for local
+# development; remote authentication/TLS are separate deployment work.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD wget -qO- http://127.0.0.1:7654/healthz || exit 1
 

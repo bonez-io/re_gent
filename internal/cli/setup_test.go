@@ -7,8 +7,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // gitRepo makes a real repository with one commit, so HEAD exists.
@@ -95,202 +93,42 @@ func TestCommitWiringReportsNothingToCommit(t *testing.T) {
 	}
 }
 
-// TestTTYPairOutputIsWritable reproduces the bug that made the picker look
-// frozen: the installer runs `rgt setup <url> < /dev/tty`, and a shell redirect
-// opens the terminal READ-ONLY. Handing that same handle back as the output
-// made every draw fail silently. Whatever ttyPair returns for output must
-// accept writes.
-func TestTTYPairOutputIsWritable(t *testing.T) {
-	// Stand in for the installer's read-only stdin.
-	ro, err := os.Open(os.DevNull)
-	if err != nil {
-		t.Fatalf("open devnull: %v", err)
-	}
-	defer ro.Close()
-
-	realStdin := os.Stdin
-	os.Stdin = ro
-	defer func() { os.Stdin = realStdin }()
-
-	in, out, cleanup, err := ttyPair()
-	if err != nil {
-		t.Skip("no controlling terminal in this environment")
-	}
-	defer cleanup()
-
-	if out == ro {
-		t.Fatal("output must never be the read-only stdin handed to us")
-	}
-	if _, err := out.Write(nil); err != nil {
-		t.Errorf("picker output handle must be writable, got: %v", err)
-	}
-	if in == nil {
-		t.Error("input handle must not be nil")
-	}
-}
-
-// press feeds one key to the model, the way a keyboard would.
-func press(m tea.Model, k tea.KeyMsg) tea.Model {
-	next, _ := m.Update(k)
-	return next
-}
-
-func key(r string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(r)} }
-func down() tea.KeyMsg        { return tea.KeyMsg{Type: tea.KeyDown} }
-func enter() tea.KeyMsg       { return tea.KeyMsg{Type: tea.KeyEnter} }
-func right() tea.KeyMsg       { return tea.KeyMsg{Type: tea.KeyRight} }
-
-// TestPickerSelectsWithArrowsAndSpace is the interaction the picker exists for:
-// move with arrows, tick with space, confirm with enter.
-func TestPickerSelectsWithArrowsAndSpace(t *testing.T) {
+// TestIsConnectedRequiresBothAServerAndAnIdentity is what "connected" means,
+// and it is the assertion that survived the picker.
+//
+// It was one clause of a test about how the picker labelled its rows, but the
+// fact it pins has nothing to do with a UI: `rgt init` writes
+// .regent/config.toml unconditionally, so treating that file's existence as a
+// binding made every locally-used project look connected. Connecting one then
+// took the disconnect branch and removed its hooks while reporting success. A
+// binding is a server address AND a project identity; half of one is a
+// half-written file.
+func TestIsConnectedRequiresBothAServerAndAnIdentity(t *testing.T) {
 	root := t.TempDir()
-	mkProject(t, root, "alpha")
-	mkProject(t, root, "beta")
 
-	var m tea.Model = newPickerModel(root)
-	m = press(m, down())   // onto alpha (entry 0 is "..")
-	m = press(m, key(" ")) // tick it
-	m = press(m, enter())  // connect
-
-	got := m.(pickerModel).picked()
-	want := filepath.Join(root, "alpha")
-	if len(got) != 1 || got[0] != want {
-		t.Errorf("picked = %v, want [%s]", got, want)
-	}
-}
-
-// TestPickerQuitSelectsNothing: q must wire nothing even after ticking.
-func TestPickerQuitSelectsNothing(t *testing.T) {
-	root := t.TempDir()
-	mkProject(t, root, "alpha")
-
-	var m tea.Model = newPickerModel(root)
-	m = press(m, down())
-	m = press(m, key(" "))
-	m = press(m, key("q"))
-
-	if got := m.(pickerModel).picked(); len(got) != 0 {
-		t.Errorf("quitting must select nothing, got %v", got)
-	}
-}
-
-// TestPickerBrowsesIntoFolders: → opens a plain folder, so projects nested under
-// an org directory are reachable without leaving the picker.
-func TestPickerBrowsesIntoFolders(t *testing.T) {
-	root := t.TempDir()
-	mkProject(t, root, "acme/web")
-
-	var m tea.Model = newPickerModel(root)
-	m = press(m, down())   // onto "acme/"
-	m = press(m, right())  // open it
-	m = press(m, down())   // onto "web"
-	m = press(m, key(" ")) // tick
-	m = press(m, enter())
-
-	got := m.(pickerModel).picked()
-	want := filepath.Join(root, "acme", "web")
-	if len(got) != 1 || got[0] != want {
-		t.Errorf("picked = %v, want [%s]", got, want)
-	}
-}
-
-// TestPickerMarksAlreadyConnected: a project that already points at a server is
-// labelled, so nobody wires it a second time wondering why nothing changed.
-func TestPickerMarksAlreadyConnected(t *testing.T) {
-	root := t.TempDir()
-	wired := mkProject(t, root, "alpha")
-	writeFile(t, wired, ".regent/config.toml", "[remote]\nurl = 'http://example.test'\n")
-	mkProject(t, root, "beta")
-
-	m := newPickerModel(root)
-	for _, e := range m.entries {
-		if e.label == "alpha" && !e.wired {
-			t.Error("alpha is connected and should be marked as such")
-		}
-		if e.label == "beta" && e.wired {
-			t.Error("beta is not connected and must not be marked")
-		}
-	}
-	if !strings.Contains(m.View(), "(connected)") {
-		t.Errorf("view should mark a connected project:\n%s", m.View())
+	whole := mkProject(t, root, "alpha")
+	writeFile(t, whole, ".regent/config.toml",
+		"[remote]\nurl = 'http://example.test'\nrepo_id = 'alpha'\n")
+	if !isConnected(whole) {
+		t.Error("a config with both a server URL and a repo_id is a connection")
 	}
 
-	// Marking a connected project means disconnect, and the view must say so
-	// rather than implying it will be connected again.
-	var tm tea.Model = m
-	tm = press(tm, down())
-	tm = press(tm, key(" "))
-	if v := tm.(pickerModel).View(); !strings.Contains(v, "disconnect") {
-		t.Errorf("marking a connected project should read as disconnect:\n%s", v)
-	}
-}
-
-// TestPickerRefusesEnterWithNothingSelected: confirming an empty selection
-// would connect nothing and look exactly like a dead key, so enter must decline
-// and say what to press instead.
-func TestPickerRefusesEnterWithNothingSelected(t *testing.T) {
-	root := t.TempDir()
-	mkProject(t, root, "alpha")
-
-	var m tea.Model = newPickerModel(root)
-	m = press(m, down())  // onto alpha, nothing ticked
-	m = press(m, enter()) // must not confirm
-
-	pm := m.(pickerModel)
-	if pm.done {
-		t.Error("enter must not confirm an empty selection")
-	}
-	if len(pm.picked()) != 0 {
-		t.Errorf("nothing should be picked, got %v", pm.picked())
-	}
-	if pm.hint == "" || !strings.Contains(pm.View(), "space") {
-		t.Errorf("the picker should say how to select; view:\n%s", pm.View())
+	// The shape `rgt init` leaves behind: a config file, no binding.
+	half := mkProject(t, root, "gamma")
+	writeFile(t, half, ".regent/config.toml", "[remote]\nurl = 'http://example.test'\n")
+	if isConnected(half) {
+		t.Error("a config with a server URL but no repo_id was read as connected")
 	}
 
-	// Ticking then confirming still works.
-	m = press(m, key(" "))
-	m = press(m, enter())
-	if got := m.(pickerModel).picked(); len(got) != 1 {
-		t.Errorf("after selecting, enter should confirm; picked %v", got)
-	}
-}
-
-// TestPickerNothingOption: leaving without connecting is an explicit choice in
-// the list, not a key you have to already know.
-func TestPickerNothingOption(t *testing.T) {
-	root := t.TempDir()
-	mkProject(t, root, "alpha")
-
-	m := newPickerModel(root)
-	last := m.entries[len(m.entries)-1]
-	if !last.isNone {
-		t.Fatalf("last entry should be the opt-out, got %+v", last)
-	}
-	if !strings.Contains(m.View(), "Nothing") {
-		t.Errorf("the opt-out should be visible; view:\n%s", m.View())
-	}
-
-	// Select a project first, then choose Nothing: it must still wire nothing.
-	var tm tea.Model = m
-	tm = press(tm, down())
-	tm = press(tm, key(" "))
-	for i := 0; i < len(m.entries); i++ {
-		tm = press(tm, down()) // walk to the last row
-	}
-	tm = press(tm, enter())
-
-	pm := tm.(pickerModel)
-	if !pm.aborted {
-		t.Error("choosing Nothing should leave without connecting")
-	}
-	if got := pm.picked(); len(got) != 0 {
-		t.Errorf("Nothing must override earlier ticks, got %v", got)
+	if isConnected(mkProject(t, root, "beta")) {
+		t.Error("a project with no .regent/config.toml at all is not connected")
 	}
 }
 
 // TestReadAnswerAcceptsCarriageReturn is the fix for a prompt that appeared to
-// ignore input: a full-screen UI can return the terminal with ICRNL cleared, so
-// Enter arrives as \r. Waiting only for \n blocked forever while the keystroke
+// ignore input: Enter can arrive as \r rather than \n — from a Windows
+// terminal, or from one an agent host or full-screen program handed back with
+// ICRNL cleared. Waiting only for \n blocked forever while the keystroke
 // echoed, which looked exactly like a dead prompt.
 func TestReadAnswerAcceptsCarriageReturn(t *testing.T) {
 	cases := map[string]string{
@@ -310,8 +148,8 @@ func TestReadAnswerAcceptsCarriageReturn(t *testing.T) {
 	}
 }
 
-// TestOfferShareDeclinesOnCarriageReturn drives the actual prompt the way the
-// terminal delivers it after the picker exits.
+// TestOfferShareDeclinesOnCarriageReturn drives the actual prompt with the line
+// ending a terminal can deliver instead of \n.
 func TestOfferShareDeclinesOnCarriageReturn(t *testing.T) {
 	dir := gitRepo(t)
 	writeFile(t, dir, ".regent/config.toml", "[remote]\nurl = 'http://example.test'\n")
@@ -361,39 +199,7 @@ func TestServerIsRemembered(t *testing.T) {
 	}
 }
 
-// setupTargets is the decision half of rgt setup, split out so it can be tested
-// without a pty. The installer now calls setup unconditionally, so this runs in
-// devcontainers, over SSH and in CI far more often than it runs at a terminal.
-
-func TestSetupTargetsWiresTheCurrentProjectWithoutATerminal(t *testing.T) {
-	root := t.TempDir()
-	mustMkdir(t, filepath.Join(root, ".git"))
-
-	targets, err := setupTargets(root, setupOptions{})
-	if err != nil {
-		t.Fatalf("setupTargets: %v", err)
-	}
-
-	if len(targets) != 1 || targets[0] != root {
-		t.Fatalf("targets = %v, want [%s]", targets, root)
-	}
-}
-
-// The bug this pins, and the reason the installer could report success having
-// done nothing: runSetup opened /dev/tty, and when that failed it printed a
-// suggestion and returned nil. Exit 0, no project wired, no error anywhere for
-// the install script to detect.
-//
-// Outside a project there is nothing safe to wire, so that must be an error
-// rather than a quiet success.
-func TestSetupTargetsFailsOutsideAProject(t *testing.T) {
-	root := t.TempDir() // no .git, no .regent
-
-	targets, err := setupTargets(root, setupOptions{})
-	if err == nil {
-		t.Fatal("setupTargets returned nil error outside a project; a paste would report success having wired nothing")
-	}
-	if len(targets) != 0 {
-		t.Errorf("targets = %v, want none", targets)
-	}
-}
+// The two setupTargets tests that stood here moved to discover_test.go when
+// setup was folded into connect. "Wires only the current project" became
+// TestConnectInsideAProjectWiresOnlyThatProject; "fails outside a project" was
+// already pinned by TestConnectWithoutTerminalReportsAndFails.

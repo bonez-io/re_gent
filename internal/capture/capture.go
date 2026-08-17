@@ -41,9 +41,6 @@ type Recorder struct {
 	Store *store.Store
 	Index *index.DB
 	CWD   string
-	// Sink receives blobs and ref updates for optional remote replication.
-	// nil is treated as a NoopSink: local writes still succeed.
-	Sink CaptureSink
 	// Server is non-nil in server mode, where the source of truth is a re_gent
 	// server and Store is a disposable machine-local cache. See servermode.go.
 	Server *ServerLink
@@ -137,33 +134,12 @@ func (r *Recorder) Close() error {
 		return nil
 	}
 	var errs []error
-	if r.Sink != nil {
-		if err := r.Sink.Close(); err != nil {
-			errs = append(errs, err)
-		}
-	}
 	if r.Index != nil {
 		if err := r.Index.Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
-}
-
-// enqueueBlobToSink forwards a locally-committed blob to the sink for optional
-// remote replication. No-ops when Sink is nil.
-func (r *Recorder) enqueueBlobToSink(hash store.Hash, data []byte) {
-	if r.Sink != nil {
-		r.Sink.EnqueueBlob(hash, data)
-	}
-}
-
-// enqueueRefToSink forwards a locally-committed ref update to the sink.
-// No-ops when Sink is nil.
-func (r *Recorder) enqueueRefToSink(name string, old, new store.Hash) {
-	if r.Sink != nil {
-		r.Sink.EnqueueRef(name, old, new)
-	}
 }
 
 func (r *Recorder) UpsertSession(meta SessionMetadata) error {
@@ -245,7 +221,6 @@ func (r *Recorder) RecordToolUse(event ToolUse) error {
 	if err != nil {
 		return fmt.Errorf("store tool input: %w", err)
 	}
-	r.enqueueBlobToSink(inputHash, event.ToolInput)
 
 	var outputHash store.Hash
 	if len(event.ToolResponse) > 0 {
@@ -253,7 +228,6 @@ func (r *Recorder) RecordToolUse(event ToolUse) error {
 		if err != nil {
 			return fmt.Errorf("store tool output: %w", err)
 		}
-		r.enqueueBlobToSink(outputHash, event.ToolResponse)
 	}
 
 	now := time.Now().UnixNano()
@@ -620,14 +594,6 @@ func (r *Recorder) createStepForTurn(session SessionMetadata, scope turnScope) (
 			return "", fmt.Errorf("write step: %w", err)
 		}
 
-		// Enqueue the step blob for remote replication. We re-marshal here so we
-		// have the raw bytes without an extra store read-back.
-		if r.Sink != nil {
-			if stepData, merr := marshalStep(step); merr == nil {
-				r.enqueueBlobToSink(stepHash, stepData)
-			}
-		}
-
 		if err := computeAndWriteBlame(r.Store, parentHash, stepHash, treeHash); err != nil {
 			LogHookError(r.Store.Root, fmt.Sprintf("blame step %s: %v", stepHash, err))
 		}
@@ -639,9 +605,6 @@ func (r *Recorder) createStepForTurn(session SessionMetadata, scope turnScope) (
 			}
 			return "", fmt.Errorf("update ref: %w", err)
 		}
-
-		// Replicate the ref update after local CAS succeeds.
-		r.enqueueRefToSink("sessions/"+sessionID, parentHash, stepHash)
 
 		if err := r.indexAndLinkStep(stepHash, sessionID, scope); err != nil {
 			LogHookError(r.Store.Root, fmt.Sprintf("index/link step %s: %v", stepHash, err))
@@ -860,13 +823,6 @@ func conversationBlob(s *store.Store, messages []index.Message) (store.Hash, err
 	return s.WriteBlob(data)
 }
 
-// marshalStep serializes a step to the same JSON format that WriteStep uses,
-// producing bytes that hash to the same value already stored in the object store.
-func marshalStep(step *store.Step) ([]byte, error) {
-	step.NormalizeCauses()
-	return json.Marshal(step)
-}
-
 func snapshotWorkspace(s *store.Store, cwd string) (store.Hash, error) {
 	return snapshot.Snapshot(s, cwd, ignore.Default(cwd))
 }
@@ -880,6 +836,21 @@ func ComputeAndWriteBlame(s *store.Store, parentHash, currentStepHash, treeHash 
 }
 
 func computeAndWriteBlame(s *store.Store, parentHash, currentStepHash, treeHash store.Hash) error {
+	return computeBlameForStep(s, parentHash, currentStepHash, treeHash, func(stepHash store.Hash, path string, bm *store.BlameMap) error {
+		return s.WriteBlameForFile(stepHash, path, bm)
+	})
+}
+
+// blameSink receives every (step, file) map computeBlameForStep derives.
+//
+// Capture writes them straight through; `rgt repair blame` compares each one
+// against what is already on disk so it can report how many maps it actually
+// had to rewrite. Both need the same derivation, and there must only ever be
+// one of those: a second implementation is a second thing that can be wrong
+// about which line changed.
+type blameSink func(stepHash store.Hash, path string, blameMap *store.BlameMap) error
+
+func computeBlameForStep(s *store.Store, parentHash, currentStepHash, treeHash store.Hash, emit blameSink) error {
 	tree, err := s.ReadTree(treeHash)
 	if err != nil {
 		return fmt.Errorf("read current tree %s: %w", treeHash, err)
@@ -907,7 +878,7 @@ func computeAndWriteBlame(s *store.Store, parentHash, currentStepHash, treeHash 
 		if hasParentEntry && parentEntry.Blob == entry.Blob {
 			oldBlame, err := s.ReadBlameForFile(parentHash, entry.Path)
 			if err == nil {
-				if err := s.WriteBlameForFile(currentStepHash, entry.Path, oldBlame); err != nil {
+				if err := emit(currentStepHash, entry.Path, oldBlame); err != nil {
 					problems = append(problems, fmt.Errorf("copy blame for %s: %w", entry.Path, err))
 				}
 				continue
@@ -937,7 +908,7 @@ func computeAndWriteBlame(s *store.Store, parentHash, currentStepHash, treeHash 
 		}
 
 		newBlame := store.ComputeBlame(oldContent, newContent, oldBlame, currentStepHash)
-		if err := s.WriteBlameForFile(currentStepHash, entry.Path, newBlame); err != nil {
+		if err := emit(currentStepHash, entry.Path, newBlame); err != nil {
 			problems = append(problems, fmt.Errorf("write blame for %s: %w", entry.Path, err))
 		}
 	}

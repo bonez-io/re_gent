@@ -18,18 +18,58 @@ func LineDiff(oldContent, newContent []byte) []Opcode {
 	oldLines := splitLines(oldContent)
 	newLines := splitLines(newContent)
 
-	// Use line-mode trick: encode each line as a single rune
-	dmp := diffmatchpatch.New()
-	a, b, lineArray := dmp.DiffLinesToRunes(
-		joinLines(oldLines),
-		joinLines(newLines),
-	)
+	// Encode each distinct line as one rune ourselves, then diff the runes.
+	//
+	// The library's own line mode (DiffLinesToChars / DiffLinesToRunes paired
+	// with DiffCharsToLines) does not round-trip reliably here: mapping the
+	// chunks back to text returned neighbouring lines, so counting newlines in
+	// them was counting the wrong thing. Two files differing only at line 3
+	// diffed as "lines 1-3 are equal" — including the changed line — then an
+	// insert of line 5, then the rest from line 4. Same lines, wrong order, one
+	// line too many.
+	//
+	// That is what produced blame maps one entry longer than the file, and
+	// attribution one line late: `rgt blame` named the line *after* the one an
+	// edit actually touched. Found on a real package.json, where bumping
+	// "version" blamed the "description" beneath it.
+	//
+	// With our own encoding the counts are exact by construction — one rune in,
+	// one line out — and nothing has to be mapped back, because callers index
+	// their own line slices with these offsets and never need the contents.
+	a, b := encodeLines(oldLines, newLines)
 
+	dmp := diffmatchpatch.New()
 	diffs := dmp.DiffMainRunes(a, b, false)
-	diffs = dmp.DiffCharsToLines(diffs, lineArray)
 
 	// Convert diffs to opcode format
 	return diffsToOpcodes(diffs, oldLines, newLines)
+}
+
+// encodeLines maps every distinct line to a distinct rune, so a rune diff is a
+// line diff. Surrogates are skipped because they cannot appear alone in a Go
+// string, which would corrupt the encoding for files with many unique lines.
+func encodeLines(oldLines, newLines []string) ([]rune, []rune) {
+	assigned := make(map[string]rune)
+	next := rune(1)
+
+	encode := func(lines []string) []rune {
+		out := make([]rune, len(lines))
+		for i, line := range lines {
+			r, seen := assigned[line]
+			if !seen {
+				if next >= 0xD800 && next <= 0xDFFF {
+					next = 0xE000
+				}
+				r = next
+				assigned[line] = r
+				next++
+			}
+			out[i] = r
+		}
+		return out
+	}
+
+	return encode(oldLines), encode(newLines)
 }
 
 func splitLines(content []byte) []string {
@@ -48,21 +88,14 @@ func splitLines(content []byte) []string {
 	return lines
 }
 
-func joinLines(lines []string) string {
-	if len(lines) == 0 {
-		return ""
-	}
-	return strings.Join(lines, "\n") + "\n"
-}
-
 func diffsToOpcodes(diffs []diffmatchpatch.Diff, oldLines, newLines []string) []Opcode {
 	var opcodes []Opcode
 	i1, i2 := 0, 0 // indices in old
 	j1, j2 := 0, 0 // indices in new
 
 	for _, diff := range diffs {
-		// Count lines in this diff segment
-		lineCount := strings.Count(diff.Text, "\n")
+		// One rune per line, by our own encoding: exact.
+		lineCount := len([]rune(diff.Text))
 
 		switch diff.Type {
 		case diffmatchpatch.DiffEqual:

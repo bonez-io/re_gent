@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -41,6 +42,62 @@ func writeGlobalConfig(t *testing.T, path, token string) {
 	}
 	if err := config.SaveTo(path, &config.UserConfig{Auth: config.Auth{Token: token}}); err != nil {
 		t.Fatalf("write global config: %v", err)
+	}
+}
+
+// TestConnectOutsideAProjectNamesTheFixAndTouchesNothing pins what connect does
+// when it is not standing in a project.
+//
+// It used to answer by hunting: it walked the directories below, listed every
+// repository it found, and — with a terminal — opened a picker over them. That
+// is how one command reached into projects nobody named, and how the picker
+// (whose space key disconnected an already-wired project) was reachable from
+// `rgt connect` as well as from bare `rgt` (#28).
+//
+// The remedy a person needs here is one sentence long: go to the project and
+// run it there. It has to be in the error, because the error is all a script
+// gets, and it must arrive having changed nothing.
+func TestConnectOutsideAProjectNamesTheFixAndTouchesNothing(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	work := t.TempDir()
+	// A repository below the working directory: the bait the old scan took.
+	// Named so that neither the temp path nor the test name contains it, or a
+	// "connect never mentioned it" assertion would pass for free.
+	nearby := mkProject(t, work, "ledger-service")
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(work); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+
+	cmd := ConnectCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"http://example.test:7654"})
+	err = cmd.Execute()
+
+	if err == nil {
+		t.Fatalf("connect outside a project must fail; it printed:\n%s", out.String())
+	}
+	// The fix, spelled out: cd into the project and run connect there.
+	if !strings.Contains(err.Error(), "cd ") {
+		t.Errorf("the error should name the fix (cd into the project), got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "rgt connect") {
+		t.Errorf("the error should name the command to re-run, got: %v", err)
+	}
+	// No hunting: a project below here is none of connect's business.
+	if seen := out.String() + err.Error(); strings.Contains(seen, "ledger-service") {
+		t.Errorf("connect went looking for projects below the current directory:\n%s", seen)
+	}
+	if _, statErr := os.Stat(filepath.Join(nearby, ".regent")); statErr == nil {
+		t.Errorf("connect wired %s, which nobody named", nearby)
 	}
 }
 
@@ -293,7 +350,14 @@ func TestConnect_ServerUnauthorized(t *testing.T) {
 	if err == nil {
 		t.Fatal("want error for 401, got nil")
 	}
-	if !strings.Contains(err.Error(), "not signed in") {
-		t.Errorf("error should mention 'not signed in', got: %v", err)
+	// A 401 must still be reported as a 401. What changed is the remedy: the
+	// old message said "Run: rgt login <server-url>", and login no longer
+	// exists, so following the advice would have produced "unknown command".
+	// An error that names a removed command is worse than one that names none.
+	if !strings.Contains(err.Error(), "unauthenticated") {
+		t.Errorf("error should say the server rejected us as unauthenticated, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "rgt login") {
+		t.Errorf("error points at `rgt login`, which has been removed: %v", err)
 	}
 }

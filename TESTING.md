@@ -5,12 +5,13 @@ Quick checks for the `rgt` CLI and agent hook integrations.
 ## Prerequisites
 
 ```bash
-go build -o rgt ./cmd/rgt
+make install
 ```
 
-Use the built binary in examples below:
+Or keep the build isolated and point the examples at it:
 
 ```bash
+go build -o rgt ./cmd/rgt
 export RGT=/path/to/re_gent/rgt
 ```
 

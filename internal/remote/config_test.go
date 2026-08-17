@@ -180,9 +180,14 @@ func TestCacheDirForIsOutsideTheRepository(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CacheDirFor: %v", err)
 	}
-	want := filepath.Join(base, "repos", "my-repo")
-	if dir != want {
-		t.Fatalf("cache dir = %q, want %q", dir, want)
+	// Asserted as "under the cache root, named for the repo" rather than as an
+	// exact path: the layout gained a per-server segment, and a test that spells
+	// out every segment fails on layout changes that break nothing.
+	if root := filepath.Join(base, "repos"); !strings.HasPrefix(dir, root+string(filepath.Separator)) {
+		t.Fatalf("cache dir = %q, want it under %q", dir, root)
+	}
+	if got := filepath.Base(dir); got != "my-repo" {
+		t.Fatalf("cache dir = %q, want the repo id %q as its last segment", dir, "my-repo")
 	}
 
 	// A repo id that could escape the cache root must be rejected, not cleaned.
@@ -203,5 +208,51 @@ func TestRedactNeverRevealsWholeToken(t *testing.T) {
 		if got := Redact(tt.in); got != tt.want {
 			t.Errorf("Redact(%q) = %q, want %q", tt.in, got, tt.want)
 		}
+	}
+}
+
+// The cache is keyed by repo id alone, so two projects with the same id
+// pointed at different servers share one cache directory — one object store,
+// one index, one set of upload watermarks. Each machine then holds a blend of
+// two servers' histories and pushes each server the other's watermarks.
+//
+// This is not hypothetical once identity comes from the git remote: a project
+// connected to a staging server and a production server derives the same id
+// for both, because it is the same repository. The id is *supposed* to match.
+// The cache is what must not.
+func TestCacheDirIsSeparatePerServer(t *testing.T) {
+	base := t.TempDir()
+
+	staging, err := CacheDirFor(Config{RepoID: "github.com-acme-api", ServerURL: "https://staging.example.com", CacheDir: base})
+	if err != nil {
+		t.Fatalf("CacheDirFor(staging): %v", err)
+	}
+	production, err := CacheDirFor(Config{RepoID: "github.com-acme-api", ServerURL: "https://production.example.com", CacheDir: base})
+	if err != nil {
+		t.Fatalf("CacheDirFor(production): %v", err)
+	}
+
+	if staging == production {
+		t.Errorf("both servers share the cache at %s; each holds a blend of the other's history", staging)
+	}
+}
+
+// The other half: the path has to be the same every time for one binding, or
+// every run starts from an empty cache and re-uploads everything it has.
+func TestCacheDirIsStableForOneBinding(t *testing.T) {
+	base := t.TempDir()
+	cfg := Config{RepoID: "github.com-acme-api", ServerURL: "https://example.com", CacheDir: base}
+
+	first, err := CacheDirFor(cfg)
+	if err != nil {
+		t.Fatalf("CacheDirFor: %v", err)
+	}
+	second, err := CacheDirFor(cfg)
+	if err != nil {
+		t.Fatalf("CacheDirFor: %v", err)
+	}
+
+	if first != second {
+		t.Errorf("cache path moved between calls: %q then %q; every run would re-upload from an empty cache", first, second)
 	}
 }

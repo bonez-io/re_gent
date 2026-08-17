@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -162,6 +163,97 @@ func TestReadWriteBlame(t *testing.T) {
 	for i := range original.Lines {
 		if retrieved.Lines[i] != original.Lines[i] {
 			t.Errorf("Line %d: expected %s, got %s", i, original.Lines[i], retrieved.Lines[i])
+		}
+	}
+}
+
+// Reproduces a defect seen against a real project: changing one line credited
+// the NEXT line to the new step, and left the changed line attributed to the
+// step before it. Blame's whole claim is "this line came from that prompt", so
+// being off by one makes every answer wrong for edited files.
+func TestComputeBlameAttributesTheLineThatActuallyChanged(t *testing.T) {
+	old := []byte("{\n  \"name\": \"job-hunter\",\n  \"version\": \"0.1.0\",\n  \"description\": \"agent\",\n  \"main\": \"dist/index.js\"\n}\n")
+	new_ := []byte("{\n  \"name\": \"job-hunter\",\n  \"version\": \"0.1.1\",\n  \"description\": \"agent\",\n  \"main\": \"dist/index.js\"\n}\n")
+
+	const first, second = Hash("aaaa"), Hash("bbbb")
+	oldBlame := &BlameMap{Lines: []Hash{first, first, first, first, first, first}}
+
+	got := ComputeBlame(old, new_, oldBlame, second)
+
+	if len(got.Lines) != 6 {
+		t.Fatalf("blame has %d lines, want 6", len(got.Lines))
+	}
+	// Line 3 (index 2) is the only line that changed.
+	if got.Lines[2] != second {
+		t.Errorf("the changed line (\"version\") is attributed to %q, want the new step %q", got.Lines[2], second)
+	}
+	for _, i := range []int{0, 1, 3, 4, 5} {
+		if got.Lines[i] != first {
+			t.Errorf("line %d did not change but is attributed to %q, want %q", i+1, got.Lines[i], first)
+		}
+	}
+}
+
+func TestWriteBlameForFileNeverShowsAPartialMapToAConcurrentReader(t *testing.T) {
+	// `rgt repair blame` rewrites every sidecar in the store, so a run can be
+	// killed in the middle of one. A truncate-in-place write leaves half a JSON
+	// document behind, and `rgt blame` on that file then fails to decode — a
+	// repair that can corrupt the thing it repairs is not a repair. A reader
+	// racing the writer stands in for the kill: it must never see anything but
+	// a whole map.
+	s, err := Init(t.TempDir())
+	if err != nil {
+		t.Fatalf("init store: %v", err)
+	}
+
+	const step, path, lines = Hash("step-atomic"), "src/big.ts", 15000
+	mapOf := func(fill string) *BlameMap {
+		bm := &BlameMap{Lines: make([]Hash, lines)}
+		for i := range bm.Lines {
+			bm.Lines[i] = Hash(strings.Repeat(fill, 64))
+		}
+		return bm
+	}
+	a, b := mapOf("a"), mapOf("b")
+
+	if err := s.WriteBlameForFile(step, path, a); err != nil {
+		t.Fatalf("seed blame: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		for i := 0; i < 20; i++ {
+			write := a
+			if i%2 == 1 {
+				write = b
+			}
+			if err := s.WriteBlameForFile(step, path, write); err != nil {
+				done <- err
+				return
+			}
+		}
+		done <- nil
+	}()
+
+	for reads := 0; ; reads++ {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("concurrent write: %v", err)
+			}
+			if reads == 0 {
+				t.Fatal("the reader never got a turn; the race this test describes was not exercised")
+			}
+			return
+		default:
+		}
+
+		got, err := s.ReadBlameForFile(step, path)
+		if err != nil {
+			t.Fatalf("read %d saw a map mid-write: %v", reads, err)
+		}
+		if len(got.Lines) != lines {
+			t.Fatalf("read %d saw %d lines, want %d — the file was replaced in place, not atomically", reads, len(got.Lines), lines)
 		}
 	}
 }

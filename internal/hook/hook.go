@@ -68,11 +68,20 @@ func Run(stdin io.Reader, stdout io.Writer) error {
 	// 7-8. Blame computation removed (now done in message_hook.go with separate storage)
 	// Old blame-in-tree approach disabled
 
-	// 9. Build step object
+	// 9. Build step object.
+	//
+	// Author comes from capture.ResolveAuthor — the same call rgt doctor makes
+	// when it reports git identity. This path used to set no Author at all, so
+	// on a machine where doctor said identity was configured, every step
+	// recorded here was still anonymous and permanently so. Resolving identity
+	// anywhere but through that one call is how the check and the writer drift
+	// apart again. An unconfigured machine still records no author: the fix is
+	// agreement, not an invented identity.
 	stepWithoutTree := &store.Step{
 		Parent:         parentHash,
 		Tree:           treeHash,
 		SessionID:      p.SessionID,
+		Author:         capture.ResolveAuthor(),
 		TimestampNanos: time.Now().UnixNano(),
 		Cause: store.Cause{
 			ToolUseID:  p.ToolUseID,

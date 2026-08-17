@@ -14,6 +14,10 @@ examples
 *.md
 .claude
 .agents
+.opencode
+.pi
+.regent
+opencode.jsonc
 .goreleaser.yaml
 .golangci.yml
 .coderabbit.yaml

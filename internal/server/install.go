@@ -41,8 +41,9 @@ import (
 // devcontainers, over SSH, in CI and in provisioning scripts — none of which
 // have a terminal — so "no terminal" could not be the case that gives up.
 //
-// Wiring is now unconditional and `rgt setup` decides, prompting only when
-// explicitly asked with --interactive.
+// Wiring is now unconditional and `rgt connect` decides. There is nothing left
+// to redirect a terminal for: the picker it fed is gone (#28), and connect
+// either wires the project the script is standing in or names the fix.
 var installScriptTemplate = template.Must(template.New("install").Parse(`#!/bin/sh
 # re_gent one-line installer (server-hosted; no Go toolchain required).
 #
@@ -72,20 +73,29 @@ if command -v rgt >/dev/null 2>&1; then
   info "Replacing existing rgt: $(command -v rgt)"
 fi
   # -------------------------------------------------------------------------
-  # 1. Pick an install dir: prefer /usr/local/bin when writable, else
-  #    ~/.local/bin (created if needed and added to PATH for this run).
+  # 1. Pick an install dir without touching a binary outside this shell's PATH.
+  #    Tests and provisioning can set REGENT_INSTALL_DIR for full isolation.
   # -------------------------------------------------------------------------
-  BIN_DIR=""
-  if [ -w /usr/local/bin ] 2>/dev/null; then
-    BIN_DIR="/usr/local/bin"
-  else
-    BIN_DIR="$HOME/.local/bin"
-    mkdir -p "$BIN_DIR"
+  BIN_DIR="${REGENT_INSTALL_DIR:-}"
+  if [ -z "$BIN_DIR" ] && command -v rgt >/dev/null 2>&1; then
+    existing_dir=$(dirname "$(command -v rgt)")
+    if [ -w "$existing_dir" ]; then
+      BIN_DIR="$existing_dir"
+    fi
+  fi
+  if [ -z "$BIN_DIR" ]; then
     case ":${PATH}:" in
-      *":${BIN_DIR}:"*) : ;;
-      *) PATH="${BIN_DIR}:${PATH}"; export PATH ;;
+      *":/usr/local/bin:"*)
+        if [ -w /usr/local/bin ] 2>/dev/null; then BIN_DIR=/usr/local/bin; fi
+        ;;
     esac
   fi
+  if [ -z "$BIN_DIR" ]; then
+    BIN_DIR="$HOME/.local/bin"
+  fi
+  mkdir -p "$BIN_DIR"
+  PATH="${BIN_DIR}:${PATH}"
+  export PATH
 
   TARGET="$BIN_DIR/rgt"
   installed=0
@@ -117,7 +127,7 @@ fi
   if curl -fsSL "$BIN_URL" -o "$TARGET.tmp"; then
     chmod +x "$TARGET.tmp"
     # Verify the downloaded binary actually executes on this OS/arch before
-    # committing it; a mismatch fails here and falls through to the fallback.
+    # committing it; a mismatch fails with a platform-specific explanation.
     if "$TARGET.tmp" version >/dev/null 2>&1 || "$TARGET.tmp" --help >/dev/null 2>&1; then
       mv "$TARGET.tmp" "$TARGET"
       installed=1
@@ -131,29 +141,16 @@ fi
     rm -f "$TARGET.tmp" 2>/dev/null || true
   fi
 
-  # -------------------------------------------------------------------------
-  # 3. Fallback: build from source with 'go install' when Go is present.
-  # -------------------------------------------------------------------------
+  # The server image contains builds for every supported client platform. Do
+  # not silently install @latest from a different release when one is missing.
   if [ "$installed" -ne 1 ]; then
-    if command -v go >/dev/null 2>&1; then
-      info "Falling back to 'go install' from source ..."
-      go install github.com/regent-vcs/regent/cmd/rgt@latest
-      GOBIN_DIR=$(go env GOBIN 2>/dev/null || true)
-      [ -n "$GOBIN_DIR" ] || GOBIN_DIR="$(go env GOPATH 2>/dev/null || echo "$HOME/go")/bin"
-      case ":${PATH}:" in
-        *":${GOBIN_DIR}:"*) : ;;
-        *) PATH="${GOBIN_DIR}:${PATH}"; export PATH ;;
-      esac
-    else
-      warn "The prebuilt binary did not run here and Go is not installed."
-      warn "Install Go (https://go.dev/dl/) and re-run, or ask your team for a"
-      warn "prebuilt rgt binary matching your OS/arch and place it on your PATH."
-      exit 1
-    fi
+    warn "No runnable rgt binary is available for this OS/architecture."
+    warn "Ask the server operator to publish a matching build."
+    exit 1
   fi
 
 # ---------------------------------------------------------------------------
-# 4. Verify rgt is reachable and runs.
+# 3. Verify rgt is reachable and runs.
 # ---------------------------------------------------------------------------
 if ! command -v rgt >/dev/null 2>&1; then
   warn "rgt was installed but is not on your PATH. Open a new shell or add its"
@@ -161,27 +158,31 @@ if ! command -v rgt >/dev/null 2>&1; then
   exit 1
 fi
 info "rgt is ready: $(command -v rgt)"
-rgt version 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
-# 5. Wire the current project, so this one command is the whole setup.
+# 4. Wire the current project, so this one command is the whole setup.
 # ---------------------------------------------------------------------------
 # Only when we are standing in a project: "curl | sh" inherits whatever
 # directory the teammate happened to be in, and connecting blindly would
 # scatter .regent/ into home directories. A .git entry is the marker (it is a
 # file, not a directory, inside worktrees and submodules). The server is open,
 # so no token is involved.
-# Wiring is unconditional: rgt setup wires what it detects, and only prompts
-# when asked with --interactive. See the Go comment on this template for why
-# the installer no longer inspects the terminal.
-rgt setup "{{.BaseURL}}" || {
+# Wiring is unconditional: rgt connect wires the project it is standing in, and
+# says what to do when it is not standing in one. See the Go comment on this
+# template for why the installer no longer inspects the terminal.
+CONNECT_LOG="${TARGET}.connect.$$"
+if ! rgt connect "{{.BaseURL}}" >"$CONNECT_LOG" 2>&1; then
+  cat "$CONNECT_LOG" >&2
+  rm -f "$CONNECT_LOG"
   warn "Setup did not finish. You can re-run it any time with:"
-  warn "  rgt setup {{.BaseURL}}"
+  warn "  rgt connect {{.BaseURL}}"
   exit 1
-}
+fi
+rm -f "$CONNECT_LOG"
+info "Connected this project to {{.BaseURL}}"
 
 # ---------------------------------------------------------------------------
-# 6. Verify, rather than assume.
+# 5. Verify, rather than assume.
 # ---------------------------------------------------------------------------
 # Wiring can succeed mechanically and still capture nothing, and every other
 # rgt command exits 0 in that state. Whoever pasted this command is usually not
@@ -192,6 +193,27 @@ if ! rgt doctor; then
   warn "Nothing will be captured until those problems are fixed."
   exit 1
 fi
+
+# ---------------------------------------------------------------------------
+# 6. End on the one thing the installer cannot do.
+# ---------------------------------------------------------------------------
+# Everything above this line, the paste did. Loading the hooks is the agent's
+# job, and it only loads the ones belonging to the directory it was started in
+# — so an agent opened above this project loads that directory's settings and,
+# because capture resolves its store from the session's working directory,
+# records its work there instead. That is #27, in both of the wrong places it
+# ended: a project that captured nothing, and then a project whose history was
+# quietly accumulating one directory up.
+#
+# So the run ends with an instruction rather than a summary. It is the same
+# instruction whether or not doctor found a shadowing directory above — doctor
+# names that case specifically, and this is the move that answers it either way.
+printf '\n'
+info "One thing left, and only you can do it: open your agent IN this project."
+info "  cd $(pwd) && claude        # or codex, or whichever agent you use"
+info "Started from a directory above this one, the agent loads that directory's"
+info "hooks and records its work there instead of here."
+info "Agents read hooks at startup, so restart any session already open here."
 printf '\n'
 `))
 

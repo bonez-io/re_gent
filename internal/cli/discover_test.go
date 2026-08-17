@@ -5,8 +5,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"reflect"
-	"strings"
 	"testing"
 )
 
@@ -20,120 +18,73 @@ func mkProject(t *testing.T, root, dir string) string {
 	return full
 }
 
-func TestDiscoverProjectsFindsNestedProjects(t *testing.T) {
-	root := t.TempDir()
-	api := mkProject(t, root, "api-service")
-	web := mkProject(t, root, "acme/web-frontend") // one org level down
+// TestConnectingAnAlreadyConnectedProjectStaysConnected is the promise that
+// `rgt disconnect` is the only way to disconnect.
+//
+// Connecting used to be a toggle. In the picker, marking a project expressed
+// the state you wanted, so marking a connected one meant "disconnect it" — and
+// that reading leaked into the shared apply step. A project could therefore
+// lose its wiring and its hooks as a side effect of being *selected*, which is
+// what made a full-screen list over someone's filesystem destructive (#28).
+//
+// `rgt connect` is an imperative. Running it on a project that is already
+// connected must leave it connected.
+func TestConnectingAnAlreadyConnectedProjectStaysConnected(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 
-	// Noise that must never reach the menu.
-	if err := os.MkdirAll(filepath.Join(root, "notes", "drafts"), 0o755); err != nil {
-		t.Fatalf("mkdir notes: %v", err)
-	}
-	mkProject(t, root, "api-service/vendor/lib") // inside a skip dir
-	mkProject(t, root, "api-service/sub")        // inside an already-found project
-	mkProject(t, root, "a/b/c/too-deep")         // past maxDepth
-
-	got := discoverProjects(root, maxDiscoveryDepth)
-	// Sorted, so the org-nested project sorts before the top-level one.
-	want := []string{web, api}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("discoverProjects:\n got %v\nwant %v", got, want)
-	}
-}
-
-func TestDiscoverProjectsIncludesRootItself(t *testing.T) {
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
-		t.Fatalf("mkdir .git: %v", err)
-	}
-	mkProject(t, root, "nested")
-
-	got := discoverProjects(root, maxDiscoveryDepth)
-	// Standing inside a project, that project is the only sensible answer;
-	// nested checkouts belong to it.
-	if len(got) != 1 || got[0] != root {
-		t.Errorf("discoverProjects = %v, want just the root %q", got, root)
-	}
-}
-
-// TestConnectPickedWiresChosenProjects drives the picker end to end: two
-// projects offered, one chosen, only that one wired.
-func TestConnectPickedWiresChosenProjects(t *testing.T) {
-	srv := newTestServer(t, http.StatusCreated, "picked-repo")
-	root := t.TempDir()
-	mkProject(t, root, "alpha")
-	beta := mkProject(t, root, "beta")
+	srv := newTestServer(t, http.StatusCreated, "twice-repo")
+	project := mkProject(t, t.TempDir(), "twice")
+	hooks := filepath.Join(project, ".claude", "settings.json")
 
 	var out bytes.Buffer
-	// "2" selects beta: discovery is sorted, so alpha is 1 and beta is 2.
-	err := connectPicked(srv.URL, root, &out, strings.NewReader("2\n"), true)
-	if err != nil {
-		t.Fatalf("connectPicked: %v", err)
+	if err := connectHere(srv.URL, project, "", &out, false); err != nil {
+		t.Fatalf("first connect: %v", err)
+	}
+	if !isConnected(project) {
+		t.Fatalf("first connect did not wire the project; output:\n%s", out.String())
+	}
+	if _, err := os.Stat(hooks); err != nil {
+		t.Fatalf("first connect wrote no hooks: %v", err)
 	}
 
-	if _, statErr := os.Stat(filepath.Join(beta, ".regent", "config.toml")); statErr != nil {
-		t.Errorf("chosen project should be wired: %v", statErr)
+	out.Reset()
+	if err := connectHere(srv.URL, project, "", &out, false); err != nil {
+		t.Fatalf("second connect: %v", err)
 	}
-	if _, statErr := os.Stat(filepath.Join(root, "alpha", ".regent")); statErr == nil {
-		t.Error("unchosen project must not be wired")
+
+	if !isConnected(project) {
+		t.Errorf("connecting an already-connected project disconnected it; output:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "alpha") || !strings.Contains(out.String(), "beta") {
-		t.Errorf("both projects should be listed; got:\n%s", out.String())
+	if _, err := os.Stat(hooks); err != nil {
+		t.Errorf("connecting an already-connected project removed its hooks: %v", err)
 	}
 }
 
-// TestConnectPickedWithoutTerminalOnlyPrints guards the `curl | sh` case: with
-// no terminal we must not guess, only report what to run.
-func TestConnectPickedWithoutTerminalOnlyPrints(t *testing.T) {
+// Standing inside a project, connect wires that project and nothing else.
+//
+// Retargeted from setupTargets, which is gone: setup and connect used to make
+// this decision in two different places, and this is the promise that survived
+// the merge. Scanning and wiring everything found below would let one pasted
+// command reach into unrelated repositories nobody chose.
+func TestConnectInsideAProjectWiresOnlyThatProject(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	srv := newTestServer(t, http.StatusCreated, "here-repo")
 	root := t.TempDir()
-	alpha := mkProject(t, root, "alpha")
+	here := mkProject(t, root, "here")
+	sibling := mkProject(t, root, "sibling")
 
 	var out bytes.Buffer
-	if err := connectPicked("http://example.test", root, &out, strings.NewReader(""), false); err != nil {
-		t.Fatalf("connectPicked: %v", err)
+	// canPrompt=false: no terminal, so no share question — the path an
+	// installer, a devcontainer or CI actually takes.
+	if err := connectHere(srv.URL, here, "", &out, false); err != nil {
+		t.Fatalf("connectHere: %v", err)
 	}
-	if _, statErr := os.Stat(filepath.Join(alpha, ".regent")); statErr == nil {
-		t.Error("nothing may be wired without a terminal to ask on")
-	}
-	if !strings.Contains(out.String(), "rgt connect http://example.test") {
-		t.Errorf("should print the command to run; got:\n%s", out.String())
-	}
-}
 
-func TestParseSelection(t *testing.T) {
-	cases := []struct {
-		name  string
-		in    string
-		n     int
-		want  []int
-		isErr bool
-	}{
-		{name: "single", in: "2", n: 3, want: []int{1}},
-		{name: "comma separated", in: "1,3", n: 3, want: []int{0, 2}},
-		{name: "space separated", in: "2 3", n: 3, want: []int{1, 2}},
-		{name: "all keyword", in: "all", n: 3, want: []int{0, 1, 2}},
-		{name: "a shorthand", in: "A", n: 2, want: []int{0, 1}},
-		{name: "duplicates collapse", in: "2,2", n: 3, want: []int{1}},
-		{name: "empty backs out", in: "  ", n: 3, want: nil},
-		{name: "zero rejected", in: "0", n: 3, isErr: true},
-		{name: "past end rejected", in: "4", n: 3, isErr: true},
-		{name: "not a number", in: "x", n: 3, isErr: true},
+	if !isConnected(here) {
+		t.Errorf("connect ran inside %s but did not wire it", here)
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := parseSelection(tc.in, tc.n)
-			if tc.isErr {
-				if err == nil {
-					t.Fatalf("parseSelection(%q) = %v, want an error", tc.in, got)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("parseSelection(%q): %v", tc.in, err)
-			}
-			if !reflect.DeepEqual(got, tc.want) {
-				t.Errorf("parseSelection(%q) = %v, want %v", tc.in, got, tc.want)
-			}
-		})
+	if isConnected(sibling) {
+		t.Errorf("connect wired %s, which the user never named", sibling)
 	}
 }

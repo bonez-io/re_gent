@@ -9,7 +9,13 @@ bin/
 *.dylib
 
 # Regent-specific
-.regent/
+# re_gent local state — machine-specific, like .git/ itself.
+# config.toml is the exception: it is the server binding teammates inherit on clone.
+# Excluding the directory itself would hide it, because git does not descend into
+# an excluded directory to read the .gitignore that re-includes the binding.
+.regent/*
+!.regent/config.toml
+!.regent/.gitignore
 *.regent
 
 # Test artifacts
@@ -49,3 +55,14 @@ demo/.opencode/
 demo/.codex/
 plugins/
 simple.py
+
+# Scratch worktrees for parallel agent runs; never part of the repo.
+.claude/worktrees/
+
+# Machine-local agent setup generated while dogfooding this repository.
+/.opencode/
+/.pi/
+/opencode.jsonc
+
+# rgt writes these when it rewrites hook config; never commit them.
+.claude/settings.json.bak-*
