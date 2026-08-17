@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,47 @@ import (
 	"github.com/regent-vcs/regent/internal/remotetest"
 	"github.com/regent-vcs/regent/internal/store"
 )
+
+func (f *syncFixture) addSessionStep(t *testing.T, refName, sessionID string, timestamp int64, entries []storedConversationEntry) store.Hash {
+	t.Helper()
+
+	treeHash, err := f.cache.WriteTree(&store.Tree{})
+	if err != nil {
+		t.Fatalf("write tree: %v", err)
+	}
+	args, err := f.cache.WriteBlob([]byte(`{"file_path":"demo.txt"}`))
+	if err != nil {
+		t.Fatalf("write args: %v", err)
+	}
+	result, err := f.cache.WriteBlob([]byte(`{"ok":true}`))
+	if err != nil {
+		t.Fatalf("write result: %v", err)
+	}
+	conversationData, err := json.Marshal(entries)
+	if err != nil {
+		t.Fatalf("marshal conversation: %v", err)
+	}
+	conversationHash, err := f.cache.WriteBlob(conversationData)
+	if err != nil {
+		t.Fatalf("write conversation: %v", err)
+	}
+	stepHash, err := f.cache.WriteStep(&store.Step{
+		Tree:           treeHash,
+		Conversation:   conversationHash,
+		Causes:         []store.Cause{{ToolUseID: "tool-1", ToolName: "Write", ArgsBlob: args, ResultBlob: result}},
+		SessionID:      sessionID,
+		Origin:         "claude_code",
+		TurnID:         "turn-1",
+		TimestampNanos: timestamp,
+	})
+	if err != nil {
+		t.Fatalf("write step: %v", err)
+	}
+	if err := f.cache.UpdateRef(refName, "", stepHash); err != nil {
+		t.Fatalf("update ref: %v", err)
+	}
+	return stepHash
+}
 
 // teammateFixture is a second machine on the same server: its own cache, its
 // own spool, no record of anything the first machine pushed. That last part is
@@ -144,6 +186,100 @@ func TestPullRebuildsTheDerivedReadPathFromPulledObjects(t *testing.T) {
 	// `rgt blame` broken on history that is otherwise complete.
 	if _, err := pulled.ReadBlameForFile(tip, "a.txt"); err != nil {
 		t.Errorf("blame was not rebuilt for pulled history: %v", err)
+	}
+}
+
+func TestPullRestoresNormalizedConversationIntoFreshIndex(t *testing.T) {
+	pusher := newSyncFixture(t)
+	entries := []storedConversationEntry{
+		{Type: "user", Text: "create demo.txt", TS: 100},
+		{Type: "reasoning", Text: "I will write the requested file", TS: 110},
+		{Type: "assistant", Text: "Created demo.txt", TS: 130},
+	}
+	tip := pusher.addSessionStep(t, syncTestRef, "claude_code--sess-1", 140, entries)
+	if _, err := runSyncCapturingOutput(t, pusher.cfg, syncOptions{}); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+
+	me := teammateFixture(t, pusher.srv)
+	if _, err := runPullCapturingOutput(t, me.cfg, pullOptions{}); err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+
+	idx, err := index.Open(me.cache)
+	if err != nil {
+		t.Fatalf("open pulled index: %v", err)
+	}
+	defer func() { _ = idx.Close() }()
+
+	messages, err := idx.GetMessagesForStep(tip)
+	if err != nil {
+		t.Fatalf("read pulled conversation: %v", err)
+	}
+	if len(messages) != 5 {
+		t.Fatalf("pulled conversation has %d messages, want user/reasoning/assistant/tool call/tool result: %#v", len(messages), messages)
+	}
+	wantText := map[string]string{
+		"user":      "create demo.txt",
+		"reasoning": "I will write the requested file",
+		"assistant": "Created demo.txt",
+	}
+	for _, message := range messages {
+		if want, ok := wantText[message.MessageType]; ok && message.ContentText != want {
+			t.Errorf("%s text = %q, want %q", message.MessageType, message.ContentText, want)
+		}
+	}
+
+	step, err := me.cache.ReadStep(tip)
+	if err != nil {
+		t.Fatalf("read pulled step: %v", err)
+	}
+	if _, err := rebuildDerived(me.cache, idx, tip); err != nil {
+		t.Fatalf("repeat rebuild: %v", err)
+	}
+	again, err := idx.GetMessagesForStep(tip)
+	if err != nil {
+		t.Fatalf("read rebuilt conversation: %v", err)
+	}
+	if len(again) != len(messages) {
+		t.Errorf("repeat rebuild duplicated conversation: %d messages became %d", len(messages), len(again))
+	}
+	if step.Conversation == "" {
+		t.Fatal("precondition: pulled step lost its canonical conversation hash")
+	}
+}
+
+func TestPullOrdersSessionsByRecordedActivityNotRefIteration(t *testing.T) {
+	pusher := newSyncFixture(t)
+	const (
+		newRef     = "sessions/claude_code--a-new"
+		newSession = "claude_code--a-new"
+		oldRef     = "sessions/claude_code--z-old"
+		oldSession = "claude_code--z-old"
+	)
+	pusher.addSessionStep(t, oldRef, oldSession, time.Unix(100, 0).UnixNano(), nil)
+	pusher.addSessionStep(t, newRef, newSession, time.Unix(200, 0).UnixNano(), nil)
+	for _, refName := range []string{oldRef, newRef} {
+		if _, err := runSyncCapturingOutput(t, pusher.cfg, syncOptions{ref: refName}); err != nil {
+			t.Fatalf("push %s: %v", refName, err)
+		}
+	}
+
+	me := teammateFixture(t, pusher.srv)
+	if _, err := runPullCapturingOutput(t, me.cfg, pullOptions{}); err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	sessions := sessionsInCache(t, me.cfg)
+	if len(sessions) != 2 {
+		t.Fatalf("pulled sessions = %d, want 2: %#v", len(sessions), sessions)
+	}
+	// Server refs are sorted, so a-new is rebuilt before z-old. This assertion
+	// fails if index time (and therefore loop order) is allowed to define recency.
+	if sessions[0].ID != newSession {
+		t.Errorf("most recent pulled session = %q, want %q; order = %#v", sessions[0].ID, newSession, sessions)
+	}
+	if got := sessions[0].LastSeenAt; !got.Equal(time.Unix(200, 0)) {
+		t.Errorf("new session last seen = %s, want recorded step time %s", got, time.Unix(200, 0))
 	}
 }
 

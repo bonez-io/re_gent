@@ -514,8 +514,14 @@ func (idx *DB) IndexStep(stepHash store.Hash, step *store.Step, tree *store.Tree
 		}
 	}
 
-	// Update session record
-	now := time.Now().UnixNano()
+	// Update session chronology from canonical step time, not indexing time.
+	// A fresh pull may rebuild several refs in lexical order; using time.Now here
+	// made whichever ref happened to be indexed last look like the most recent
+	// session even when its recorded work was older.
+	observedAt := step.TimestampNanos
+	if observedAt <= 0 {
+		observedAt = time.Now().UnixNano()
+	}
 	if forkedFromSession != "" {
 		// First step in a forked session
 		_, err = tx.Exec(`
@@ -523,26 +529,29 @@ func (idx *DB) IndexStep(stepHash store.Hash, step *store.Step, tree *store.Tree
 			                     forked_from_session, forked_from_step, fork_detected_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO UPDATE SET
-				last_seen_at = ?,
-				head_step_id = ?,
+				started_at = MIN(started_at, ?),
+				last_seen_at = MAX(last_seen_at, ?),
+				head_step_id = CASE WHEN head_step_id IS NULL OR head_step_id = '' OR ? >= last_seen_at THEN ? ELSE head_step_id END,
 				origin = COALESCE(NULLIF(?, ''), origin),
 				forked_from_session = COALESCE(forked_from_session, ?),
 				forked_from_step = COALESCE(forked_from_step, ?),
 				fork_detected_at = COALESCE(fork_detected_at, ?)
-		`, step.SessionID, originOrDefault(step.Origin), now, now, stepHash,
-			forkedFromSession, forkedFromStep, now,
-			now, stepHash, step.Origin,
-			forkedFromSession, forkedFromStep, now)
+		`, step.SessionID, originOrDefault(step.Origin), observedAt, observedAt, stepHash,
+			forkedFromSession, forkedFromStep, observedAt,
+			observedAt, observedAt, observedAt, stepHash, step.Origin,
+			forkedFromSession, forkedFromStep, observedAt)
 	} else {
 		// Normal session continuation or new session
 		_, err = tx.Exec(`
 			INSERT INTO sessions (id, origin, started_at, last_seen_at, head_step_id)
 			VALUES (?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO UPDATE SET
-				last_seen_at = ?,
-				head_step_id = ?,
+				started_at = MIN(started_at, ?),
+				last_seen_at = MAX(last_seen_at, ?),
+				head_step_id = CASE WHEN head_step_id IS NULL OR head_step_id = '' OR ? >= last_seen_at THEN ? ELSE head_step_id END,
 				origin = COALESCE(NULLIF(?, ''), origin)
-		`, step.SessionID, originOrDefault(step.Origin), now, now, stepHash, now, stepHash, step.Origin)
+		`, step.SessionID, originOrDefault(step.Origin), observedAt, observedAt, stepHash,
+			observedAt, observedAt, observedAt, stepHash, step.Origin)
 	}
 	if err != nil {
 		return fmt.Errorf("update session: %w", err)
@@ -705,7 +714,7 @@ func (idx *DB) ListAllSessions() ([]SessionInfo, error) {
 			ORDER BY ts_nanos ASC, id ASC
 			LIMIT 1
 		)
-		ORDER BY s.last_seen_at DESC
+		ORDER BY s.last_seen_at DESC, s.id ASC
 	`)
 	if err != nil {
 		return nil, err
