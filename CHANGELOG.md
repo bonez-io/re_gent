@@ -7,7 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `rgt pull` fetches a connected project's history from the server into the
+  machine-local cache. With no arguments it asks the server which sessions
+  exist, so a teammate who has just cloned — and has therefore pushed nothing
+  and can name nothing — gets the team's history with one command. Afterwards
+  `rgt log`, `show`, `blame` and `sessions` read it locally, with no network.
+  A session whose local history is not contained in the server's is reported
+  and left alone rather than overwritten; the other sessions are still pulled.
+
 ### Changed
+- A connected project whose cache is empty now reports that it is connected and
+  not yet pulled, and names `rgt pull`. `rgt log`, `sessions` and `status` used
+  to answer "no sessions" and send the user to `rgt doctor` for a wiring
+  problem they did not have, while the server held every session.
 - A project is identified by the repository it belongs to, not by the folder it
   sits in. Identity comes from the normalised git remote, so the same
   repository cloned over https or ssh is one project, two unrelated checkouts

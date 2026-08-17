@@ -30,6 +30,11 @@ func LogCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := openStoreFromCWD()
 			if err != nil {
+				// A connected project with nothing fetched yet is a normal
+				// state, not a failure: say so and exit zero.
+				if reportNotPulled(cmd.OutOrStdout(), err) {
+					return nil
+				}
 				return err
 			}
 
@@ -149,6 +154,12 @@ func explainEmptyLog(idx *index.DB, sessionID string) error {
 	}
 
 	if len(sessions) == 0 {
+		// In server mode this is a third fact again, and doctor answers none of
+		// it: the wiring is fine, the history is on the server, and this
+		// machine has not fetched it.
+		if reportEmptyServerModeCache(os.Stdout) {
+			return nil
+		}
 		fmt.Println("No sessions recorded here.")
 		fmt.Println("Nothing has ever been captured in this repository, which usually means no agent hook is wired.")
 		fmt.Println("  - Check the wiring: rgt doctor")

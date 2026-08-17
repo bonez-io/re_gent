@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -22,6 +23,11 @@ const MaxObjectSize = 50 << 20
 // maxRetries bounds retries for a single request. The context deadline is the
 // real budget; this only stops a fast-failing server from being hammered.
 const maxRetries = 3
+
+// maxRefListSize bounds a ref listing. One entry is a session name and a
+// 64-character hash, so this holds tens of thousands of sessions — far past any
+// real repository, and still a bound rather than an open-ended read.
+const maxRefListSize = 4 << 20
 
 var (
 	// ErrNotFound is returned when an object or ref does not exist on the server.
@@ -52,6 +58,11 @@ type Client interface {
 	GetObject(ctx context.Context, h store.Hash) ([]byte, error)
 	// GetRef reads a ref. It returns ErrNotFound when the ref does not exist.
 	GetRef(ctx context.Context, name string) (store.Hash, error)
+	// ListRefs lists the server's refs under dir (e.g. "sessions"), keyed by
+	// name relative to dir. It is the only call that does not require the
+	// caller to already know a ref name, which is what a machine that has
+	// pushed nothing needs in order to pull anything.
+	ListRefs(ctx context.Context, dir string) (map[string]store.Hash, error)
 	// UpdateRef compare-and-swaps a ref. expected is "" for a new ref.
 	UpdateRef(ctx context.Context, name string, expected, next store.Hash) error
 }
@@ -93,6 +104,17 @@ func (c *HTTPClient) objectURL(h store.Hash) string {
 
 func (c *HTTPClient) refURL(name string) string {
 	return fmt.Sprintf("%s/%s/refs/%s", c.baseURL, c.repoID, name)
+}
+
+// refListURL addresses the collection rather than one member: GET on the refs
+// directory itself, which is how a client that has never pushed learns what the
+// server holds.
+func (c *HTTPClient) refListURL(dir string) string {
+	base := fmt.Sprintf("%s/%s/refs", c.baseURL, c.repoID)
+	if dir == "" {
+		return base
+	}
+	return base + "?dir=" + url.QueryEscape(dir)
 }
 
 // HasObject implements Client.
@@ -153,6 +175,39 @@ func (c *HTTPClient) GetObject(ctx context.Context, h store.Hash) ([]byte, error
 		return nil, fmt.Errorf("object %s failed integrity check (got %s)", h, got)
 	}
 	return data, nil
+}
+
+// ListRefs implements Client.
+func (c *HTTPClient) ListRefs(ctx context.Context, dir string) (map[string]store.Hash, error) {
+	if dir != "" {
+		if err := ValidateRefName(dir); err != nil {
+			return nil, err
+		}
+	}
+	resp, err := c.do(ctx, http.MethodGet, c.refListURL(dir), nil)
+	if err != nil {
+		return nil, err
+	}
+	defer closeBody(resp)
+
+	var body struct {
+		Refs map[string]string `json:"refs"`
+	}
+	// A ref listing is one hash and one short name per session. maxRefListSize
+	// is generous for that and still bounded, because this response is the one
+	// place a client reads something whose size it did not choose.
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxRefListSize)).Decode(&body); err != nil {
+		return nil, fmt.Errorf("decode ref listing: %w", err)
+	}
+
+	out := make(map[string]store.Hash, len(body.Refs))
+	for name, hash := range body.Refs {
+		if err := validateFullHash(store.Hash(hash)); err != nil {
+			return nil, fmt.Errorf("ref %s: %w", name, err)
+		}
+		out[name] = store.Hash(hash)
+	}
+	return out, nil
 }
 
 // GetRef implements Client.

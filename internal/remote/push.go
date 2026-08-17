@@ -447,43 +447,9 @@ func Hydrate(ctx context.Context, cache *store.Store, client Client, refName str
 	}
 	res.Tip = tip
 
-	fetched := make(map[store.Hash]bool)
-	for current := tip; current != ""; {
-		n, err := fetchObject(ctx, cache, client, current, fetched)
-		res.Objects += n
-		if err != nil {
-			return res, err
-		}
-
-		step, err := cache.ReadStep(current)
-		if err != nil {
-			return res, fmt.Errorf("read hydrated step %s: %w", current, err)
-		}
-		res.Steps++
-		if res.Steps > maxChainLength {
-			return res, fmt.Errorf("step chain from %s exceeds %d entries", tip, maxChainLength)
-		}
-
-		// The tree must be local before its entries can be enumerated.
-		n, err = fetchObject(ctx, cache, client, step.Tree, fetched)
-		res.Objects += n
-		if err != nil {
-			return res, err
-		}
-
-		objects, err := stepObjects(cache, step, "", map[store.Hash]bool{})
-		if err != nil {
-			return res, err
-		}
-		for _, h := range objects {
-			n, err := fetchObject(ctx, cache, client, h, fetched)
-			res.Objects += n
-			if err != nil {
-				return res, err
-			}
-		}
-
-		current = step.Parent
+	res.Objects, res.Steps, err = fetchHistory(ctx, cache, client, tip)
+	if err != nil {
+		return res, err
 	}
 
 	if tip != "" {
@@ -492,6 +458,60 @@ func Hydrate(ctx context.Context, cache *store.Store, client Client, refName str
 		}
 	}
 	return res, nil
+}
+
+// fetchHistory downloads every object reachable from tip into cache, and
+// reports how many objects and steps that was.
+//
+// It deliberately touches no ref. Objects are content-addressed, so writing
+// them is purely additive and can never destroy anything; moving a ref is the
+// only destructive act in a pull, and separating the two is what lets Pull
+// answer "is the server's history ahead of mine?" — a question that can only be
+// asked once the server's steps are readable locally — before deciding whether
+// to move anything.
+func fetchHistory(ctx context.Context, cache *store.Store, client Client, tip store.Hash) (int, int, error) {
+	objects, steps := 0, 0
+	fetched := make(map[store.Hash]bool)
+
+	for current := tip; current != ""; {
+		n, err := fetchObject(ctx, cache, client, current, fetched)
+		objects += n
+		if err != nil {
+			return objects, steps, err
+		}
+
+		step, err := cache.ReadStep(current)
+		if err != nil {
+			return objects, steps, fmt.Errorf("read fetched step %s: %w", current, err)
+		}
+		steps++
+		if steps > maxChainLength {
+			return objects, steps, fmt.Errorf("step chain from %s exceeds %d entries", tip, maxChainLength)
+		}
+
+		// The tree must be local before its entries can be enumerated.
+		n, err = fetchObject(ctx, cache, client, step.Tree, fetched)
+		objects += n
+		if err != nil {
+			return objects, steps, err
+		}
+
+		list, err := stepObjects(cache, step, "", map[store.Hash]bool{})
+		if err != nil {
+			return objects, steps, err
+		}
+		for _, h := range list {
+			n, err := fetchObject(ctx, cache, client, h, fetched)
+			objects += n
+			if err != nil {
+				return objects, steps, err
+			}
+		}
+
+		current = step.Parent
+	}
+
+	return objects, steps, nil
 }
 
 // casLocalRef points a cached ref at tip using compare-and-swap, tolerating a
