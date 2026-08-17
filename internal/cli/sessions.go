@@ -77,6 +77,12 @@ func SessionsCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := openStoreFromCWD()
 			if err != nil {
+				// See log: a connected project that has fetched nothing yet is
+				// reported, not failed. JSON callers keep the error, because a
+				// prose report in place of a document is worse than an error.
+				if outputFormat != sessionsFormatJSON && reportNotPulled(cmd.OutOrStdout(), err) {
+					return nil
+				}
 				return err
 			}
 
@@ -108,6 +114,11 @@ func SessionsCmd() *cobra.Command {
 
 func writeSessionsText(w io.Writer, sessions []index.SessionInfo) error {
 	if len(sessions) == 0 {
+		// "No sessions recorded yet" is false for a connected project: they are
+		// recorded, just not here.
+		if reportEmptyServerModeCache(w) {
+			return nil
+		}
 		fmt.Fprintln(w, "No sessions recorded yet.")
 		return nil
 	}

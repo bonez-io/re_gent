@@ -94,8 +94,14 @@ func TestOpenStoreFromCWDExplainsAMissingCache(t *testing.T) {
 	}
 	// 'rgt init' would be the wrong advice in server mode; the cache is
 	// rebuilt from the server, which is the source of truth.
-	if !strings.Contains(err.Error(), "rgt sync --pull") {
-		t.Fatalf("error should point at 'rgt sync --pull', got: %v", err)
+	//
+	// The advice used to be 'rgt sync --pull <ref>', which asked for a ref name
+	// this machine has no way of knowing — it has pushed nothing, so its spool
+	// lists nothing, and there was no call that asked the server what exists.
+	// 'rgt pull' discovers that itself, so it is the command that can actually
+	// be run from here.
+	if !strings.Contains(err.Error(), "rgt pull") {
+		t.Fatalf("error should point at 'rgt pull', got: %v", err)
 	}
 	if strings.Contains(err.Error(), "rgt init") {
 		t.Fatalf("error must not suggest 'rgt init' in server mode, got: %v", err)

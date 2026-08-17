@@ -276,6 +276,7 @@ Hooks auto-configure on `rgt init`. No manual setup required.
 | `rgt version` | Print version information |
 | `rgt completion` | Generate shell completion scripts |
 | `rgt sync` | Deliver queued server-mode capture (`--status`, `--pull`, `--repair`) |
+| `rgt pull [ref]` | Fetch the project's history from the server into this machine's cache. With no ref it asks the server what exists. |
 
 ---
 
@@ -292,7 +293,11 @@ export REGENT_REPO_ID=my-project
 
 rgt sync --status   # what is queued (no network)
 rgt sync            # drain the queue now
+rgt pull            # fetch the team's history into this machine's cache
 ```
+
+A teammate who clones a connected project runs `rgt pull` once and then reads the team's
+sessions with the ordinary history commands, offline.
 
 See **[docs/server-mode.md](docs/server-mode.md)** for the configuration reference, the consistency
 guarantee, and the full failure-mode table (network blip, server down, partial write, divergence,

@@ -215,6 +215,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		s.putObject(w, r, store.Hash(rest))
 	case kind == "objects" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
 		s.getObject(w, store.Hash(rest))
+	case kind == "refs" && rest == "" && r.Method == http.MethodGet:
+		s.listRefs(w, r.URL.Query().Get("dir"))
 	case kind == "refs" && r.Method == http.MethodGet:
 		s.getRef(w, rest)
 	case kind == "refs" && r.Method == http.MethodPost:
@@ -262,6 +264,27 @@ func (s *Server) getObject(w http.ResponseWriter, h store.Hash) {
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	_, _ = w.Write(data)
+}
+
+// listRefs mirrors the production server's GET /{repo}/refs[?dir=…]: names come
+// back relative to dir, the way store.ListRefs reports them.
+func (s *Server) listRefs(w http.ResponseWriter, dir string) {
+	prefix := ""
+	if dir != "" {
+		prefix = strings.TrimSuffix(dir, "/") + "/"
+	}
+
+	s.mu.Lock()
+	out := map[string]string{}
+	for name, h := range s.refs {
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		out[strings.TrimPrefix(name, prefix)] = string(h)
+	}
+	s.mu.Unlock()
+
+	writeJSON(w, http.StatusOK, map[string]any{"refs": out})
 }
 
 func (s *Server) getRef(w http.ResponseWriter, name string) {

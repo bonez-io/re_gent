@@ -70,6 +70,7 @@ func newRootCommand() *cobra.Command {
 	rootCmd.AddCommand(cli.InitCmd())
 	rootCmd.AddCommand(cli.DoctorCmd())
 	rootCmd.AddCommand(cli.PushCmd())
+	rootCmd.AddCommand(cli.PullCmd())
 	rootCmd.AddCommand(cli.ConnectCmd())
 	rootCmd.AddCommand(cli.DisconnectCmd())
 	rootCmd.AddCommand(cli.LogCmd())
