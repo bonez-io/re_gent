@@ -165,3 +165,30 @@ func TestReadWriteBlame(t *testing.T) {
 		}
 	}
 }
+
+// Reproduces a defect seen against a real project: changing one line credited
+// the NEXT line to the new step, and left the changed line attributed to the
+// step before it. Blame's whole claim is "this line came from that prompt", so
+// being off by one makes every answer wrong for edited files.
+func TestComputeBlameAttributesTheLineThatActuallyChanged(t *testing.T) {
+	old := []byte("{\n  \"name\": \"job-hunter\",\n  \"version\": \"0.1.0\",\n  \"description\": \"agent\",\n  \"main\": \"dist/index.js\"\n}\n")
+	new_ := []byte("{\n  \"name\": \"job-hunter\",\n  \"version\": \"0.1.1\",\n  \"description\": \"agent\",\n  \"main\": \"dist/index.js\"\n}\n")
+
+	const first, second = Hash("aaaa"), Hash("bbbb")
+	oldBlame := &BlameMap{Lines: []Hash{first, first, first, first, first, first}}
+
+	got := ComputeBlame(old, new_, oldBlame, second)
+
+	if len(got.Lines) != 6 {
+		t.Fatalf("blame has %d lines, want 6", len(got.Lines))
+	}
+	// Line 3 (index 2) is the only line that changed.
+	if got.Lines[2] != second {
+		t.Errorf("the changed line (\"version\") is attributed to %q, want the new step %q", got.Lines[2], second)
+	}
+	for _, i := range []int{0, 1, 3, 4, 5} {
+		if got.Lines[i] != first {
+			t.Errorf("line %d did not change but is attributed to %q, want %q", i+1, got.Lines[i], first)
+		}
+	}
+}
