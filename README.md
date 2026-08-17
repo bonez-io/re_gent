@@ -433,11 +433,66 @@ See [ROADMAP.md](ROADMAP.md) for planned features including:
 
 Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
+### Team development workflow
+
+GitHub Issues are the source of truth for planned work. Every implementation
+starts from an assigned child issue with acceptance criteria; epic issues track
+outcomes and dependencies, not one large PR.
+
+#### Ownership
+
+| Owner | Responsibility | Active epics |
+|---|---|---|
+| [Arad (`@arad1410`)](https://github.com/arad1410) | Core engineering and most of the implementation-heavy work | [Remote fidelity #35](https://github.com/regent-vcs/re_gent_headless/issues/35), [remote lifecycle #38](https://github.com/regent-vcs/re_gent_headless/issues/38) |
+| [Amir (`@Amirshrim`)](https://github.com/Amirshrim) | Complete onboarding-friendly epics with independently useful deliverables | [Documentation platform #37](https://github.com/regent-vcs/re_gent_headless/issues/37), followed by the designed Git integration work in [#31](https://github.com/regent-vcs/re_gent_headless/issues/31) |
+| [Shay (`@shayliv`)](https://github.com/shayliv) | R&D lead, review/merge owner, UI foundation, infrastructure, deployment, security, and authentication | [UI foundation #36](https://github.com/regent-vcs/re_gent_headless/issues/36), [infrastructure #34](https://github.com/regent-vcs/re_gent_headless/issues/34) |
+
+Shay is the required reviewer and merge owner for every PR entering `dev`.
+Shay-authored PRs still require green CI and the same self-review checklist;
+peer review is requested when practical, especially for security-sensitive work.
+
+#### Issue status
+
+| Label | Meaning |
+|---|---|
+| `status: ready` | Fully specified and available to start. |
+| `status: in progress` | Assigned owner is actively implementing it. |
+| `status: blocked` | A named dependency must land first. |
+| `status: needs design` | Do not implement until the open design questions are resolved. |
+| `status: review` | A PR is open against `dev` and awaiting review. |
+
+#### From issue to merge
+
+1. Choose an assigned `status: ready` child issue. Do not implement an epic as
+   one PR.
+2. Comment that you are starting, change its label to `status: in progress`,
+   and pull the latest `dev`.
+3. Create a branch named `<github-login>/<issue-number>-<short-name>`, for
+   example `arad1410/39-conversation-pull`.
+4. Implement only that issue's acceptance criteria. Add focused tests and
+   update documentation when behavior changes.
+5. Push the branch and open a PR **to `dev`**, never directly to `main`. Put
+   `Closes #<issue-number>` in the PR body.
+6. Change the issue to `status: review`, ensure CI is green, and request
+   `@shayliv`.
+7. Address review feedback. Only the review/merge owner merges into `dev`.
+8. Promote `dev` to `main` only through a separate, milestone-level release PR.
+
+Do not push directly to `dev` or `main`. Do not combine unrelated issues in one
+PR. Architecture, storage, protocol, authentication, and security changes must
+follow an accepted RFC or include the required design/threat-model update.
+
+Regent may integrate with Git hooks, but Regent itself never stages, commits,
+pushes, or changes a source repository's Git remotes.
+
 **Quick Start:**
 - [QUICK_START.md](.github/QUICK_START.md) — 5-minute setup guide
 - [Good first issues](https://github.com/regent-vcs/regent/labels/good%20first%20issue)
 
 **Before opening a PR:**
+- [ ] The PR targets `dev` and closes one assigned issue
+- [ ] The issue is labeled `status: review`
+- [ ] `@shayliv` is requested as reviewer
 - [ ] Tests pass: `go test ./...` and `go test -race ./...`
 - [ ] Linter passes: `golangci-lint run`
 - [ ] Code formatted: `go fmt ./...`
