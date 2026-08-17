@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/regent-vcs/regent/internal/remote"
 	"github.com/regent-vcs/regent/internal/store"
 )
 
@@ -54,7 +55,17 @@ func TestOpenStoreFromCWDUsesTheServerCacheWhenConfigured(t *testing.T) {
 	t.Setenv("REGENT_REPO_ID", "demo")
 	t.Setenv("REGENT_CACHE_DIR", cacheRoot)
 
-	cacheDir := filepath.Join(cacheRoot, "repos", "demo")
+	// Ask for the cache path rather than rebuilding it here. The layout gained
+	// a per-server segment, and a test that spells the path out by hand is a
+	// second definition of it that drifts from the first.
+	cacheDir, err := remote.CacheDirFor(remote.Config{
+		ServerURL: "https://regent.example.com",
+		RepoID:    "demo",
+		CacheDir:  cacheRoot,
+	})
+	if err != nil {
+		t.Fatalf("CacheDirFor: %v", err)
+	}
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		t.Fatalf("mkdir cache: %v", err)
 	}

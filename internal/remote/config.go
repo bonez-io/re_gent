@@ -9,6 +9,7 @@
 package remote
 
 import (
+	"encoding/hex"
 	"fmt"
 	"net/url"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
+	"lukechampine.com/blake3"
 )
 
 // DefaultTimeout bounds all network work performed inside a single hook
@@ -303,6 +305,15 @@ func DefaultConfigPath() string {
 // The cache lives outside the working tree on purpose: in server mode the repo
 // must not need a .regent/ directory at all. The cache is disposable — every
 // object and ref in it is either already on the server or listed in the spool.
+//
+// The path is keyed by the server as well as the project. It used to be keyed
+// by project alone, which meant one cache — one object store, one index, one
+// set of upload watermarks — shared by every server a project was ever pointed
+// at. Each machine then held a blend of two histories and told each server the
+// other's watermarks. Identity coming from the git remote makes that ordinary
+// rather than rare: a repository connected to staging and to production
+// derives the same id for both, correctly, because it is the same repository.
+// The id is meant to match. The cache is not.
 func CacheDirFor(cfg Config) (string, error) {
 	if err := ValidateRepoID(cfg.RepoID); err != nil {
 		return "", err
@@ -315,7 +326,24 @@ func CacheDirFor(cfg Config) (string, error) {
 		}
 		base = filepath.Join(userCache, "regent")
 	}
-	return filepath.Join(base, "repos", cfg.RepoID), nil
+	return filepath.Join(base, "repos", serverCacheKey(cfg.ServerURL), cfg.RepoID), nil
+}
+
+// serverCacheKey turns a server address into one path segment.
+//
+// A hash rather than the address itself: a URL contains characters that are not
+// safe in a path on every platform, and the readable part of this path is the
+// repo id sitting underneath it. Stability is what matters — the same binding
+// must resolve to the same directory on every run, or each run starts from an
+// empty cache and re-uploads everything.
+func serverCacheKey(serverURL string) string {
+	if serverURL == "" {
+		// A binding with no server: one shared bucket, which is what these have
+		// always had.
+		return "local"
+	}
+	sum := blake3.Sum256([]byte(strings.TrimRight(serverURL, "/")))
+	return hex.EncodeToString(sum[:])[:12]
 }
 
 // Redact renders a token safe to log: it never reveals more than a short prefix.
