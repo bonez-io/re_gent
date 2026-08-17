@@ -261,7 +261,7 @@ Hooks auto-configure on `rgt init`. No manual setup required.
 
 | Command | Description |
 |---------|-------------|
-| `rgt connect [server-url]` | Connect this project (or pick several) to a server and wire agent hooks. The URL is remembered after the first run. Replaces the former `rgt setup`. |
+| `rgt connect [server-url]` | Connect the project you are standing in to a server and wire agent hooks. Run outside a project it names the fix and changes nothing. The URL is remembered after the first run. Replaces the former `rgt setup`. |
 | `rgt connect --as <name>` | Register this project under a name you choose instead of one derived from its git remote. Recorded in the project binding, so it is said once. |
 | `rgt init` | Initialize `.regent/` in current directory |
 | `rgt log` | Show step history (supports `--session`, `-n`, `--json`, `--graph`) |

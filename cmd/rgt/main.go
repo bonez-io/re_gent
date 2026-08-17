@@ -42,25 +42,27 @@ func removedCmd(name, guidance string) *cobra.Command {
 
 func newRootCommand() *cobra.Command {
 	rootCmd := &cobra.Command{
-		Use:     "rgt",
-		Short:   "re_gent - version control for AI agent activity",
-		Long:    "re_gent is a content-addressed version control system for AI agent activity.\nIt captures what an agent did, why, and lets you blame, log, and inspect steps across sessions.",
-		Version: cli.Version,
-		// Bare `rgt` is the front door once a server is known: offer to wire
-		// more projects rather than printing help nobody asked for.
+		Use:          "rgt",
+		Short:        "re_gent - version control for AI agent activity",
+		Long:         "re_gent is a content-addressed version control system for AI agent activity.\nIt captures what an agent did, why, and lets you blame, log, and inspect steps across sessions.",
+		Version:      cli.Version,
 		SilenceUsage: true,
 		// main prints the error and sets the exit code, so cobra must not print
 		// it too. Both did, and every failure in the CLI came out twice. Set on
 		// the root because cobra checks the root as well as the command that
 		// failed, so this covers the whole tree rather than one command.
 		SilenceErrors: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := cli.RunDefaultSetup(); err != nil {
-				// No server yet: help is the useful answer, not an error dump.
-				_ = cmd.Help()
-				return nil
-			}
-			return nil
+		// Bare `rgt` prints help and does nothing else.
+		//
+		// It used to run the project picker: typing the bare command — the first
+		// thing anyone does with an unfamiliar CLI — opened a full-screen
+		// multi-select over the filesystem, listing the projects it found below
+		// the current directory. Marking one that was already connected meant
+		// *disconnect*, so a destructive change to a working project sat one
+		// space keypress inside a screen you could reach by accident (#28).
+		// A command invoked with no arguments should say what it can do.
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return cmd.Help()
 		},
 	}
 	// Make `rgt --version` print the same line as `rgt version`.

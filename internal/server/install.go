@@ -41,8 +41,9 @@ import (
 // devcontainers, over SSH, in CI and in provisioning scripts — none of which
 // have a terminal — so "no terminal" could not be the case that gives up.
 //
-// Wiring is now unconditional and `rgt connect` decides, prompting only when
-// explicitly asked with --interactive.
+// Wiring is now unconditional and `rgt connect` decides. There is nothing left
+// to redirect a terminal for: the picker it fed is gone (#28), and connect
+// either wires the project the script is standing in or names the fix.
 var installScriptTemplate = template.Must(template.New("install").Parse(`#!/bin/sh
 # re_gent one-line installer (server-hosted; no Go toolchain required).
 #
@@ -171,9 +172,9 @@ rgt version 2>/dev/null || true
 # scatter .regent/ into home directories. A .git entry is the marker (it is a
 # file, not a directory, inside worktrees and submodules). The server is open,
 # so no token is involved.
-# Wiring is unconditional: rgt connect wires what it detects, and only prompts
-# when asked with --interactive. See the Go comment on this template for why
-# the installer no longer inspects the terminal.
+# Wiring is unconditional: rgt connect wires the project it is standing in, and
+# says what to do when it is not standing in one. See the Go comment on this
+# template for why the installer no longer inspects the terminal.
 rgt connect "{{.BaseURL}}" || {
   warn "Setup did not finish. You can re-run it any time with:"
   warn "  rgt connect {{.BaseURL}}"
