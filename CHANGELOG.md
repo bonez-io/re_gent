@@ -87,6 +87,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   change are not migrated; their history is still in `.regent/`.
 
 ### Removed
+- The interactive project picker, and every path that reached it. Typing bare
+  `rgt` — the first thing anyone does with an unfamiliar CLI — opened a
+  full-screen multi-select over the filesystem, listing the projects it found
+  below the current directory. Marking one that was already connected meant
+  *disconnect*, so a working project was one space keypress away from losing
+  its wiring and its hooks, in a screen reachable by accident. Bare `rgt` now
+  prints help and changes nothing; `rgt connect` run outside a project says to
+  `cd` into the one you want and run it there, rather than searching; and
+  `rgt disconnect` is the only way to disconnect a project.
 - `rgt login` and `rgt whoami`. The server performs no authentication, so a
   sign-in command and an identity command implied a security model that did not
   exist. Identity comes from `git config user.name` / `user.email`.

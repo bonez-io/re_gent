@@ -18,7 +18,9 @@ func DisconnectCmd() *cobra.Command {
 		Short: "Stop capturing this project to a re_gent server",
 		Long: "Removes the server wiring and re_gent's agent hooks from this project.\n" +
 			"History already on the server is left alone — unwiring one machine must\n" +
-			"not erase what the team can see. Run `rgt` to pick projects instead.",
+			"not erase what the team can see.\n\n" +
+			"This is the only way to disconnect a project. It used to also happen as a\n" +
+			"side effect of marking an already-connected project in the picker (#28).",
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {

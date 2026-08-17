@@ -39,9 +39,9 @@ func TestE2EConnectRegistersWithALiveServer(t *testing.T) {
 	// named deliberately rather than taking whatever t.TempDir() produces.
 	project := filepath.Join(t.TempDir(), "acceptance-project")
 	mustMkdirAll(t, project)
-	// isProjectDir looks for .git or .regent; without one, connect falls
-	// through to the project picker, prints suggestions and exits 0 having
-	// done nothing. A bare temp dir would pass a naive assertion.
+	// isProjectDir looks for .git or .regent; without one, connect refuses and
+	// names the fix instead of wiring anything. A bare temp dir would fail
+	// here for a reason that has nothing to do with the server.
 	mustMkdirAll(t, filepath.Join(project, ".git"))
 
 	out := e2eRunEnv(t, rgt, project, hermeticEnv(t, srv), nil, "connect", srv.URL)

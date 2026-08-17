@@ -32,7 +32,8 @@ func fetchInstallScript(t *testing.T, baseURL string) string {
 //
 // The stub is served as the binary rather than merely placed on PATH: the
 // installer now always downloads, so anything on PATH would be overwritten by
-// the real binary — which would launch the picker and block the test forever.
+// the real binary — which would reach a real server and wire the test's
+// working directory for real.
 func runInstaller(t *testing.T, workDir string) (out string, calls string, serverURL string) {
 	t.Helper()
 	if runtime.GOOS == "windows" {

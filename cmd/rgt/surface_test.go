@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -30,6 +33,108 @@ func runRoot(t *testing.T, args ...string) (string, error) {
 		out.WriteString(err.Error())
 	}
 	return out.String(), err
+}
+
+// captureDirectStdout redirects os.Stdout for the duration of the test and
+// returns a func that stops the capture and yields what was written to it.
+//
+// runRoot only sees what a command writes through cobra's out/err writers. The
+// project scan bare `rgt` used to run printed straight to os.Stdout, so a test
+// that only inspected the cobra buffer could not see it happen at all.
+func captureDirectStdout(t *testing.T) func() string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	real := os.Stdout
+	os.Stdout = w
+
+	done := make(chan string, 1)
+	go func() {
+		b, _ := io.ReadAll(r)
+		done <- string(b)
+	}()
+
+	var text string
+	var stopped bool
+	stop := func() string {
+		if !stopped {
+			stopped = true
+			os.Stdout = real
+			_ = w.Close()
+			text = <-done
+			_ = r.Close()
+		}
+		return text
+	}
+	t.Cleanup(func() { stop() })
+	return stop
+}
+
+// TestBareRgtPrintsHelpAndTouchesNothing pins what typing the bare command
+// does. It is the whole of issue #28: `rgt` on its own opened a full-screen
+// multi-select over the filesystem, in which one space keypress on an
+// already-connected project disconnected it. A person exploring an unfamiliar
+// CLI types its name; that must print what it can do, not start a wizard and
+// certainly not stand one keystroke from a destructive action.
+//
+// The environment here is the one that used to reach the picker: a server this
+// machine already remembers, and a working directory that has projects under
+// it. Neither may make bare `rgt` do anything other than print help.
+func TestBareRgtPrintsHelpAndTouchesNothing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".regent"), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	// A machine that has connected before. Without a remembered server the old
+	// code failed early and printed help by accident, which would have made
+	// this test pass for the wrong reason.
+	if err := os.WriteFile(filepath.Join(home, ".regent", "config.toml"),
+		[]byte("[server]\nurl = 'http://team.example:7654'\n"), 0o600); err != nil {
+		t.Fatalf("write user config: %v", err)
+	}
+
+	work := t.TempDir()
+	nearby := filepath.Join(work, "ledger-service")
+	if err := os.MkdirAll(filepath.Join(nearby, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(work); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+
+	direct := captureDirectStdout(t)
+	out, err := runRoot(t)
+	scanned := direct()
+
+	if err != nil {
+		t.Errorf("bare `rgt` must exit zero, got: %v", err)
+	}
+	if !strings.Contains(out, "Available Commands") || !strings.Contains(out, "connect") {
+		t.Errorf("bare `rgt` should print help listing the commands; got:\n%s", out)
+	}
+	// Anything printed outside the help text is a side trip bare `rgt` had no
+	// business taking — the project scan announced itself here.
+	if strings.TrimSpace(scanned) != "" {
+		t.Errorf("bare `rgt` did something besides print help; it wrote to stdout:\n%s", scanned)
+	}
+	if strings.Contains(out+scanned, "ledger-service") {
+		t.Errorf("bare `rgt` went looking for projects below the current directory:\n%s%s", out, scanned)
+	}
+	// Nothing may be created either — not in the projects it can see, nor in
+	// the directory it was run from.
+	for _, dir := range []string{work, nearby} {
+		if _, statErr := os.Stat(filepath.Join(dir, ".regent")); statErr == nil {
+			t.Errorf("bare `rgt` wired %s; it must change nothing", dir)
+		}
+	}
 }
 
 func TestRemovedCommandsNameTheirReplacement(t *testing.T) {

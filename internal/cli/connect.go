@@ -35,13 +35,12 @@ type connectParams struct {
 func ConnectCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "connect [server-url]",
-		Short: "Connect projects to a re_gent server and wire agent hooks",
-		Long: `Connect this project — or several — to a re_gent server.
+		Short: "Connect this project to a re_gent server and wire agent hooks",
+		Long: `Connect this project to a re_gent server.
 
-Run inside a project and connect wires that project. Run it anywhere else and
-connect offers the projects it finds below, so wiring several does not mean
-cd-ing into each one. Selecting a project that is already connected
-disconnects it.
+Run it inside the project you want wired. Run anywhere else it names the fix
+and changes nothing, rather than searching the directories below for projects
+nobody asked it to touch. Disconnecting is its own command, rgt disconnect.
 
 The server URL is remembered after the first successful run, so later runs can
 omit it. Running connect more than once is safe: hooks are merged rather than
@@ -86,8 +85,8 @@ connect replaces setup, which did the same job with different answers.`,
 			if isProjectDir(cwd) {
 				return connectHere(serverURL, cwd, explicitID, cmd.OutOrStdout(), isTerminal(os.Stdin))
 			}
-			// Otherwise offer the projects below here.
-			return connectPicked(serverURL, cwd, cmd.OutOrStdout(), isTerminal(os.Stdin), chooseWithPicker, shareWithTeam)
+			// Anywhere else, say so and stop. See notAProject.
+			return notAProject(cwd, serverURL)
 		},
 	}
 	// Derivation is a guess and it will be wrong for someone: a fork's remote,
@@ -98,29 +97,27 @@ connect replaces setup, which did the same job with different answers.`,
 	return cmd
 }
 
-// connectHere wires the one project the user is standing in.
+// connectHere wires the one project the user is standing in — the only project
+// connect ever touches now that the picker is gone (#28).
 //
-// It goes through applyConnections rather than calling runConnect directly so
-// that the single-project and multi-project routes cannot drift: the toggle
-// behaviour, the per-project reporting, and the share offer are the same code
-// on both.
+// It connects and never disconnects. Marking an already-connected project used
+// to mean "unwire it", because a tick in a list expresses a state rather than a
+// verb; that reading is what made the picker destructive, and it is why
+// connecting a project twice used to remove its hooks. `rgt disconnect` is the
+// only way to unwire one.
+//
+// canPrompt is false wherever there is no person to answer — under
+// `curl | sh`, in CI, in a devcontainer — and the share question is simply not
+// asked there.
 func connectHere(serverURL, dir, repoID string, out io.Writer, canPrompt bool) error {
-	share := shareWithTeam
-	if !canPrompt {
-		share = nil
-	}
-	wired, unwired, failed := applyConnections(serverURL, []string{dir}, out, false, repoID)
-	if failed > 0 {
+	fmt.Fprintf(out, "\n== %s ==\n", filepath.Base(dir))
+	if err := runConnect(connectParams{serverURL: serverURL, projectRoot: dir, repoID: repoID}); err != nil {
+		fmt.Fprintf(out, "  ! %v\n", err)
 		return fmt.Errorf("%s could not be connected", filepath.Base(dir))
 	}
-	if len(wired) > 0 {
-		rememberServer(serverURL)
-		if share != nil {
-			share(wired)
-		}
-	}
-	if unwired > 0 {
-		fmt.Fprintf(out, "\n%s disconnected.\n", filepath.Base(dir))
+	rememberServer(serverURL)
+	if canPrompt {
+		shareWithTeam([]string{dir})
 	}
 	return nil
 }
