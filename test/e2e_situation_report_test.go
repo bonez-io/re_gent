@@ -104,6 +104,90 @@ func TestE2ELogDistinguishesNoSessionsFromNoSteps(t *testing.T) {
 	}
 }
 
+// Claude Code reads .claude/settings.json from the directory it was opened in.
+// init writes it at the project root, which is not necessarily that directory.
+//
+// Open the agent at a workspace root above the project and the settings init
+// wrote are never loaded, so capture silently never starts — and doctor, which
+// reads the same path init wrote, agrees everything is fine. Two commands
+// confirming a file the agent never reads is worse than either of them being
+// silent.
+func TestE2EInitAndDoctorReportSettingsTheAgentAboveWillNotLoad(t *testing.T) {
+	rgt := buildTestBinary(t)
+
+	// The shape a monorepo or a multi-project checkout has: an agent is opened
+	// at the workspace root, and the work happens in a project below it.
+	workspace := t.TempDir()
+	mustMkdirAll(t, filepath.Join(workspace, ".claude"))
+	project := filepath.Join(workspace, "project")
+	mustMkdirAll(t, project)
+	workspacePath := resolvedPath(t, workspace)
+
+	out := runRGTHermetic(t, rgt, project, "init", "--agent", "claude", "--skip-skills")
+	// The workspace root is a prefix of every path init prints, so "mentions
+	// the path" is satisfied by any of them. What has to be there is a line
+	// about the workspace root *itself*.
+	if !namesDirectoryAlone(out, workspacePath, project) {
+		t.Errorf("init never named the workspace root whose agent will not load these settings:\n%s", out)
+	}
+	if !strings.Contains(strings.ToLower(out), "not load") {
+		t.Errorf("init does not say the settings it wrote will not be loaded from up there:\n%s", out)
+	}
+
+	doctorOut, err := runRGTHermeticRaw(t, rgt, project, "doctor")
+	if strings.Contains(doctorOut, "✓ claude hooks") {
+		t.Errorf("doctor confirmed a hook file the agent above will never load:\n%s", doctorOut)
+	}
+	if !namesDirectoryAlone(doctorOut, workspacePath, project) {
+		t.Errorf("doctor does not report the mismatch init warned about:\n%s", doctorOut)
+	}
+	if err == nil {
+		t.Errorf("doctor exited 0 with capture that will never start:\n%s", doctorOut)
+	}
+}
+
+// namesDirectoryAlone reports whether some line of out is about dir rather than
+// about something underneath it.
+func namesDirectoryAlone(out, dir, belowDir string) bool {
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, dir) && !strings.Contains(line, belowDir) {
+			return true
+		}
+	}
+	return false
+}
+
+// The mirror: without a workspace root above it, there is no mismatch and
+// neither command may invent one. Without this, "always warn" would satisfy the
+// test above, and the warning would become noise on every ordinary project.
+func TestE2EDoctorDoesNotInventASettingsMismatch(t *testing.T) {
+	rgt := buildTestBinary(t)
+	project := t.TempDir()
+
+	out := runRGTHermetic(t, rgt, project, "init", "--agent", "claude", "--skip-skills")
+	if strings.Contains(strings.ToLower(out), "not load") {
+		t.Errorf("init warned about a workspace root that does not exist:\n%s", out)
+	}
+
+	doctorOut, _ := runRGTHermeticRaw(t, rgt, project, "doctor")
+	if !strings.Contains(doctorOut, "✓ claude hooks") {
+		t.Errorf("doctor withheld a hook file the agent here does load:\n%s", doctorOut)
+	}
+}
+
+// resolvedPath is the path the running binary will print for dir. On macOS the
+// temp directories tests are given live under a symlink (/var -> /private/var),
+// and a process reports the resolved form — so an assertion against the
+// unresolved one compares two spellings of the same directory and fails.
+func resolvedPath(t *testing.T, dir string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("resolve %s: %v", dir, err)
+	}
+	return resolved
+}
+
 // runRGTHermetic runs rgt with every REGENT_* variable stripped and HOME pointed
 // at a scratch directory.
 //
@@ -127,9 +211,11 @@ func runRGTHermeticRaw(t *testing.T, rgtPath, dir string, args ...string) (strin
 	t.Helper()
 	cmd := exec.Command(rgtPath, args...)
 	cmd.Dir = dir
-	env := []string{"HOME=" + t.TempDir()}
+	// NO_COLOR because some assertions here are about which status symbol a line
+	// carries, and an escape sequence sits between the symbol and the text.
+	env := []string{"HOME=" + t.TempDir(), "NO_COLOR=1"}
 	for _, entry := range os.Environ() {
-		if strings.HasPrefix(entry, "REGENT_") || strings.HasPrefix(entry, "HOME=") {
+		if strings.HasPrefix(entry, "REGENT_") || strings.HasPrefix(entry, "HOME=") || strings.HasPrefix(entry, "NO_COLOR=") {
 			continue
 		}
 		env = append(env, entry)
