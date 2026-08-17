@@ -99,6 +99,14 @@ func diagnose(projectRoot string) []doctorFinding {
 		agentsChecked = true
 	}
 
+	// Whether a hook is configured and whether it can run are two facts, so they
+	// are two findings. Merging them into the hook checks would have made every
+	// test that asserts "a hook is wired here" also depend on what this machine
+	// happens to have on PATH.
+	if agentsChecked {
+		findings = append(findings, hookBinaryFinding(projectRoot))
+	}
+
 	if !agentsChecked {
 		findings = append(findings, doctorFinding{
 			Name:   "agents",
@@ -135,6 +143,163 @@ func identityFinding() doctorFinding {
 		}
 	}
 	return doctorFinding{Name: "git identity", OK: true, Detail: formatAuthor(author)}
+}
+
+// hookBinaryFinding reports whether the hooks configured here can actually be
+// launched on this machine.
+//
+// This is the check that was missing when `rgt connect` began telling people to
+// commit .claude/settings.json (#23). The installer writes the absolute path of
+// its own binary into that file — correctly, because a hook runs in the agent
+// host's environment and cannot rely on PATH — and a teammate who clones it
+// inherits a path that exists on exactly one machine. Agent hosts do not report
+// a hook that failed to launch, and doctor was satisfied by the file being
+// present and mentioning re_gent, so nothing anywhere said that capture had
+// stopped.
+//
+// A command that names no absolute path at all is left alone. That form defers
+// to the agent host's PATH by design, and the PATH doctor can see is this
+// terminal's, not the host's — failing on it would be doctor asserting something
+// it is not in a position to know.
+func hookBinaryFinding(projectRoot string) doctorFinding {
+	var unreachable []string
+	for _, command := range regentHookCommands(projectRoot) {
+		paths, names := hookBinaryCandidates(command)
+		if len(paths) == 0 {
+			continue
+		}
+		if anyExecutableFile(paths) || anyOnPath(names) {
+			continue
+		}
+		unreachable = appendUnique(unreachable, paths...)
+	}
+
+	if len(unreachable) == 0 {
+		return doctorFinding{Name: "hook binary", OK: true, Detail: "the configured hooks resolve to a binary on this machine"}
+	}
+	return doctorFinding{
+		Name: "hook binary",
+		OK:   false,
+		Detail: fmt.Sprintf(
+			"the hooks configured here run %s, which is not on this machine — nothing is being captured\n"+
+				"that path belongs to whoever ran the install; a clone carries it unchanged\n"+
+				"install rgt and put it on PATH, or wire this machine: rgt init",
+			strings.Join(unreachable, ", ")),
+	}
+}
+
+// regentHookCommands returns every re_gent hook command configured for this
+// project, across the agent configs that hold command strings.
+func regentHookCommands(projectRoot string) []string {
+	var commands []string
+
+	settingsPath := filepath.Join(projectRoot, ".claude", "settings.json")
+	if data, err := os.ReadFile(settingsPath); err == nil {
+		var settings map[string]interface{}
+		if json.Unmarshal(data, &settings) == nil {
+			commands = append(commands, claudeHookCommandsIn(settings)...)
+		}
+	}
+
+	// The Codex config is read line by line for the same reason codexHookFinding
+	// reads it that way: the answer does not need the schema, only the commands.
+	configPath := filepath.Join(projectRoot, ".codex", "config.toml")
+	if data, err := os.ReadFile(configPath); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			if isRegentHookCommand(line) {
+				commands = append(commands, line)
+			}
+		}
+	}
+
+	return commands
+}
+
+// claudeHookCommandsIn walks the settings shape Claude Code uses and returns the
+// commands that are ours. It is claudeSettingsHaveRegentHook's walk, collecting
+// instead of stopping at the first match, so the two cannot disagree about what
+// counts as one of our hooks.
+func claudeHookCommandsIn(settings map[string]interface{}) []string {
+	var commands []string
+	hooks, ok := settings["hooks"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	for event := range hooks {
+		for _, group := range normalizeHookGroups(hooks[event]) {
+			gm, ok := group.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			entries, _ := normalizeHookArray(gm["hooks"])
+			for _, entry := range entries {
+				em, ok := entry.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				if command, _ := em["command"].(string); isRegentHookCommand(command) {
+					commands = append(commands, command)
+				}
+			}
+		}
+	}
+	return commands
+}
+
+// hookBinaryCandidates splits a hook command into the binaries it could end up
+// running: absolute paths, and bare names left for PATH to resolve.
+//
+// Both kinds are collected because the shared hook command names both — an
+// absolute path first and a PATH fallback behind it, see sharedHookCommand — and
+// the command is only broken when neither can be reached. Fields are stripped of
+// the quoting and shell punctuation the surrounding expression leaves attached,
+// the same way isRegentHookCommand does it.
+func hookBinaryCandidates(command string) (paths, names []string) {
+	for _, field := range strings.Fields(command) {
+		field = strings.Trim(field, `"'[],`)
+		switch {
+		case strings.HasPrefix(field, "/"):
+			paths = appendUnique(paths, field)
+		case field == "rgt" || field == "regent":
+			names = appendUnique(names, field)
+		}
+	}
+	return paths, names
+}
+
+func anyExecutableFile(paths []string) bool {
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func anyOnPath(names []string) bool {
+	for _, name := range names {
+		if commandExists(name) {
+			return true
+		}
+	}
+	return false
+}
+
+func appendUnique(dst []string, values ...string) []string {
+	for _, value := range values {
+		found := false
+		for _, existing := range dst {
+			if existing == value {
+				found = true
+				break
+			}
+		}
+		if !found {
+			dst = append(dst, value)
+		}
+	}
+	return dst
 }
 
 func repositoryFinding(projectRoot string) doctorFinding {

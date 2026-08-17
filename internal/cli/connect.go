@@ -251,9 +251,18 @@ func connectWireHooks(projectRoot string) error {
 	fmt.Printf("  ⚠ Restart any Claude Code / Codex session already open in this repo —\n")
 	fmt.Printf("    agents load hooks at startup, so a running session won't capture until\n")
 	fmt.Printf("    you restart it. (New sessions, and teammates who clone, are unaffected.)\n")
+	// What this claims and what a clone actually does have to be the same thing.
+	// The hook written into .claude/settings.json names this machine's rgt and
+	// falls back to whatever `rgt` PATH resolves (see sharedHookCommand), so the
+	// teammate's requirement is not "installed" but "on PATH" — and if it is
+	// not, `rgt doctor` names the missing binary rather than leaving them to
+	// discover the silence. Saying "installed" was the shorter sentence and the
+	// wrong one (#23).
 	fmt.Printf("  → To auto-wire teammates: commit .regent/config.toml and .claude/settings.json\n")
-	fmt.Printf("    (the rest of .regent/ is git-ignored). Then a clone + `rgt` installed is all\n")
-	fmt.Printf("    they need — no connect step.\n")
+	fmt.Printf("    (the rest of .regent/ is git-ignored). A clone with `rgt` on PATH captures\n")
+	fmt.Printf("    with no connect step; if it is not, `rgt doctor` there says so.\n")
+	fmt.Printf("    Codex hooks in .codex/config.toml are this machine's only — teammates run\n")
+	fmt.Printf("    `rgt init --agent codex` themselves.\n")
 	return nil
 }
 

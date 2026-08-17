@@ -265,6 +265,18 @@ func printHookInstallWarning(result hookInstallResult) {
 }
 
 func installClaudeHook(projectRoot string) (hookInstallResult, error) {
+	return installClaudeHookWith(projectRoot, hookBinary())
+}
+
+// installClaudeHookWith writes the Claude hook for a named binary.
+//
+// The binary is a parameter rather than resolved inside, because the situation
+// this file is most exposed to cannot be reproduced otherwise: a settings.json
+// written on someone else's machine, naming a path that exists only there. Under
+// `go test` the running executable is an ephemeral build, so resolveHookBinary
+// deliberately returns the bare name and no test could produce the file a
+// teammate actually clones. See TestACommittedHookRunsOnATeammatesMachineToo.
+func installClaudeHookWith(projectRoot, binary string) (hookInstallResult, error) {
 	var result hookInstallResult
 	claudeDir := filepath.Join(projectRoot, ".claude")
 	settingsPath := filepath.Join(claudeDir, "settings.json")
@@ -291,9 +303,9 @@ func installClaudeHook(projectRoot string) (hookInstallResult, error) {
 		settings["hooks"] = hooks
 	}
 
-	mergeHookCommand(hooks, "UserPromptSubmit", claudeUserHook())
-	mergeHookCommand(hooks, "Stop", claudeAssistantHook())
-	mergeHookCommand(hooks, "PostToolBatch", claudeToolBatchHook())
+	mergeHookCommand(hooks, "UserPromptSubmit", sharedHookCommand(binary, claudeUserHookArgs))
+	mergeHookCommand(hooks, "Stop", sharedHookCommand(binary, claudeAssistantHookArgs))
+	mergeHookCommand(hooks, "PostToolBatch", sharedHookCommand(binary, claudeToolBatchHookArgs))
 	removeRegentHookCommands(hooks, "PostToolUse")
 
 	output, err := json.MarshalIndent(settings, "", "  ")

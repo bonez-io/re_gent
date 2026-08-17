@@ -197,6 +197,49 @@ func hookCommandWith(binary, args string) string {
 	return binary + " " + args
 }
 
+// sharedHookCommand is hookCommandWith for a config file that gets committed.
+//
+// When the binary is an absolute path the command tries that path first and
+// falls back to whatever `rgt` PATH resolves. Both halves are load-bearing and
+// neither is sufficient on its own:
+//
+//   - The absolute path is what makes the hook fire on the machine that ran the
+//     install. Hooks run inside the agent host's environment, whose PATH is not
+//     the installing shell's — see resolveHookBinary.
+//   - The fallback is what makes the same file work after somebody else clones
+//     it. `rgt connect` tells users to commit .claude/settings.json so teammates
+//     are wired by cloning; without a fallback the committed hook names a path
+//     that exists on exactly one machine, and the teammate's capture silently
+//     never starts (#23). Agent hosts do not report a hook that failed to
+//     launch, so nothing else would have said so.
+//
+// `exec` is what makes `||` mean "could not run it" rather than "it ran and
+// exited non-zero". Without it, a hook that reported a problem would be run a
+// second time through the fallback and the turn would be captured twice.
+//
+// Only .claude/settings.json is written this way, because it is the only agent
+// config re_gent tells anyone to commit — see sharedFiles. Spelling the command
+// as a shell expression assumes the host runs it through a shell, which Claude
+// Code documents and the others have not been verified to do; guessing on their
+// behalf would risk breaking capture that works today.
+func sharedHookCommand(binary, args string) string {
+	if !filepath.IsAbs(binary) {
+		return hookCommandWith(binary, args)
+	}
+	quoted := shellQuote(binary)
+	return fmt.Sprintf("[ -x %s ] && exec %s %s || exec rgt %s", quoted, quoted, args, args)
+}
+
+// shellQuote wraps a path so a POSIX shell reads it as one literal word.
+//
+// Single quotes rather than double, because a home directory is user-controlled
+// text that reaches this file: a path holding `$`, a backtick or a backslash
+// would be expanded inside double quotes and the hook would invoke something
+// other than the binary that installed it.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // hookCommand builds a hook command for the running binary.
 func hookCommand(args string) string {
 	return hookCommandWith(hookBinary(), args)
@@ -326,7 +369,11 @@ func summaryStatus(outcome hookOutcome) (string, bool) {
 // The hook commands written into agent configs. These are functions rather
 // than constants because the binary path is resolved at run time; see
 // resolveHookBinary for why the bare name is not good enough.
-func claudeUserHook() string      { return hookCommand(claudeUserHookArgs) }
-func claudeAssistantHook() string { return hookCommand(claudeAssistantHookArgs) }
-func claudeToolBatchHook() string { return hookCommand(claudeToolBatchHookArgs) }
+//
+// The Claude ones go through sharedHookCommand — the same builder the installer
+// uses — so that a caller comparing against them cannot be told a command
+// re_gent does not actually write.
+func claudeUserHook() string      { return sharedHookCommand(hookBinary(), claudeUserHookArgs) }
+func claudeAssistantHook() string { return sharedHookCommand(hookBinary(), claudeAssistantHookArgs) }
+func claudeToolBatchHook() string { return sharedHookCommand(hookBinary(), claudeToolBatchHookArgs) }
 func codexHookCommand() string    { return hookCommand(codexHookArgs) }
