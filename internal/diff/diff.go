@@ -88,13 +88,6 @@ func splitLines(content []byte) []string {
 	return lines
 }
 
-func joinLines(lines []string) string {
-	if len(lines) == 0 {
-		return ""
-	}
-	return strings.Join(lines, "\n") + "\n"
-}
-
 func diffsToOpcodes(diffs []diffmatchpatch.Diff, oldLines, newLines []string) []Opcode {
 	var opcodes []Opcode
 	i1, i2 := 0, 0 // indices in old

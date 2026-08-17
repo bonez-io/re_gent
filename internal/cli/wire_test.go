@@ -183,6 +183,9 @@ func TestResolveHookBinaryFallsBackWhenLookupFails(t *testing.T) {
 //
 // The team path must wire every detected agent, exactly as init does.
 func TestConnectWiresEveryDetectedAgentNotJustClaude(t *testing.T) {
+	t.Setenv("REGENT_AUTHOR_NAME", "Test User")
+	t.Setenv("REGENT_AUTHOR_EMAIL", "test@example.com")
+
 	root := t.TempDir()
 	// runConnect creates .regent/ before wiring; this test starts after that.
 	mustMkdir(t, filepath.Join(root, ".regent"))

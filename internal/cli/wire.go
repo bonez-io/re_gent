@@ -446,10 +446,8 @@ func summaryStatus(outcome hookOutcome) (string, bool) {
 // than constants because the binary path is resolved at run time; see
 // resolveHookBinary for why the bare name is not good enough.
 //
-// The Claude ones go through sharedHookCommand — the same builder the installer
-// uses — so that a caller comparing against them cannot be told a command
-// re_gent does not actually write.
-func claudeUserHook() string      { return sharedHookCommand(hookBinary(), claudeUserHookArgs) }
+// The Claude command goes through sharedHookCommand — the same builder the
+// installer uses — so that a caller comparing against it cannot be told a
+// command re_gent does not actually write.
 func claudeAssistantHook() string { return sharedHookCommand(hookBinary(), claudeAssistantHookArgs) }
-func claudeToolBatchHook() string { return sharedHookCommand(hookBinary(), claudeToolBatchHookArgs) }
 func codexHookCommand() string    { return hookCommand(codexHookArgs) }

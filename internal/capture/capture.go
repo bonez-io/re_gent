@@ -823,13 +823,6 @@ func conversationBlob(s *store.Store, messages []index.Message) (store.Hash, err
 	return s.WriteBlob(data)
 }
 
-// marshalStep serializes a step to the same JSON format that WriteStep uses,
-// producing bytes that hash to the same value already stored in the object store.
-func marshalStep(step *store.Step) ([]byte, error) {
-	step.NormalizeCauses()
-	return json.Marshal(step)
-}
-
 func snapshotWorkspace(s *store.Store, cwd string) (store.Hash, error) {
 	return snapshot.Snapshot(s, cwd, ignore.Default(cwd))
 }

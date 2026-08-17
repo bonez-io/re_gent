@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -1101,11 +1102,17 @@ func TestInstallEndpoint(t *testing.T) {
 	}
 }
 
-// TestBinaryEndpoint verifies GET /bin/rgt serves a non-empty body. In tests
-// os.Executable() is the test binary, which is fine: we only assert 200 +
-// non-empty.
+// TestBinaryEndpoint verifies GET /bin/rgt serves the configured binary. A
+// fixed fixture avoids reading the live test executable while the Go toolchain
+// is still linking or cleaning it up on macOS CI.
 func TestBinaryEndpoint(t *testing.T) {
-	_, _, ts := newTestServer(t)
+	binDir := t.TempDir()
+	fixture := []byte("rgt-test-binary")
+	filename := binaryTargets[[2]string{runtime.GOOS, runtime.GOARCH}]
+	if err := os.WriteFile(filepath.Join(binDir, filename), fixture, 0o755); err != nil {
+		t.Fatalf("write binary fixture: %v", err)
+	}
+	_, _, ts := newTestServer(t, WithBinariesDir(binDir))
 
 	resp, err := http.Get(ts.URL + "/bin/rgt")
 	if err != nil {
@@ -1119,8 +1126,8 @@ func TestBinaryEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read /bin/rgt body: %v", err)
 	}
-	if n == 0 {
-		t.Errorf("GET /bin/rgt returned an empty body")
+	if n != int64(len(fixture)) {
+		t.Errorf("GET /bin/rgt returned %d bytes, want %d", n, len(fixture))
 	}
 	if ct := resp.Header.Get("Content-Type"); ct != "application/octet-stream" {
 		t.Errorf("GET /bin/rgt Content-Type = %q, want application/octet-stream", ct)
