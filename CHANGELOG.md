@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- `rgt blame` named the line after the one that changed. The line diff paired
+  two encoders that do not decode each other's output, so every chunk came
+  back holding a neighbouring line. Blame maps written before this fix are
+  still wrong on disk and cannot yet be repaired; `rgt show` diffs are
+  computed at query time and were corrected by the rebuild.
+- re_gent identified itself by filename, so a binary called anything other
+  than `rgt` or `regent` wired hooks to a bare `rgt` that PATH resolved
+  elsewhere or nowhere, `rgt doctor` reported "nothing will be captured" over
+  a project that was capturing normally, and `rgt init` stopped removing its
+  own previous hooks on re-run. Hooks are now recognised by the subcommand
+  they run, and the installer embeds any binary path that is not a temporary
+  Go build.
 - Connecting a project you had already been using locally now connects it.
   "Connected" was decided by whether `.regent/config.toml` existed, but
   `rgt init` writes that file unconditionally — so every locally-used project
