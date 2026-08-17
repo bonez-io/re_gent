@@ -336,3 +336,25 @@ func TestWireAgentsReturnsErrorWhenWriteFails(t *testing.T) {
 		t.Errorf("installed = %v, want none", installed)
 	}
 }
+
+// The same filename assumption, one layer down and with worse consequences.
+//
+// resolveHookBinary refuses to embed the running binary's path unless the file
+// is called "rgt", so a build under any other name writes a bare "rgt" into the
+// user's hooks. That hook then invokes whatever "rgt" PATH happens to find —
+// an older build, a different project's copy, or nothing at all — and capture
+// stops without a word. Observed: hooks silently pointing at a binary from a
+// week earlier that had since been deleted.
+//
+// The name was never the real question. The question is whether this path will
+// still be here tomorrow, and the tests below this one answer that directly.
+func TestResolveHookBinaryUsesTheRunningPathWhateverTheBinaryIsCalled(t *testing.T) {
+	for _, exe := range []string{
+		"/Users/dev/.local/bin/rgt-dev",
+		"/opt/homebrew/bin/rgt2",
+	} {
+		if got := resolveHookBinary(exe, nil); got != exe {
+			t.Errorf("resolveHookBinary(%q) = %q; the hook now invokes whatever PATH resolves, not this binary", exe, got)
+		}
+	}
+}

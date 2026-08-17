@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/regent-vcs/regent/internal/capture"
 	"github.com/regent-vcs/regent/internal/style"
@@ -92,8 +93,15 @@ func wireAgents(projectRoot string, targets []agentTarget) ([]agentTarget, error
 // The fallback matters as much as the happy path. Under `go test` the running
 // executable is the test binary, and under `go run` it is a temporary build
 // that will not exist tomorrow; writing either into a user's config would
-// produce a hook that never fires. When the running binary is not recognisably
-// rgt, keep the bare name and let PATH do its best.
+// produce a hook that never fires. In those cases, and only those, keep the
+// bare name and let PATH do its best.
+//
+// This used to fall back whenever the binary was not named "rgt", which quietly
+// answered a different question than the one that matters. A build called
+// rgt-dev is every bit as real and permanent as one called rgt; refusing to
+// name it wrote a bare "rgt" into the config, and the hook then invoked
+// whichever other build PATH happened to find — or none at all. Durability of
+// the path is the question. The filename is the user's business.
 func resolveHookBinary(exe string, lookupErr error) string {
 	if lookupErr != nil || exe == "" {
 		return "rgt"
@@ -101,10 +109,78 @@ func resolveHookBinary(exe string, lookupErr error) string {
 	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
 		exe = resolved
 	}
-	if !capture.IsRegentCommand(exe) {
+	if isEphemeralBuild(exe) {
 		return "rgt"
 	}
 	return exe
+}
+
+// isEphemeralBuild reports whether a path belongs to something the Go toolchain
+// built to run once: a `go test` binary, or the temporary executable behind
+// `go run`. Both live under a go-build directory, and both are gone by the time
+// an agent host would try to invoke them.
+func isEphemeralBuild(exe string) bool {
+	if strings.HasSuffix(exe, ".test") {
+		return true
+	}
+	for _, part := range strings.Split(filepath.ToSlash(exe), "/") {
+		if strings.HasPrefix(part, "go-build") {
+			return true
+		}
+	}
+	return false
+}
+
+// regentHookVerbs are the subcommands re_gent writes into agent hook configs.
+//
+// These, not the filename, are what identify a hook as ours. A binary's name is
+// the user's choice and they rename it for ordinary reasons — a dev build kept
+// beside a release, a versioned copy — but nothing other than re_gent is ever
+// invoked with `tool-batch-hook`. Derived from the constants the installer
+// actually writes, so the reader and the writer cannot drift apart.
+var regentHookVerbs = []string{
+	firstWord(claudeUserHookArgs),
+	firstWord(claudeAssistantHookArgs),
+	firstWord(claudeToolBatchHookArgs),
+	firstWord(codexHookArgs),
+}
+
+func firstWord(s string) string {
+	fields := strings.Fields(s)
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[0]
+}
+
+// isRegentHookCommand reports whether a configured hook command is one re_gent
+// wrote. Field 0 is deliberately not inspected: that is the binary path, and
+// its name is exactly what this must not depend on.
+//
+// Callers pass both parsed JSON values and raw TOML lines, so each field is
+// stripped of the punctuation those formats leave attached.
+func isRegentHookCommand(command string) bool {
+	fields := strings.Fields(command)
+	if len(fields) < 2 {
+		return false
+	}
+	for _, field := range fields[1:] {
+		field = strings.Trim(field, `"'[],`)
+		for _, verb := range regentHookVerbs {
+			if field == verb {
+				return true
+			}
+		}
+	}
+
+	// The legacy form, from before the hook verbs were split apart: `rgt hook`.
+	// Here the binary's name is the right thing to match on, because that
+	// installer wrote the bare name and nothing else — there is no rgt-dev
+	// spelling of a command that predates rgt-dev being possible. Matching a
+	// bare "hook" on its own would be too eager and would delete somebody's
+	// `make hook` on the next re-init.
+	return capture.IsRegentCommand(command) &&
+		strings.Trim(fields[1], `"'[],`) == "hook"
 }
 
 // hookBinary is resolveHookBinary applied to the running process.

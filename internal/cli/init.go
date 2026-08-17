@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
-	"github.com/regent-vcs/regent/internal/capture"
 	"github.com/regent-vcs/regent/internal/index"
 	"github.com/regent-vcs/regent/internal/store"
 	"github.com/regent-vcs/regent/internal/style"
@@ -521,7 +520,7 @@ func filterRegentHookCommands(groups []interface{}) []interface{} {
 				continue
 			}
 			command, _ := hookMap["command"].(string)
-			if capture.IsRegentCommand(command) {
+			if isRegentHookCommand(command) {
 				continue
 			}
 			nextHookEntries = append(nextHookEntries, hookEntry)
@@ -568,7 +567,7 @@ func printExistingHooks(projectRoot string) {
 							entries, _ := normalizeHookArray(gm["hooks"])
 							for _, e := range entries {
 								if em, ok := e.(map[string]interface{}); ok {
-									if cmd, _ := em["command"].(string); capture.IsRegentCommand(cmd) {
+									if cmd, _ := em["command"].(string); isRegentHookCommand(cmd) {
 										fmt.Printf("  %s Claude Code\n", style.Success(""))
 										goto doneClaudeCheck
 									}
@@ -594,7 +593,7 @@ doneClaudeCheck:
 							entries, _ := normalizeHookArray(gm["hooks"])
 							for _, e := range entries {
 								if em, ok := e.(map[string]interface{}); ok {
-									if cmd, _ := em["command"].(string); capture.IsRegentCommand(cmd) {
+									if cmd, _ := em["command"].(string); isRegentHookCommand(cmd) {
 										fmt.Printf("  %s Codex\n", style.Success(""))
 										goto doneCodexCheck
 									}

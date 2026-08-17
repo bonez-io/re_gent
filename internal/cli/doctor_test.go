@@ -154,3 +154,58 @@ func mustWrite(t *testing.T, path, content string) {
 		t.Fatalf("write %s: %v", path, err)
 	}
 }
+
+// Doctor decides whether a hook is ours by looking at the binary's filename,
+// which means it only recognises re_gent when re_gent is called "rgt". Any
+// other name — a side-by-side dev build, a versioned copy, a rename — and the
+// check reports "nothing will be captured" over a project that is capturing
+// normally. Observed on a real machine: hooks installed, steps recorded, blame
+// answering correctly, doctor insisting none of it was wired.
+//
+// What identifies the hook is not the filename but the subcommand. Nothing
+// except re_gent is invoked with `tool-batch-hook`, and re_gent writes it
+// whatever the binary is called.
+func TestClaudeHookIsRecognisedWhateverTheBinaryIsCalled(t *testing.T) {
+	for _, binary := range []string{
+		"rgt",                           // the default
+		"/Users/dev/.local/bin/rgt-dev", // a build kept beside a release
+		"/opt/regent/bin/regent",        // the long name, absolute
+	} {
+		root := t.TempDir()
+		mustMkdir(t, filepath.Join(root, ".claude"))
+		mustWrite(t, filepath.Join(root, ".claude", "settings.json"), `{
+  "hooks": {
+    "PostToolUse": [
+      {"hooks": [{"type": "command", "command": "`+binary+` tool-batch-hook"}]}
+    ]
+  }
+}`)
+
+		if finding := claudeHookFinding(root); !finding.OK {
+			t.Errorf("hooks invoking %q are not recognised as re_gent's: %s", binary, finding.Detail)
+		}
+	}
+}
+
+// The other half of the same judgement, and the reason the check exists: a
+// settings file full of somebody else's hooks must still report that nothing
+// of ours is wired. Without this, "always OK" would satisfy the test above and
+// doctor would go from lying one way to lying the other.
+func TestClaudeHooksThatAreNotOursAreNotMistakenForOurs(t *testing.T) {
+	root := t.TempDir()
+	mustMkdir(t, filepath.Join(root, ".claude"))
+	mustWrite(t, filepath.Join(root, ".claude", "settings.json"), `{
+  "hooks": {
+    "PostToolUse": [
+      {"hooks": [
+        {"type": "command", "command": "prettier --write ."},
+        {"type": "command", "command": "npm run lint-hook"}
+      ]}
+    ]
+  }
+}`)
+
+	if finding := claudeHookFinding(root); finding.OK {
+		t.Errorf("doctor claims re_gent is wired here, but nothing in this file invokes it: %s", finding.Detail)
+	}
+}

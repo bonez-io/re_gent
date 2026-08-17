@@ -166,7 +166,7 @@ func claudeSettingsHaveRegentHook(settings map[string]interface{}) bool {
 				if !ok {
 					continue
 				}
-				if command, _ := em["command"].(string); capture.IsRegentCommand(command) {
+				if command, _ := em["command"].(string); isRegentHookCommand(command) {
 					return true
 				}
 			}
@@ -190,11 +190,13 @@ func codexHookFinding(projectRoot string) doctorFinding {
 	// tables. Checking each line against the same predicate the installer
 	// writes is enough to answer "is a re_gent hook present", without this
 	// file needing to know the schema.
+	//
+	// There used to be a second, looser check here — any line containing both
+	// "rgt " and "hook" — which existed only because the first one was too
+	// strict to recognise our own hooks. Both were keyed on the binary's name.
+	// One predicate that asks the right question replaces the pair.
 	for _, line := range strings.Split(string(data), "\n") {
-		if capture.IsRegentCommand(strings.Trim(strings.TrimSpace(line), `"'`)) {
-			return doctorFinding{Name: "codex hooks", OK: true, Detail: path}
-		}
-		if strings.Contains(line, "rgt ") && strings.Contains(line, "hook") {
+		if isRegentHookCommand(line) {
 			return doctorFinding{Name: "codex hooks", OK: true, Detail: path}
 		}
 	}
