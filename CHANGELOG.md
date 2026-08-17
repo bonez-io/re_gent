@@ -53,6 +53,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Connecting twice is safe: the picker's "selecting a connected project
   disconnects it" applies to a tick in the picker, not to `rgt connect` typed
   inside a project, which is an instruction and never removes hooks.
+- Connecting a project keeps the history recorded before it. Binding a project
+  to a server moves every read to a machine-local cache, and everything
+  captured beforehand stayed in the project's own `.regent/` where no command
+  read it, no command uploaded it and nothing said so — `rgt log --session
+  <id>` exited 1 for a session that had worked a minute earlier. `rgt connect`
+  now copies that history into the cache, uploads it, and reports how many
+  sessions and steps came across. Anything it cannot carry — a session the
+  cache already holds, an upload the server refused — is named on screen and
+  never folded into the success line. Projects already connected before this
+  change are not migrated; their history is still in `.regent/`.
 
 ### Removed
 - `rgt login` and `rgt whoami`. The server performs no authentication, so a

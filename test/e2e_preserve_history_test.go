@@ -107,11 +107,21 @@ func TestE2EConnectSaysWhatItCarriedOver(t *testing.T) {
 
 	project := gitProject(t, "tried-it-locally", "https://github.com/acme/tried-it-locally.git")
 	e2eRun(t, rgt, project, nil, "init", "--agent", "claude", "--skip-skills")
+	// Two turns, so the step count is something a message has to have counted
+	// rather than something it could get right by printing "1".
 	captureTurn(t, rgt, project, nil, "afternoon-of-trying-it", "turn-1", "hello.go")
+	captureTurn(t, rgt, project, nil, "afternoon-of-trying-it", "turn-2", "goodbye.go")
 
-	out := strings.ToLower(e2eRunEnv(t, rgt, project, env, nil, "connect", srv.URL))
+	out := e2eRunEnv(t, rgt, project, env, nil, "connect", srv.URL)
 
-	if !strings.Contains(out, "histor") && !strings.Contains(out, "session") && !strings.Contains(out, "step") {
-		t.Errorf("connect never mentions the history it found; a user has no way to know whether it came across:\n%s", out)
+	// The counts are the assertion, not the vocabulary. This used to look for
+	// any of "histor"/"session"/"step" anywhere in the output, which passed on
+	// unrelated wording while connect was still discarding everything — a green
+	// test for the exact bug this file was written against. What a user needs
+	// is how much came across and that it left the machine.
+	for _, want := range []string{"Carried over 1 session (2 steps)", "uploaded 1 session"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("connect output does not say %q, so a user has no way to know whether their history came across:\n%s", want, out)
+		}
 	}
 }

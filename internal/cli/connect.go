@@ -211,7 +211,16 @@ func runConnect(p connectParams) error {
 	}
 	fmt.Printf("  ✓ Wrote remote config\n")
 
-	// 6. Wire Claude hooks (merge/dedupe).
+	// 6. Carry over history recorded before this moment.
+	//
+	// The binding just written moves every read to a machine-local cache keyed
+	// to this server. Without this step, everything captured before now stays in
+	// the project's own .regent/ where nothing reads it, nothing uploads it and
+	// nothing mentions it — `rgt log --session <id>` exits 1 for a session that
+	// worked a minute ago. See carryover.go.
+	carryOverLocalHistory(os.Stdout, s, carryOverConfig(p, repoID, token))
+
+	// 7. Wire Claude hooks (merge/dedupe).
 	return connectWireHooks(p.projectRoot)
 }
 
