@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/regent-vcs/regent/internal/remote"
 )
 
 // Sharing the wiring through version control is two commands making one promise:
@@ -140,6 +142,182 @@ func TestDoctorSaysSoWhenTheHookNamesABinaryThisMachineDoesNotHave(t *testing.T)
 	withPath(t, filepath.Dir(fakeRgt(t, filepath.Join(teammate, "opt", "bin", "rgt"))))
 	if finding := findFinding(t, diagnose(teammate), "hook binary"); !finding.OK {
 		t.Errorf("doctor reports a problem for a teammate whose rgt is on PATH and whose hook falls back to it: %s", finding.Detail)
+	}
+}
+
+// The bug (#12): the file recording which server a project belongs to sits
+// inside .regent/, and .regent/ is the directory every project excludes from
+// version control. The nested .regent/.gitignore that re-includes config.toml
+// cannot rescue it — git does not descend into an excluded directory to read
+// it — so a clone had no idea the project was ever connected and every history
+// command reported nothing.
+//
+// Two repositories and a shared origin, because the claim is about what a
+// teammate gets, and no single checkout can show that.
+func TestACloneOfAConnectedProjectKnowsItsServer(t *testing.T) {
+	const serverURL = "https://regent.example.test"
+	// A remote both checkouts agree on, which is where the project's identity
+	// comes from — see deriveRepoID.
+	const originURL = "https://github.com/acme/widgets.git"
+
+	origin := t.TempDir()
+	git(t, origin, "init", "-q", "--bare")
+	// Name the branch a clone will check out, rather than inheriting whatever
+	// init.defaultBranch this machine is configured with.
+	git(t, origin, "symbolic-ref", "HEAD", "refs/heads/main")
+
+	alice := t.TempDir()
+	newGitRepo(t, alice)
+	git(t, alice, "remote", "add", "origin", origin)
+
+	// The wiring, exactly as connect leaves it: the binding, the hook config,
+	// the nested ignore file — and a project whose root .gitignore excludes
+	// .regent/, which is every project that ever ran `rgt init`.
+	writeFile(t, alice, ".gitignore", "node_modules/\n.regent/\n")
+	mustMkdir(t, filepath.Join(alice, ".regent"))
+	if err := createRegentGitignore(alice); err != nil {
+		t.Fatalf("createRegentGitignore: %v", err)
+	}
+	repoID := deriveRepoIDFor(t, alice, originURL)
+	// Named literally, not recomputed. The property that makes a clone safe is
+	// that identity comes from the remote both checkouts share — a fallback that
+	// happens to agree (the root commit, the folder name) would satisfy an
+	// equality between the two and prove nothing about which fact was used.
+	if want := "github.com-acme-widgets"; repoID != want {
+		t.Fatalf("identity derived as %q, want %q from the shared remote", repoID, want)
+	}
+	writeFile(t, alice, ".regent/config.toml",
+		"[remote]\nurl = '"+serverURL+"'\nrepo_id = '"+repoID+"'\n")
+	if _, err := installClaudeHookWith(alice, fakeRgt(t, filepath.Join(alice, "tools", "rgt"))); err != nil {
+		t.Fatalf("installClaudeHookWith: %v", err)
+	}
+
+	if err := commitWiring(alice); err != nil {
+		t.Fatalf("commitWiring: %v", err)
+	}
+	git(t, alice, "add", "--", ".gitignore")
+	if out, _ := exec.Command("git", "-C", alice, "diff", "--cached", "--name-only").Output(); len(strings.TrimSpace(string(out))) > 0 {
+		git(t, alice, "commit", "-qm", "rest")
+	}
+	git(t, alice, "push", "-q", "origin", "HEAD:refs/heads/main")
+
+	// The teammate. Nothing is told to them: they clone and that is all.
+	bob := filepath.Join(t.TempDir(), "widgets")
+	git(t, t.TempDir(), "clone", "-q", origin, bob)
+
+	if _, err := os.Stat(filepath.Join(bob, ".regent", "config.toml")); err != nil {
+		t.Fatalf("the clone has no binding: %v", err)
+	}
+	// The exclusion itself, asked about independently of the commit that got
+	// past it: the binding must be a path git will look at, and everything else
+	// under .regent/ must stay ignored.
+	if gitIgnores(t, bob, ".regent/config.toml") {
+		t.Error(".regent/config.toml is still excluded in the clone; sharing the binding depends on remembering -f every time")
+	}
+	if !gitIgnores(t, bob, ".regent/index.db") {
+		t.Error("narrowing the exclusion also stopped ignoring machine-local state; the index would be committed")
+	}
+
+	// The clone resolves the same server through the same code the hooks use.
+	t.Setenv("HOME", t.TempDir()) // no per-user config to borrow an answer from
+	cfg, err := remote.LoadConfigForCWD(func(string) (string, bool) { return "", false }, bob)
+	if err != nil {
+		t.Fatalf("LoadConfigForCWD in the clone: %v", err)
+	}
+	if cfg.ServerURL != serverURL || cfg.RepoID != repoID {
+		t.Errorf("clone resolved %q/%q, want %q/%q — it does not know where its history lives",
+			cfg.ServerURL, cfg.RepoID, serverURL, repoID)
+	}
+
+	// And the identity a clone would derive for itself agrees with the binding
+	// it inherited, so the two can never name different projects on the server.
+	if got := deriveRepoIDFor(t, bob, originURL); got != repoID {
+		t.Errorf("the clone derives identity %q but inherited %q; the teammate would write into a different project's history", got, repoID)
+	}
+}
+
+// deriveRepoIDFor derives a project's identity as if it were checked out from
+// remoteURL, which is what a teammate's checkout actually has. The tests clone
+// over a filesystem path because there is no server to clone from.
+func deriveRepoIDFor(t *testing.T, dir, remoteURL string) string {
+	t.Helper()
+	previous := gitRemoteURL(dir)
+	git(t, dir, "config", "remote.origin.url", remoteURL)
+	id := deriveRepoID(dir)
+	if previous != "" {
+		git(t, dir, "config", "remote.origin.url", previous)
+	}
+	return id
+}
+
+// Narrowing rewrites somebody else's file, so what it refuses to touch matters
+// as much as what it changes. A project that excluded something more specific
+// than the whole directory said something more specific, and quietly replacing
+// that would be a worse failure than the binding staying unshared.
+func TestNarrowingLeavesMoreSpecificExclusionsAlone(t *testing.T) {
+	for _, line := range []string{".regent/objects/", ".regent/index.db", "**/.regent/log/", "myapp.regent"} {
+		root := t.TempDir()
+		writeFile(t, root, ".gitignore", "node_modules/\n"+line+"\n")
+
+		narrowed, err := narrowRegentExclusion(root)
+		if err != nil {
+			t.Fatalf("narrowRegentExclusion: %v", err)
+		}
+		if narrowed {
+			t.Errorf("rewrote a .gitignore whose only re_gent rule was %q, which nobody asked to change", line)
+		}
+		data, err := os.ReadFile(filepath.Join(root, ".gitignore"))
+		if err != nil {
+			t.Fatalf("read .gitignore: %v", err)
+		}
+		if !strings.Contains(string(data), line) {
+			t.Errorf("%q no longer in .gitignore after narrowing:\n%s", line, data)
+		}
+	}
+}
+
+// gitIgnores asks git — not a reimplementation of git — whether a path is
+// excluded here.
+//
+// Two details of check-ignore make the obvious call wrong, and both were found
+// by writing the obvious call first. Its exit status means "some rule matched",
+// and a re-inclusion (`!.regent/config.toml`) is a rule, so the pattern has to be
+// read rather than the status. And without --no-index it reports nothing for a
+// tracked path, which would have made this assertion vacuous the moment the
+// commit it is checking succeeded.
+func gitIgnores(t *testing.T, dir, path string) bool {
+	t.Helper()
+	out, err := exec.Command("git", "-C", dir, "check-ignore", "--no-index", "-v", path).Output()
+	if err != nil {
+		return false // no rule matched at all
+	}
+	fields := strings.Split(strings.TrimSpace(string(out)), ":")
+	if len(fields) < 3 {
+		t.Fatalf("cannot read check-ignore output %q", out)
+	}
+	pattern := strings.TrimSpace(strings.Split(fields[2], "\t")[0])
+	return !strings.HasPrefix(pattern, "!")
+}
+
+// newGitRepo turns an existing directory into a repository with one commit, so
+// HEAD exists and a push has something to send. gitRepo makes its own temp
+// directory; these tests need the repository to be somewhere they chose.
+func newGitRepo(t *testing.T, dir string) {
+	t.Helper()
+	git(t, dir, "init", "-q")
+	git(t, dir, "config", "user.email", "tester@example.com")
+	git(t, dir, "config", "user.name", "Tester")
+	writeFile(t, dir, "README.md", "hi\n")
+	git(t, dir, "add", "--", "README.md")
+	git(t, dir, "commit", "-qm", "init")
+}
+
+// git runs a git command and fails the test if it does not succeed.
+func git(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
 }
 
