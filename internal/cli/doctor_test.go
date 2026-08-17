@@ -74,13 +74,30 @@ func TestDoctorFailsWhenAnyFindingFails(t *testing.T) {
 	if !allOK(healthy) {
 		t.Error("allOK false for an all-healthy set")
 	}
+	if hasFailures(healthy) {
+		t.Error("hasFailures true for an all-healthy set; doctor would exit non-zero on a good install")
+	}
 
 	broken := []doctorFinding{
 		{Name: "repository", OK: true},
 		{Name: "claude hooks", OK: false, Detail: "no re_gent hook found"},
 	}
 	if allOK(broken) {
-		t.Error("allOK true despite a failing finding; doctor would exit 0 on a broken install")
+		t.Error("allOK true despite a failing finding")
+	}
+	if !hasFailures(broken) {
+		t.Error("hasFailures false despite a hook finding that failed; doctor would exit 0 on a broken install")
+	}
+}
+
+// Severity is not something a check gets to leave unsaid. A new finding that
+// forgets to classify itself must block, because the cost of wrongly warning
+// about a broken install is a project that captures nothing and says it is
+// fine, while the cost of wrongly failing on a warning is a spurious error.
+func TestAFindingThatSaysNothingAboutSeverityBlocks(t *testing.T) {
+	unclassified := []doctorFinding{{Name: "some new check", OK: false, Detail: "went wrong"}}
+	if !hasFailures(unclassified) {
+		t.Error("a finding with no severity set did not block; the safe default has to be failure")
 	}
 }
 
@@ -89,10 +106,22 @@ func TestDoctorFailsWhenAnyFindingFails(t *testing.T) {
 // is only discovered later, when the history that would have proved authorship
 // is already written. Doctor is the one place that can say it while it still
 // costs one command to fix.
-func TestDiagnoseFailsWhenGitIdentityIsUnset(t *testing.T) {
+//
+// It says it as a warning. This check used to be fatal, which made doctor exit
+// non-zero, which aborted `curl … | sh` installs at their last step on exactly
+// the machines least likely to have an identity configured. Capture works
+// without one; unwinding a working install over it does not.
+func TestDiagnoseWarnsButDoesNotFailWhenGitIdentityIsUnset(t *testing.T) {
 	root := t.TempDir()
 	mustMkdir(t, filepath.Join(root, ".regent"))
 	withoutGitIdentity(t, root)
+	if _, err := wireAgents(root, []agentTarget{agentClaude}); err != nil {
+		t.Fatalf("wireAgents: %v", err)
+	}
+	// An empty PATH so a claude or codex binary installed on the machine
+	// running this suite cannot add a hook finding of its own and decide the
+	// answer. The only thing left to be unhappy about is the identity.
+	t.Setenv("PATH", "")
 
 	findings := diagnose(root)
 
@@ -101,7 +130,13 @@ func TestDiagnoseFailsWhenGitIdentityIsUnset(t *testing.T) {
 		t.Errorf("git identity reported healthy with no identity configured: %s", f.Detail)
 	}
 	if allOK(findings) {
-		t.Error("diagnose exited healthy while every captured step would be anonymous")
+		t.Error("diagnose reported nothing at all while every captured step would be anonymous")
+	}
+	if f.Severity != severityWarning {
+		t.Error("an unset git identity is fatal to doctor's exit code, so an install that already succeeded will be reported as failed")
+	}
+	if hasFailures(findings) {
+		t.Error("diagnose found a blocking failure on a machine whose only problem is an unset identity")
 	}
 }
 
