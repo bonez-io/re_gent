@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `rgt repair blame` recomputes the stored blame maps for history already on
+  disk. Blame is annotated at write time, so a fix to the line diff reaches
+  only steps recorded after it; the maps already written keep whatever the old
+  diff believed, and until now the only remedy was deleting `.regent/` and the
+  history with it. Repair walks each session ref from its root, rewrites every
+  (step, file) map with the current diff, and reports how many it rewrote and
+  how many were already correct. It touches no canonical object, is idempotent
+  (a second run rewrites nothing), and is safe to interrupt.
+
 ### Changed
 - A project is identified by the repository it belongs to, not by the folder it
   sits in. Identity comes from the normalised git remote, so the same
@@ -26,9 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - `rgt blame` named the line after the one that changed. The line diff paired
   two encoders that do not decode each other's output, so every chunk came
-  back holding a neighbouring line. Blame maps written before this fix are
-  still wrong on disk and cannot yet be repaired; `rgt show` diffs are
-  computed at query time and were corrected by the rebuild.
+  back holding a neighbouring line. `rgt show` diffs are computed at query
+  time and were corrected by the rebuild. Blame is annotated at write time, so
+  maps recorded before the fix stayed wrong on disk — run `rgt repair blame`
+  to rewrite them.
 - re_gent identified itself by filename, so a binary called anything other
   than `rgt` or `regent` wired hooks to a bare `rgt` that PATH resolved
   elsewhere or nowhere, `rgt doctor` reported "nothing will be captured" over

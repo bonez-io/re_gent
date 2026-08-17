@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -82,7 +83,14 @@ func BlameKey(stepHash Hash, filePath string) string {
 	return filepath.Join("blame", string(stepHash), pathHash)
 }
 
-// WriteBlameForFile writes blame map for a specific file at a step
+// WriteBlameForFile writes blame map for a specific file at a step.
+//
+// The write is atomic (temp file + rename) rather than a truncate-in-place.
+// `rgt repair blame` rewrites every sidecar in a store, and a run killed
+// halfway through a truncating write would leave a partial JSON file behind:
+// `rgt blame` on that file then fails to decode, and re-running the repair
+// cannot help because the damage is in the output, not the input. With a rename
+// every reader sees either the whole old map or the whole new one.
 func (s *Store) WriteBlameForFile(stepHash Hash, filePath string, blameMap *BlameMap) error {
 	data, err := json.Marshal(blameMap)
 	if err != nil {
@@ -96,7 +104,30 @@ func (s *Store) WriteBlameForFile(stepHash Hash, filePath string, blameMap *Blam
 		return err
 	}
 
-	return os.WriteFile(blamePath, data, 0644)
+	return atomicWriteFile(blamePath, data, 0o644)
+}
+
+// BlameForFileMatches reports whether the stored sidecar for (stepHash,
+// filePath) is byte-identical to blameMap. A missing sidecar does not match.
+//
+// Repair uses this to tell "rewrote it" from "left it alone" without writing
+// first, and to stay idempotent: a second run recomputes the same maps, finds
+// them identical, and touches no files at all.
+func (s *Store) BlameForFileMatches(stepHash Hash, filePath string, blameMap *BlameMap) (bool, error) {
+	data, err := json.Marshal(blameMap)
+	if err != nil {
+		return false, err
+	}
+
+	existing, err := os.ReadFile(filepath.Join(s.Root, BlameKey(stepHash, filePath)))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	return bytes.Equal(existing, data), nil
 }
 
 // ReadBlameForFile reads blame map for a specific file at a step

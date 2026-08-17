@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -189,6 +190,70 @@ func TestComputeBlameAttributesTheLineThatActuallyChanged(t *testing.T) {
 	for _, i := range []int{0, 1, 3, 4, 5} {
 		if got.Lines[i] != first {
 			t.Errorf("line %d did not change but is attributed to %q, want %q", i+1, got.Lines[i], first)
+		}
+	}
+}
+
+func TestWriteBlameForFileNeverShowsAPartialMapToAConcurrentReader(t *testing.T) {
+	// `rgt repair blame` rewrites every sidecar in the store, so a run can be
+	// killed in the middle of one. A truncate-in-place write leaves half a JSON
+	// document behind, and `rgt blame` on that file then fails to decode — a
+	// repair that can corrupt the thing it repairs is not a repair. A reader
+	// racing the writer stands in for the kill: it must never see anything but
+	// a whole map.
+	s, err := Init(t.TempDir())
+	if err != nil {
+		t.Fatalf("init store: %v", err)
+	}
+
+	const step, path, lines = Hash("step-atomic"), "src/big.ts", 15000
+	mapOf := func(fill string) *BlameMap {
+		bm := &BlameMap{Lines: make([]Hash, lines)}
+		for i := range bm.Lines {
+			bm.Lines[i] = Hash(strings.Repeat(fill, 64))
+		}
+		return bm
+	}
+	a, b := mapOf("a"), mapOf("b")
+
+	if err := s.WriteBlameForFile(step, path, a); err != nil {
+		t.Fatalf("seed blame: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		for i := 0; i < 20; i++ {
+			write := a
+			if i%2 == 1 {
+				write = b
+			}
+			if err := s.WriteBlameForFile(step, path, write); err != nil {
+				done <- err
+				return
+			}
+		}
+		done <- nil
+	}()
+
+	for reads := 0; ; reads++ {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("concurrent write: %v", err)
+			}
+			if reads == 0 {
+				t.Fatal("the reader never got a turn; the race this test describes was not exercised")
+			}
+			return
+		default:
+		}
+
+		got, err := s.ReadBlameForFile(step, path)
+		if err != nil {
+			t.Fatalf("read %d saw a map mid-write: %v", reads, err)
+		}
+		if len(got.Lines) != lines {
+			t.Fatalf("read %d saw %d lines, want %d — the file was replaced in place, not atomically", reads, len(got.Lines), lines)
 		}
 	}
 }

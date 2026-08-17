@@ -843,6 +843,21 @@ func ComputeAndWriteBlame(s *store.Store, parentHash, currentStepHash, treeHash 
 }
 
 func computeAndWriteBlame(s *store.Store, parentHash, currentStepHash, treeHash store.Hash) error {
+	return computeBlameForStep(s, parentHash, currentStepHash, treeHash, func(stepHash store.Hash, path string, bm *store.BlameMap) error {
+		return s.WriteBlameForFile(stepHash, path, bm)
+	})
+}
+
+// blameSink receives every (step, file) map computeBlameForStep derives.
+//
+// Capture writes them straight through; `rgt repair blame` compares each one
+// against what is already on disk so it can report how many maps it actually
+// had to rewrite. Both need the same derivation, and there must only ever be
+// one of those: a second implementation is a second thing that can be wrong
+// about which line changed.
+type blameSink func(stepHash store.Hash, path string, blameMap *store.BlameMap) error
+
+func computeBlameForStep(s *store.Store, parentHash, currentStepHash, treeHash store.Hash, emit blameSink) error {
 	tree, err := s.ReadTree(treeHash)
 	if err != nil {
 		return fmt.Errorf("read current tree %s: %w", treeHash, err)
@@ -870,7 +885,7 @@ func computeAndWriteBlame(s *store.Store, parentHash, currentStepHash, treeHash 
 		if hasParentEntry && parentEntry.Blob == entry.Blob {
 			oldBlame, err := s.ReadBlameForFile(parentHash, entry.Path)
 			if err == nil {
-				if err := s.WriteBlameForFile(currentStepHash, entry.Path, oldBlame); err != nil {
+				if err := emit(currentStepHash, entry.Path, oldBlame); err != nil {
 					problems = append(problems, fmt.Errorf("copy blame for %s: %w", entry.Path, err))
 				}
 				continue
@@ -900,7 +915,7 @@ func computeAndWriteBlame(s *store.Store, parentHash, currentStepHash, treeHash 
 		}
 
 		newBlame := store.ComputeBlame(oldContent, newContent, oldBlame, currentStepHash)
-		if err := s.WriteBlameForFile(currentStepHash, entry.Path, newBlame); err != nil {
+		if err := emit(currentStepHash, entry.Path, newBlame); err != nil {
 			problems = append(problems, fmt.Errorf("write blame for %s: %w", entry.Path, err))
 		}
 	}
