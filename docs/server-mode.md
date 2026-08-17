@@ -1,5 +1,9 @@
 # Server mode
 
+The repository onboarding and deployment-model decisions are defined in
+[`RFC 0001: Remote repository lifecycle`](./rfcs/0001-remote-repository-lifecycle.md).
+This document covers the lower-level delivery and failure-mode contract.
+
 Server mode moves re_gent's source of truth off the client. Hooks talk to a re_gent server
 directly. The repository keeps only its small `.regent/config.toml` binding; objects, refs,
 and query state live in the machine-local cache and are disposable.
