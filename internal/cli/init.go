@@ -13,6 +13,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/regent-vcs/regent/internal/index"
+	"github.com/regent-vcs/regent/internal/remote"
 	"github.com/regent-vcs/regent/internal/store"
 	"github.com/regent-vcs/regent/internal/style"
 	"github.com/spf13/cobra"
@@ -69,6 +70,9 @@ func InitCmd() *cobra.Command {
 			printHeader()
 
 			reinit := pathExists(filepath.Join(cwd, ".regent"))
+			// Resolved before anything is printed, because it decides what the
+			// whole of step 1 is even about. See serverBinding.
+			binding := resolveServerBinding(cwd)
 
 			printStep(1, 3, "Initialize Repository")
 			if reinit {
@@ -82,8 +86,10 @@ func InitCmd() *cobra.Command {
 				}
 				defer func() { _ = idx.Close() }()
 
-				fmt.Printf("  %s .regent/ already exists (skipping creation)\n", style.DimText("-"))
-				fmt.Println()
+				if !binding.bound() {
+					fmt.Printf("  %s .regent/ already exists (skipping creation)\n", style.DimText("-"))
+					fmt.Println()
+				}
 			} else {
 				s, err := store.Init(cwd)
 				if err != nil {
@@ -100,10 +106,15 @@ func InitCmd() *cobra.Command {
 					fmt.Printf("  %s Could not create .regent/.gitignore: %v\n", style.Warning(""), err)
 				}
 
-				fmt.Printf("  %s Created .regent/ directory\n", style.Success(""))
-				fmt.Printf("  %s Initialized object store\n", style.Success(""))
-				fmt.Printf("  %s Created SQLite index\n", style.Success(""))
-				fmt.Println()
+				if !binding.bound() {
+					fmt.Printf("  %s Created .regent/ directory\n", style.Success(""))
+					fmt.Printf("  %s Initialized object store\n", style.Success(""))
+					fmt.Printf("  %s Created SQLite index\n", style.Success(""))
+					fmt.Println()
+				}
+			}
+			if binding.bound() {
+				printServerBinding(binding)
 			}
 
 			printStep(2, 3, "Configure Agent Hooks")
@@ -126,7 +137,7 @@ func InitCmd() *cobra.Command {
 			// The summary reports what was installed, not what was detected,
 			// and the exit code follows it. A run that wired nothing must not
 			// look like a success to a script, a devcontainer, or a teammate.
-			printSummary(cwd, outcome)
+			printSummary(cwd, outcome, binding)
 			if hookErr != nil {
 				return fmt.Errorf("configure hooks: %w", hookErr)
 			}
@@ -157,9 +168,53 @@ func printStep(current, total int, title string) {
 	fmt.Println()
 }
 
+// serverBinding names the server a project's history belongs to.
+//
+// The zero value means "not bound", which is local mode and the default. Both
+// fields are required for the same reason remote.Config.Enabled() requires
+// both: half a binding is a typo, and a typo must read as local mode rather
+// than as a server nobody can name.
+type serverBinding struct {
+	url    string
+	repoID string
+}
+
+func (b serverBinding) bound() bool { return b.url != "" && b.repoID != "" }
+
+// resolveServerBinding answers "where does this project's history live?" using
+// the same resolution capture and the read commands use, so init cannot
+// describe a project differently from the way it will actually behave.
+//
+// A configuration that fails to load is reported as unbound. Being wrong in
+// that direction costs a line of output; being wrong the other way would have
+// init announce a server for a project that has none.
+func resolveServerBinding(cwd string) serverBinding {
+	cfg, err := remote.LoadConfigForCWD(remote.OSEnv, cwd)
+	if err != nil || !cfg.Enabled() {
+		return serverBinding{}
+	}
+	return serverBinding{url: cfg.ServerURL, repoID: cfg.RepoID}
+}
+
+// printServerBinding replaces the local-initialisation narration for a project
+// whose history lives on a server.
+//
+// `rgt init` in a connected project used to print the same three lines as a
+// fresh local one — "Created .regent/ directory", "Initialized object store",
+// "Created SQLite index" — and then close by naming .regent/ as "Repository".
+// None of the user's history is there: once a [remote] binding exists the
+// server is the source of truth and the local directory holds the binding plus
+// a disposable cache. Reported while setting up a project that was already
+// connected, where nothing in the output distinguished the two situations.
+func printServerBinding(binding serverBinding) {
+	fmt.Printf("  %s Connected to %s (repo: %s)\n", style.Success(""), binding.url, binding.repoID)
+	fmt.Printf("  %s This project's history is recorded on that server, not in a local repository here.\n", style.DimText("-"))
+	fmt.Println()
+}
+
 // printSummary takes a hookOutcome rather than []agentTarget so that the
 // requested agents cannot be passed here by mistake. See hookOutcome.
-func printSummary(projectRoot string, outcome hookOutcome) {
+func printSummary(projectRoot string, outcome hookOutcome, binding serverBinding) {
 	headline, ok := summaryStatus(outcome)
 
 	fmt.Println()
@@ -190,7 +245,15 @@ func printSummary(projectRoot string, outcome hookOutcome) {
 		fmt.Println("  - Codex may ask you to trust this project and the re_gent hooks")
 	}
 	fmt.Println()
-	fmt.Printf("%s %s\n", style.Label("Repository:"), filepath.Join(projectRoot, ".regent"))
+	// Name the place the user's history will actually be. Printing the local
+	// .regent/ path for a server-bound project sends them to a directory that
+	// holds a cache and a config file and none of their work.
+	if binding.bound() {
+		fmt.Printf("%s %s\n", style.Label("Server:"), binding.url)
+		fmt.Printf("%s %s\n", style.Label("Repo:"), binding.repoID)
+	} else {
+		fmt.Printf("%s %s\n", style.Label("Repository:"), filepath.Join(projectRoot, ".regent"))
+	}
 	fmt.Println()
 }
 
