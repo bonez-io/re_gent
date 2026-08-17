@@ -269,6 +269,7 @@ Hooks auto-configure on `rgt init`. No manual setup required.
 | `rgt status` | Show current repository state |
 | `rgt show <step>` | Display full context for a step (tool call + conversation) |
 | `rgt blame <path>[:<line>]` | Show per-line provenance for a file |
+| `rgt repair blame` | Recompute every stored blame map with the current diff. `rgt blame` is annotated at write time, so a diff fix does not reach maps already on disk; `rgt show` diffs at query time and needs no repair. Idempotent and safe to interrupt. |
 | `rgt cat <hash>` | Inspect any object by hash (debugging tool; runnable but not listed in `rgt --help`) |
 | `rgt serve` | Serve re_gent repositories over HTTP (`--addr`, `--data`) |
 | `rgt push` | Push session history to a repo on a server (`--url`, `--repo`, `--session`) |

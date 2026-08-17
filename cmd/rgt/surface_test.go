@@ -103,3 +103,28 @@ func TestObjectDumpIsHiddenFromHelpButStillRunnable(t *testing.T) {
 		t.Errorf("cat was hidden by deleting it; it must stay runnable:\n%s", catOut)
 	}
 }
+
+// `rgt repair blame` is the answer to blame maps written by the old, broken
+// line diff. It is only an answer if it is reachable from the command tree —
+// and if it says which derived data a repair can and cannot reach, because the
+// same fix arrived two different ways: `rgt show` diffs at query time and was
+// corrected by the rebuild, while blame is stored and had to be rewritten.
+func TestRepairBlameIsReachableAndNamesWhatItCannotReach(t *testing.T) {
+	out, err := runRoot(t, "repair", "--help")
+	if err != nil {
+		t.Fatalf("`rgt repair --help`: %v\n%s", err, out)
+	}
+	for _, want := range []string{"blame", "rgt show", "query time"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("`rgt repair --help` never mentions %q:\n%s", want, out)
+		}
+	}
+
+	out, err = runRoot(t, "repair", "blame", "--help")
+	if err != nil {
+		t.Fatalf("`rgt repair blame --help`: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "session ref") {
+		t.Errorf("`rgt repair blame --help` does not say what it walks:\n%s", out)
+	}
+}

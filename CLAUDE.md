@@ -99,6 +99,17 @@ Two viable blame algorithms:
 
 Chosen: **annotated**. Storage cost is bounded (per-line hash arrays compress well, can be RLE-encoded later) and blame becomes a single object lookup.
 
+**Which derived data is stored and which is recomputed.** The two commands that read a diff read it at different times, and the difference decides what a bug in the diff costs:
+
+| Command | When the diff runs | What a diff fix reaches |
+|---|---|---|
+| `rgt show` | Query time (`internal/treediff` calls `LineDiff` per invocation) | Every step, immediately — rebuilding the binary is the whole fix |
+| `rgt blame` | Write time (sidecar per (step, file), written during capture) | Only steps recorded *after* the fix; maps already on disk keep whatever the old diff believed |
+
+That asymmetry is the price of O(1) blame, and it is why `rgt repair blame` exists: it walks each session ref from its root and rewrites every stored blame map with the current diff, leaving history, workspace, and every canonical object untouched. It is the remedy for the `LineDiff` bug that named the line *after* the one an edit changed — the alternative was deleting `.regent/`, which is not a remedy. Repair is idempotent (a map that already matches is not rewritten) and safe to interrupt (sidecars are written atomically; a cancelled run is re-runnable, not resumable, because a step's blame is derived from its parent's).
+
+Any future change to the diff or to `ComputeBlame` inherits this: it fixes `show` on rebuild and requires a `rgt repair blame` for `blame`.
+
 ### Conversation capture
 
 We store conversation metadata alongside the file state. Current Claude and Codex hooks write normalized message rows into the SQLite index, store tool payloads as content-addressed blobs, and keep raw agent transcript snapshots as blobs when the host exposes a transcript path. Older data may still use the chained `Transcript` blob: `{ prev: hash, new_messages: [hash...] }`.

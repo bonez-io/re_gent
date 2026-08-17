@@ -78,6 +78,7 @@ func newRootCommand() *cobra.Command {
 	rootCmd.AddCommand(cli.ShowCmd())
 	rootCmd.AddCommand(cli.SessionsCmd())
 	rootCmd.AddCommand(cli.RewindCmd())
+	rootCmd.AddCommand(cli.RepairCmd())
 	rootCmd.AddCommand(cli.ServeCmd())
 	rootCmd.AddCommand(cli.SyncCmd())
 	rootCmd.AddCommand(cli.HookCmd())
