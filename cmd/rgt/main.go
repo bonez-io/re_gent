@@ -129,7 +129,15 @@ func newRootCommand() *cobra.Command {
 
 func commandStore(cwd string) (*store.Store, error) {
 	cfg, err := remote.LoadConfigForCWD(remote.OSEnv, cwd)
-	if err != nil || !cfg.Enabled() || cfg.Validate() != nil {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: server-mode config could not be loaded, using local store: %v\n", err)
+		return store.OpenFromDir(cwd)
+	}
+	if !cfg.Enabled() {
+		return store.OpenFromDir(cwd)
+	}
+	if err := cfg.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: server-mode config could not be loaded, using local store: %v\n", err)
 		return store.OpenFromDir(cwd)
 	}
 	cacheDir, err := remote.CacheDirFor(cfg)
