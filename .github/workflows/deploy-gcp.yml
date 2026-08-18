@@ -90,6 +90,7 @@ jobs:
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.images.outputs.server }}
           cache-from: type=gha,scope=server
@@ -99,6 +100,7 @@ jobs:
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: web
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.images.outputs.web }}
           cache-from: type=gha,scope=web
@@ -132,7 +134,7 @@ jobs:
               --project "${{ vars.GCP_PROJECT_ID }}" \
               --zone "${{ vars.GCP_ZONE }}" \
               --tunnel-through-iap --quiet \
-              --command "test -f /var/lib/regent-deploy/bootstrap-status"; then
+              --command "sudo test -f /var/lib/regent-deploy/bootstrap-status"; then
               exit 0
             fi
             echo "host is not ready yet (attempt ${attempt}/20)"
