@@ -8,11 +8,13 @@ import (
 )
 
 type fakeBootstrapper struct {
-	url          string
-	healthy      bool
-	docker       bool
-	runErr       error
-	runs, probes int
+	url            string
+	healthy        bool
+	waitHealthy    bool
+	docker         bool
+	runErr         error
+	runs, probes   int
+	waitHealthRuns int
 }
 
 func (f *fakeBootstrapper) PublicURL(_ string, override string) (string, error) {
@@ -21,7 +23,11 @@ func (f *fakeBootstrapper) PublicURL(_ string, override string) (string, error) 
 	}
 	return f.url, nil
 }
-func (f *fakeBootstrapper) Healthy(_ string) bool            { f.probes++; return f.healthy }
+func (f *fakeBootstrapper) Healthy(_ string) bool { f.probes++; return f.healthy }
+func (f *fakeBootstrapper) WaitHealthy(_ string) bool {
+	f.waitHealthRuns++
+	return f.waitHealthy
+}
 func (f *fakeBootstrapper) HasDocker(_ string) (bool, error) { return f.docker, nil }
 func (f *fakeBootstrapper) Run(_ string) error               { f.runs++; return f.runErr }
 
@@ -67,6 +73,17 @@ func TestPrepareMachineRequiresPublicHealthAfterBootstrap(t *testing.T) {
 	}
 	if f.runs != 1 {
 		t.Fatalf("runs = %d, want 1", f.runs)
+	}
+}
+
+func TestPrepareMachineWaitsForPublicHealthAfterBootstrap(t *testing.T) {
+	f := &fakeBootstrapper{url: "http://team.example:7654", waitHealthy: true}
+	got, err := prepareMachine("team", "", true, strings.NewReader(""), &bytes.Buffer{}, f)
+	if err != nil || got != f.url {
+		t.Fatalf("prepareMachine = %q, %v", got, err)
+	}
+	if f.runs != 1 || f.waitHealthRuns != 1 {
+		t.Fatalf("bootstrap runs = %d, health waits = %d; want one each", f.runs, f.waitHealthRuns)
 	}
 }
 

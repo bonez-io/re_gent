@@ -19,6 +19,7 @@ import (
 type bootstrapper interface {
 	PublicURL(target, override string) (string, error)
 	Healthy(publicURL string) bool
+	WaitHealthy(publicURL string) bool
 	HasDocker(target string) (bool, error)
 	Run(target string) error
 }
@@ -55,6 +56,19 @@ func (systemBootstrapper) Healthy(publicURL string) bool {
 	}
 	defer r.Body.Close()
 	return r.StatusCode == http.StatusOK
+}
+
+func (b systemBootstrapper) WaitHealthy(publicURL string) bool {
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if b.Healthy(publicURL) {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(time.Second)
+	}
 }
 
 func (systemBootstrapper) HasDocker(target string) (bool, error) {
@@ -95,7 +109,6 @@ cat >/opt/regent/compose.yml <<'EOF'
 services:
   server:
     image: ghcr.io/regent-vcs/regent-server:latest
-    command: ["regent-server", "--addr", "0.0.0.0:7654", "--data", "/data"]
     ports: ["7654:7654"]
     volumes: ["regent-data:/data"]
     restart: unless-stopped
@@ -159,7 +172,7 @@ func prepareMachine(target, override string, yes bool, in io.Reader, out io.Writ
 	if err := b.Run(target); err != nil {
 		return "", err
 	}
-	if !b.Healthy(publicURL) {
+	if !b.WaitHealthy(publicURL) {
 		return "", fmt.Errorf("server was started but %s/healthz is unreachable from this machine (check port 7654/firewall); project was not changed", publicURL)
 	}
 	return publicURL, nil
