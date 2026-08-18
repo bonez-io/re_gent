@@ -110,16 +110,16 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Enable pnpm
+        working-directory: .
+        run: corepack enable
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "24"
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
-
-      - name: Enable pnpm
-        working-directory: .
-        run: corepack enable
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
