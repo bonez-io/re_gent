@@ -14,7 +14,6 @@ import (
 
 	"github.com/regent-vcs/regent/internal/ignore"
 	"github.com/regent-vcs/regent/internal/index"
-	"github.com/regent-vcs/regent/internal/remote"
 	"github.com/regent-vcs/regent/internal/snapshot"
 	"github.com/regent-vcs/regent/internal/store"
 	"github.com/regent-vcs/regent/internal/usage"
@@ -41,14 +40,23 @@ type Recorder struct {
 	Store *store.Store
 	Index *index.DB
 	CWD   string
-	// Server is non-nil in server mode, where the source of truth is a re_gent
-	// server and Store is a disposable machine-local cache. See servermode.go.
-	Server *ServerLink
+	// Delivery is an optional command-edge integration. Capture only records to
+	// its Store; an edge may arrange to deliver those recorded bytes elsewhere.
+	Delivery Delivery
 
 	// scannedTranscripts remembers which (session, turn, transcript) triples this
 	// process already scanned for assistant text, so a multi-tool batch costs one
 	// transcript read instead of one per tool.
 	scannedTranscripts map[string]struct{}
+}
+
+// Delivery is deliberately storage-agnostic. Network/server policy belongs at
+// the command edge, not in capture, so local recording never selects a remote
+// store or imports remote transport code.
+type Delivery interface {
+	Start(*Recorder)
+	Finalize(*Recorder)
+	QueueObject(*Recorder, store.Hash)
 }
 
 type turnScope struct {
@@ -87,33 +95,21 @@ type ToolUse struct {
 	ToolResponse json.RawMessage
 }
 
-// Open returns the recorder for this working directory.
-//
-// Server mode wins when it is configured: the source of truth is then the
-// server and the repository needs no .regent/ directory at all. If server mode
-// is configured but cannot be initialised, capture falls back to local mode
-// (and to a clean no-op when there is no local store) rather than failing the
-// agent's turn.
+// Open returns a local recorder for this working directory. Choosing a remote
+// cache is a command-edge concern; capture itself never makes that choice.
 func Open(cwd string) (*Recorder, bool, error) {
 	if cwd == "" {
 		return nil, false, fmt.Errorf("cwd is required")
 	}
 
-	cfg, enabled, cfgErr := serverConfigFor(remote.OSEnv, cwd)
-	if cfgErr != nil {
-		logServerModeFallback(cfg, cfgErr)
-	}
-	if enabled {
-		rec, err := OpenServerMode(cwd, cfg)
-		if err == nil {
-			// Deliver anything a previous invocation could not.
-			rec.SyncToServer("hook start")
-			return rec, true, nil
-		}
-		logServerModeFallback(cfg, err)
-	}
+	return OpenStore(cwd, filepath.Join(cwd, ".regent"))
+}
 
-	s, err := store.Open(filepath.Join(cwd, ".regent"))
+// OpenStore opens a recorder against an explicitly chosen existing store.
+// It is used by command-edge integrations that have already made a storage
+// decision. A missing local store remains a clean no-op for agent hooks.
+func OpenStore(cwd, root string) (*Recorder, bool, error) {
+	s, err := store.Open(root)
 	if err != nil {
 		if errors.Is(err, store.ErrNotRegentRepository) {
 			return nil, false, nil
@@ -274,7 +270,11 @@ func (r *Recorder) RecordAssistantAndFinalize(event AssistantResponse) error {
 	// The end of a turn is the delivery point: by now the step, its tree and
 	// its tool payloads exist locally. Deferred so a partially recorded turn is
 	// still delivered rather than stranded in the cache.
-	defer r.SyncToServer("turn end")
+	defer func() {
+		if r.Delivery != nil {
+			r.Delivery.Finalize(r)
+		}
+	}()
 
 	// Pull in the assistant text and reasoning the turn produced. This runs before
 	// the step is written so the blocks are pending and get linked to it, and

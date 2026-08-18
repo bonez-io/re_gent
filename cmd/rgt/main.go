@@ -1,10 +1,15 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/regent-vcs/regent/internal/cli"
+	"github.com/regent-vcs/regent/internal/remote"
+	"github.com/regent-vcs/regent/internal/store"
 	"github.com/spf13/cobra"
 )
 
@@ -52,6 +57,14 @@ func newRootCommand() *cobra.Command {
 		// the root because cobra checks the root as well as the command that
 		// failed, so this covers the whole tree rather than one command.
 		SilenceErrors: true,
+		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
+			// The application edge chooses the backing store once, before a
+			// command runs. Read and capture packages only receive an opener;
+			// neither can silently decide to switch to a server cache.
+			cli.SetStoreOpener(commandStore)
+			cli.SetNotPulledReporter(commandNotPulledReporter)
+			return nil
+		},
 		// Bare `rgt` prints help and does nothing else.
 		//
 		// It used to run the project picker: typing the bare command — the first
@@ -112,4 +125,78 @@ func newRootCommand() *cobra.Command {
 	cobra.EnableCommandSorting = false
 
 	return rootCmd
+}
+
+func commandStore(cwd string) (*store.Store, error) {
+	cfg, err := remote.LoadConfigForCWD(remote.OSEnv, cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: server-mode config could not be loaded, using local store: %v\n", err)
+		return store.OpenFromDir(cwd)
+	}
+	if !cfg.Enabled() {
+		return store.OpenFromDir(cwd)
+	}
+	if err := cfg.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: server-mode config could not be loaded, using local store: %v\n", err)
+		return store.OpenFromDir(cwd)
+	}
+	cacheDir, err := remote.CacheDirFor(cfg)
+	if err != nil {
+		return nil, err
+	}
+	s, err := store.Open(cacheDir)
+	if err != nil {
+		return nil, &cli.NotPulledError{Message: fmt.Sprintf("This machine has no cached history for %s. Run 'rgt status' to check the server, then 'rgt pull' when history is available.", cfg.RepoID)}
+	}
+	return s, nil
+}
+
+func commandNotPulledReporter(w io.Writer) bool {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return false
+	}
+	cfg, err := remote.LoadConfigForCWD(remote.OSEnv, cwd)
+	if err != nil || !cfg.Enabled() || cfg.Validate() != nil {
+		return false
+	}
+	reportServerModeCache(w, cfg)
+	return true
+}
+
+func connectedNotPulledReport(cfg remote.Config) string {
+	return fmt.Sprintf("Connected to %s as %s, not yet pulled.\nThis project's history is recorded on the server; none of it is on this machine yet.\n  - Fetch it: rgt pull", cfg.ServerURL, cfg.RepoID)
+}
+
+// reportServerModeCache asks the live server before making any claim about
+// history that is absent from this machine's cache.
+func reportServerModeCache(w io.Writer, cfg remote.Config) {
+	client, err := remote.NewHTTPClient(cfg)
+	if err != nil {
+		fmt.Fprintf(w, "Cannot check %s for this project's history: %v.\n", cfg.ServerURL, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
+	defer cancel()
+	refs, err := client.ListRefs(ctx, "sessions")
+	switch {
+	case errors.Is(err, remote.ErrNotFound):
+		fmt.Fprintf(w,
+			"Connected to %s as %s, but the server does not know this project.\n"+
+				"  - Re-register it: rgt connect %s\n",
+			cfg.ServerURL, cfg.RepoID, cfg.ServerURL)
+	case err != nil:
+		fmt.Fprintf(w,
+			"Cannot reach %s to check this project's history; this machine's cache is empty.\n"+
+				"  - Check the server connection, then try: rgt pull\n"+
+				"  - Detail: %v\n",
+			cfg.ServerURL, err)
+	case len(refs) == 0:
+		fmt.Fprintf(w,
+			"Connected to %s as %s; the server knows this project but holds no history yet.\n"+
+				"  - Record a session here, or ask a teammate to deliver one with: rgt sync\n",
+			cfg.ServerURL, cfg.RepoID)
+	default:
+		fmt.Fprintln(w, connectedNotPulledReport(cfg))
+	}
 }

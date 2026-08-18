@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 
 	"github.com/regent-vcs/regent/internal/capture"
+	"github.com/regent-vcs/regent/internal/remote"
+	"github.com/regent-vcs/regent/internal/remote/remotecapture"
 	"github.com/spf13/cobra"
 )
 
@@ -101,7 +103,9 @@ func hookCWD(cwd string) (string, error) {
 }
 
 func withHookRecorder(cwd string, fn func(*capture.Recorder) error) error {
-	recorder, ok, err := capture.Open(cwd)
+	// This is the sole hook command edge that chooses a store. Capture receives
+	// an already-opened store and never examines remote configuration itself.
+	recorder, ok, err := openHookRecorder(cwd)
 	if err != nil {
 		logHookCommandError(cwd, err)
 		return nil
@@ -115,6 +119,33 @@ func withHookRecorder(cwd string, fn func(*capture.Recorder) error) error {
 		logHookCommandError(cwd, err)
 	}
 	return nil
+}
+
+func openHookRecorder(cwd string) (*capture.Recorder, bool, error) {
+	cfg, err := remote.LoadConfigForCWD(remote.OSEnv, cwd)
+	if err == nil && cfg.Enabled() {
+		if err := cfg.Validate(); err == nil {
+			recorder, link, err := remotecapture.Open(cwd, cfg)
+			if err == nil {
+				link.Start(recorder)
+				return recorder, true, nil
+			}
+			logServerModeFallback(cfg, err)
+		} else {
+			logServerModeFallback(cfg, err)
+		}
+	} else if err != nil {
+		logServerModeFallback(cfg, err)
+	}
+	return capture.Open(cwd)
+}
+
+func logServerModeFallback(cfg remote.Config, err error) {
+	cacheDir, cacheErr := remote.CacheDirFor(cfg)
+	if err == nil || cacheErr != nil {
+		return
+	}
+	capture.LogHookError(cacheDir, fmt.Sprintf("server mode unavailable, falling back to local capture: %v", err))
 }
 
 func logHookPayloadError(raw []byte, err error) error {
