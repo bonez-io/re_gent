@@ -49,7 +49,7 @@ func TestE2EInitFailsWhenNoHooksCouldBeWired(t *testing.T) {
 
 	out := e2eRunExpectingFailure(t, rgt, project, "init", "--agent", "claude", "--skip-skills")
 
-	if strings.Contains(out, "Initialization complete") {
+	if strings.Contains(out, "Ready to capture") {
 		t.Errorf("init claimed completion after wiring nothing:\n%s", out)
 	}
 	// The user has to be told which agent failed, not merely that something did.
@@ -67,7 +67,7 @@ func TestE2EInitSucceedsWhenAnAgentIsWired(t *testing.T) {
 
 	out := e2eRun(t, rgt, project, nil, "init", "--agent", "claude", "--skip-skills")
 
-	if !strings.Contains(out, "Initialization complete") {
+	if !strings.Contains(out, "Ready to capture") {
 		t.Errorf("init wired Claude but did not report completion:\n%s", out)
 	}
 	if strings.Contains(out, "Agent skills:") {

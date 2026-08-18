@@ -244,7 +244,7 @@ func shellQuote(s string) string {
 // than printing a bare "hooks configured") is what lets a user verify the claim
 // without trusting it.
 func reportWired(agent, path string) {
-	fmt.Printf("  %s %s hooks configured -> %s\n", style.Success(""), agent, path)
+	Verbosef(os.Stdout, "  %s %s hooks configured -> %s\n", style.Success(""), agent, path)
 }
 
 // reportClaudeSettingsScope warns when the settings just written are not the
@@ -269,7 +269,11 @@ func reportClaudeSettingsScope(projectRoot string) {
 	if !shadow.found() {
 		return
 	}
-	fmt.Printf("  %s An agent opened at %s will not load them.\n", style.Warning(""), shadow.Dir)
+	fmt.Printf("  %s Important: open the agent inside this project so it loads the new hooks.\n", style.Warning(""))
+	fmt.Printf("    An agent opened at %s will not load them.\n", shadow.Dir)
+	if !Verbose() {
+		return
+	}
 	for _, line := range strings.Split(claudeShadowRemedy(projectRoot, shadow), "\n") {
 		fmt.Printf("    %s\n", line)
 	}
@@ -417,8 +421,10 @@ type hookOutcome struct {
 // agents is what --agent is for, and that works everywhere.
 func configureHooks(projectRoot string, targets []agentTarget, opts hookOptions) (hookOutcome, error) {
 	if opts.skip {
-		fmt.Printf("  %s Hook configuration skipped\n", style.DimText("-"))
-		printManualInstructions(targets)
+		Verbosef(os.Stdout, "  %s Hook configuration skipped\n", style.DimText("-"))
+		if Verbose() {
+			printManualInstructions(targets)
+		}
 		return hookOutcome{}, nil
 	}
 
@@ -430,7 +436,7 @@ func configureHooks(projectRoot string, targets []agentTarget, opts hookOptions)
 	// push is a convenience over capture, never a reason for init to fail.
 	if !opts.noGitHook {
 		if outcome, gitErr := wireGitHook(projectRoot); gitErr != nil {
-			fmt.Printf("  %s Git pre-push hook not configured: %v\n", style.Warning(""), gitErr)
+			Verbosef(os.Stdout, "  Git pre-push hook not configured: %v\n", gitErr)
 		} else {
 			reportGitHookSkipped(outcome)
 		}

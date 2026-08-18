@@ -96,11 +96,14 @@ func runInstaller(t *testing.T, workDir string) (out string, calls string, serve
 // installer used to skip the download when any rgt was already on PATH, so
 // anyone who had installed once kept their old binary forever and re-running
 // the installer appeared to succeed while changing nothing.
-func TestInstallAlwaysReinstalls(t *testing.T) {
-	out, _, _ := runInstaller(t, t.TempDir())
+func TestInstallReplacesBinaryWithoutDownloadNoise(t *testing.T) {
+	out, calls, _ := runInstaller(t, t.TempDir())
 
-	if !strings.Contains(out, "Downloading rgt") {
-		t.Errorf("installer must always download, got output:\n%s", out)
+	if strings.Contains(out, "Downloading rgt") {
+		t.Errorf("default installer output leaked download diagnostics:\n%s", out)
+	}
+	if !strings.Contains(out, "CLI installed") || !strings.Contains(calls, "version") {
+		t.Errorf("installer did not verify and report the downloaded CLI; output:\n%s\ncalls:\n%s", out, calls)
 	}
 	if strings.Contains(out, "already installed") {
 		t.Errorf("installer must not skip on an existing binary, got:\n%s", out)

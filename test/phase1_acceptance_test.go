@@ -269,7 +269,7 @@ func TestCLICommands(t *testing.T) {
 		t.Fatalf("rgt init failed: %v\nOutput: %s", err, output)
 	}
 
-	if !strings.Contains(string(output), "Initialization complete") {
+	if !strings.Contains(string(output), "Ready to capture") {
 		t.Errorf("Expected success message, got: %s", output)
 	}
 
