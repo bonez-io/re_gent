@@ -37,7 +37,7 @@ func TestConnectingAnAlreadyConnectedProjectStaysConnected(t *testing.T) {
 	hooks := filepath.Join(project, ".claude", "settings.json")
 
 	var out bytes.Buffer
-	if err := connectHere(srv.URL, project, "", &out, false); err != nil {
+	if err := connectHere(srv.URL, project, "", false, &out, false); err != nil {
 		t.Fatalf("first connect: %v", err)
 	}
 	if !isConnected(project) {
@@ -48,7 +48,7 @@ func TestConnectingAnAlreadyConnectedProjectStaysConnected(t *testing.T) {
 	}
 
 	out.Reset()
-	if err := connectHere(srv.URL, project, "", &out, false); err != nil {
+	if err := connectHere(srv.URL, project, "", false, &out, false); err != nil {
 		t.Fatalf("second connect: %v", err)
 	}
 
@@ -77,7 +77,7 @@ func TestConnectInsideAProjectWiresOnlyThatProject(t *testing.T) {
 	var out bytes.Buffer
 	// canPrompt=false: no terminal, so no share question — the path an
 	// installer, a devcontainer or CI actually takes.
-	if err := connectHere(srv.URL, here, "", &out, false); err != nil {
+	if err := connectHere(srv.URL, here, "", false, &out, false); err != nil {
 		t.Fatalf("connectHere: %v", err)
 	}
 

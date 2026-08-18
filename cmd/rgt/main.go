@@ -85,6 +85,7 @@ func newRootCommand() *cobra.Command {
 	rootCmd.AddCommand(cli.ServeCmd())
 	rootCmd.AddCommand(cli.SyncCmd())
 	rootCmd.AddCommand(cli.HookCmd())
+	rootCmd.AddCommand(cli.GitHookCmd())
 	rootCmd.AddCommand(MessageHookCmd())
 	rootCmd.AddCommand(ToolBatchHookCmd())
 	rootCmd.AddCommand(CodexHookCmd())

@@ -389,7 +389,8 @@ func shadowConsequence(shadow claudeWorkspaceShadow) string {
 // hookOptions selects how configureHooks behaves. The zero value is the
 // default: wire everything detected, ask nothing.
 type hookOptions struct {
-	skip bool // --skip-hook: install nothing
+	skip      bool // --skip-hook: install nothing
+	noGitHook bool // --no-git-hook: agent hooks yes, Git pre-push hook no
 }
 
 // hookOutcome carries what was actually installed.
@@ -427,6 +428,18 @@ func configureHooks(projectRoot string, targets []agentTarget, opts hookOptions)
 	}
 
 	installed, err := wireAgents(projectRoot, targets)
+	// The Git hook is not an agent and does not count towards `installed`,
+	// which is what decides whether init reports success. It is wired here,
+	// at the decision layer, so init and connect share one call shape and
+	// neither can forget it. Its failure is reported and swallowed: sync-on-
+	// push is a convenience over capture, never a reason for init to fail.
+	if !opts.noGitHook {
+		if outcome, gitErr := wireGitHook(projectRoot); gitErr != nil {
+			fmt.Printf("  %s Git pre-push hook not configured: %v\n", style.Warning(""), gitErr)
+		} else {
+			reportGitHookSkipped(outcome)
+		}
+	}
 	return hookOutcome{installed: installed}, err
 }
 
