@@ -255,7 +255,8 @@ func runPull(ctx context.Context, out io.Writer, cache *store.Store, client remo
 			return fmt.Errorf("pull %s: %w", refName, err)
 		}
 		if res.Status == remote.PullLocalAhead {
-			fmt.Fprintf(out, "%s: this cache is ahead of the server; nothing pulled (deliver yours with 'rgt sync')\n", refName)
+			fmt.Fprintf(out, "%s: this cache is ahead of the server; nothing pulled (server at %s, local at %s; deliver yours with 'rgt sync')\n",
+				refName, res.ServerTip, res.Tip)
 			continue
 		}
 		rebuilt, err := rebuildDerived(cache, idx, res.Tip)

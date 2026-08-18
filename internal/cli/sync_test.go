@@ -263,6 +263,30 @@ func TestSyncPullRefusesToOverwriteDivergedLocalHistory(t *testing.T) {
 	}
 }
 
+func TestSyncPullKeepsAndNamesLocalAheadHistory(t *testing.T) {
+	f := newSyncFixture(t)
+	serverTip := f.addStep(t, "a.txt", "server", "server")
+	if _, err := runSyncCapturingOutput(t, f.cfg, syncOptions{}); err != nil {
+		t.Fatalf("push server tip: %v", err)
+	}
+	localTip := f.addStep(t, "a.txt", "local", "local")
+
+	out, err := runSyncCapturingOutput(t, f.cfg, syncOptions{pull: true, ref: syncTestRef})
+	if err != nil {
+		t.Fatalf("sync --pull with local-ahead history: %v\n%s", err, out)
+	}
+	for _, want := range []string{syncTestRef, "ahead of the server", string(serverTip), string(localTip)} {
+		if !strings.Contains(out, want) {
+			t.Errorf("local-ahead report does not mention %q:\n%s", want, out)
+		}
+	}
+
+	got, readErr := f.cache.ReadRef(syncTestRef)
+	if readErr != nil || got != localTip {
+		t.Fatalf("local ref = %s, %v; want it untouched at %s", got, readErr, localTip)
+	}
+}
+
 func TestSyncPullWithoutARefExplainsItself(t *testing.T) {
 	f := newSyncFixture(t)
 	_, err := runSyncCapturingOutput(t, f.cfg, syncOptions{pull: true})
