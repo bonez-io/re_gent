@@ -90,7 +90,7 @@ type notPulledError struct {
 }
 
 func (e *notPulledError) Error() string {
-	return fmt.Sprintf("This machine has no cached history for %s. Run 'rgt status' to check the server.", e.cfg.RepoID)
+	return fmt.Sprintf("This machine has no cached history for %s. Run 'rgt status' to check the server, then 'rgt pull' when history is available.", e.cfg.RepoID)
 }
 
 // connectedNotPulledReport is the wording for the one case where a live server
