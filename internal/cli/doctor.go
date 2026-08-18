@@ -384,7 +384,7 @@ func claudeHookFinding(projectRoot string) doctorFinding {
 	// It reports OK only when the project binding records that its owner opens
 	// agents here. Without that durable answer the hazard is real and has to be
 	// said; doctor cannot infer it from the filesystem (#27, #29).
-	if shadow := shadowingClaudeWorkspace(projectRoot); shadow.found() && !intentionalProjectCaptureRoot(projectRoot) {
+	if shadow := shadowingClaudeWorkspace(projectRoot); shadow.found() && !intentionalCaptureRoot(projectRoot) {
 		return doctorFinding{
 			Name:     "claude hooks",
 			OK:       false,
@@ -396,14 +396,15 @@ func claudeHookFinding(projectRoot string) doctorFinding {
 	return doctorFinding{Name: "claude hooks", OK: true, Detail: path}
 }
 
-// intentionalProjectCaptureRoot is deliberately narrow: only an explicit
-// project-root acknowledgement suppresses the ancestor-layout advisory. A
-// missing, malformed, or workspace-root binding remains unacknowledged here.
-// The repository and hook findings are still evaluated independently, so this
-// can never turn a project with no capture path into a green doctor result.
-func intentionalProjectCaptureRoot(projectRoot string) bool {
+// intentionalCaptureRoot is deliberately scoped to the binding at the root
+// doctor is checking. Both supported values say that this exact directory is
+// an intentional capture root; neither value blesses descendants. A missing,
+// malformed, or unknown binding remains unacknowledged. The repository and
+// hook findings are still evaluated independently, so this cannot make a
+// project with no capture path green.
+func intentionalCaptureRoot(projectRoot string) bool {
 	cfg, err := readRepoConfig(projectRoot)
-	return err == nil && cfg.Capture.Root == "project"
+	return err == nil && (cfg.Capture.Root == "project" || cfg.Capture.Root == "workspace")
 }
 
 // claudeSettingsFileHasRegentHook answers claudeSettingsHaveRegentHook's

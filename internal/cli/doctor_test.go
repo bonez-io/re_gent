@@ -481,7 +481,11 @@ func TestInitRecordsCaptureRootInVisibleProjectBinding(t *testing.T) {
 // No descendant is silently blessed: doctor is green here because this is the
 // directory with both the binding and the hook that captures work.
 func TestDoctorAcceptsAnIntentionalWorkspaceCaptureRoot(t *testing.T) {
-	workspace := t.TempDir()
+	parent := t.TempDir()
+	mustMkdir(t, filepath.Join(parent, ".claude"))
+	mustWrite(t, filepath.Join(parent, ".claude", "settings.json"), `{"hooks":{}}`)
+
+	workspace := filepath.Join(parent, "workspace")
 	mustMkdir(t, filepath.Join(workspace, ".claude"))
 	mustWrite(t, filepath.Join(workspace, ".claude", "settings.json"), wiredClaudeSettings)
 	s, err := store.Init(workspace)
@@ -498,6 +502,9 @@ func TestDoctorAcceptsAnIntentionalWorkspaceCaptureRoot(t *testing.T) {
 	}
 	if cfg.Capture.Root != "workspace" {
 		t.Fatalf("capture root = %q, want workspace", cfg.Capture.Root)
+	}
+	if shadow := shadowingClaudeWorkspace(workspace); !shadow.found() {
+		t.Fatal("test setup has no ancestor-layout advisory to suppress")
 	}
 	if finding := claudeHookFinding(workspace); !finding.OK {
 		t.Errorf("intentional workspace capture root is not healthy: %s", finding.Detail)
