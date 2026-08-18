@@ -14,6 +14,7 @@ import (
 	"github.com/regent-vcs/regent/internal/index"
 	"github.com/regent-vcs/regent/internal/remote"
 	"github.com/regent-vcs/regent/internal/store"
+	"github.com/regent-vcs/regent/internal/style"
 	"github.com/spf13/cobra"
 )
 
@@ -32,6 +33,16 @@ type connectParams struct {
 	// noGitHook leaves the Git pre-push hook alone (--no-git-hook). Agent hooks
 	// are unaffected: this opts out of sync-on-push, not of capture.
 	noGitHook bool
+	// out receives diagnostic and exceptional state. Normal onboarding output
+	// is rendered by connectHere after the operation succeeds.
+	out io.Writer
+}
+
+func (p connectParams) writer() io.Writer {
+	if p.out != nil {
+		return p.out
+	}
+	return os.Stdout
 }
 
 // ConnectCmd returns the cobra command for `rgt connect`.
@@ -144,15 +155,39 @@ connect replaces setup, which did the same job with different answers.`,
 // `curl | sh`, in CI, in a devcontainer — and the share question is simply not
 // asked there.
 func connectHere(serverURL, dir, repoID string, noGitHook bool, out io.Writer, canPrompt bool) error {
-	fmt.Fprintf(out, "\n== %s ==\n", filepath.Base(dir))
-	if err := runConnect(connectParams{serverURL: serverURL, projectRoot: dir, repoID: repoID, noGitHook: noGitHook}); err != nil {
-		fmt.Fprintf(out, "  ! %v\n", err)
-		return fmt.Errorf("%s could not be connected", filepath.Base(dir))
+	if out == nil {
+		out = io.Discard
+	}
+	flow := style.NewFlow(out)
+	flow.Header("connect", filepath.Base(dir))
+	var setupOutput bytes.Buffer
+	err := flow.Wait("Installing project integration", func() error {
+		return runConnect(connectParams{serverURL: serverURL, projectRoot: dir, repoID: repoID, noGitHook: noGitHook, out: &setupOutput})
+	})
+	if setupOutput.Len() > 0 {
+		_, _ = io.Copy(out, &setupOutput)
+	}
+	if err != nil {
+		return fmt.Errorf("%s could not be connected: %w", filepath.Base(dir), err)
 	}
 	rememberServer(serverURL)
+	flow.Step("Server verified")
+	flow.Step("Registered with server")
+	flow.Step("Agent hooks configured")
+	if cfg, err := readRemoteConfig(dir); err == nil {
+		flow.Detail("Server", cfg.URL)
+		flow.Detail("Project", cfg.RepoID)
+	}
 	if canPrompt {
 		shareWithTeam([]string{dir})
 	}
+	flow.Complete("Ready to capture")
+	flow.Next("Restart your agent here, then run rgt doctor")
+	if Verbose() {
+		flow.Hint("Team setup: commit .regent/config.toml and .claude/settings.json")
+		flow.Hint("Codex teammates run rgt init --agent codex on their own machine")
+	}
+	flow.End()
 	return nil
 }
 
@@ -189,15 +224,15 @@ func runConnect(p connectParams) error {
 		}
 		_ = idx.Close()
 		if err := createRegentGitignore(p.projectRoot); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not create .regent/.gitignore: %v\n", err)
+			Verbosef(p.writer(), "warning: could not create .regent/.gitignore: %v\n", err)
 		}
-		fmt.Printf("  ✓ Initialized .regent/\n")
+		Verbosef(p.writer(), "  initialized .regent/\n")
 	} else {
 		s, err = store.Open(regentDir)
 		if err != nil {
 			return fmt.Errorf("open store: %w", err)
 		}
-		fmt.Printf("  - .regent/ already exists\n")
+		Verbosef(p.writer(), "  using existing .regent/\n")
 	}
 
 	// 3. Check whether this repo is already connected to this server.
@@ -213,18 +248,19 @@ func runConnect(p connectParams) error {
 		// file would leave every future upload rejected for an unknown repo,
 		// with nothing on screen to say so.
 		if serverKnowsRepo(p.serverURL, repoCfg.Remote.RepoID, p.httpClient, token) {
-			fmt.Printf("  - Already connected to %s (repo_id: %s)\n", p.serverURL, repoCfg.Remote.RepoID)
-			return connectWireHooks(p.projectRoot, p.noGitHook)
+			Verbosef(p.writer(), "  already connected to %s (repo_id: %s)\n", p.serverURL, repoCfg.Remote.RepoID)
+			fmt.Fprintf(p.writer(), "  %s Already connected to this server\n", style.Success(""))
+			return connectWireHooksTo(p.projectRoot, p.noGitHook, p.writer())
 		}
-		fmt.Printf("  ⚠ %s has no record of this project (repo_id: %s) — re-registering it.\n",
+		fmt.Fprintf(p.writer(), "  %s %s has no record of project %s; registering it again.\n", style.Warning(""),
 			p.serverURL, repoCfg.Remote.RepoID)
 
 	case repoCfg.Remote.URL != "" && repoCfg.Remote.RepoID != "":
 		// Moving to a different server. This is a move, not a disconnect: the
 		// hooks stay, capture never stops. Naming the old server is the only
 		// warning the user gets that their history did not travel with them.
-		fmt.Printf("  → Moving this project from %s to %s.\n", repoCfg.Remote.URL, p.serverURL)
-		fmt.Printf("    History already on %s stays there — it is not copied across.\n", repoCfg.Remote.URL)
+		fmt.Fprintf(p.writer(), "  %s Moving this project from %s to %s.\n", style.Warning(""), repoCfg.Remote.URL, p.serverURL)
+		fmt.Fprintf(p.writer(), "    History already on %s stays there; it is not copied.\n", repoCfg.Remote.URL)
 	}
 
 	// 4. Register the repo with the server.
@@ -232,7 +268,7 @@ func runConnect(p connectParams) error {
 	if err != nil {
 		return fmt.Errorf("register repo: %w", err)
 	}
-	fmt.Printf("  ✓ Registered (repo_id: %s)\n", repoID)
+	Verbosef(p.writer(), "  registered repo_id: %s\n", repoID)
 
 	// 5. Write remote config to .regent/config.toml.
 	repoCfg.Remote.URL = p.serverURL
@@ -240,7 +276,7 @@ func runConnect(p connectParams) error {
 	if err := s.WriteRepoConfig(repoCfg); err != nil {
 		return fmt.Errorf("write repo config: %w", err)
 	}
-	fmt.Printf("  ✓ Wrote remote config\n")
+	Verbosef(p.writer(), "  wrote remote config\n")
 
 	// 6. Carry over history recorded before this moment.
 	//
@@ -249,10 +285,14 @@ func runConnect(p connectParams) error {
 	// the project's own .regent/ where nothing reads it, nothing uploads it and
 	// nothing mentions it — `rgt log --session <id>` exits 1 for a session that
 	// worked a minute ago. See carryover.go.
-	carryOverLocalHistory(os.Stdout, s, carryOverConfig(p, repoID, token))
+	var carryover bytes.Buffer
+	carryOverLocalHistory(&carryover, s, carryOverConfig(p, repoID, token))
+	if Verbose() || strings.Contains(carryover.String(), carriedOverHeadline) || strings.Contains(carryover.String(), "⚠") {
+		_, _ = io.Copy(p.writer(), &carryover)
+	}
 
 	// 7. Wire Claude hooks (merge/dedupe).
-	return connectWireHooks(p.projectRoot, p.noGitHook)
+	return connectWireHooksTo(p.projectRoot, p.noGitHook, p.writer())
 }
 
 // connectWireHooks wires every agent detected in the project, not just Claude.
@@ -264,12 +304,16 @@ func runConnect(p connectParams) error {
 // that as failure, and the pasted command dies on any machine with a second
 // agent installed. Found by running the installer against a real server.
 func connectWireHooks(projectRoot string, noGitHook bool) error {
+	return connectWireHooksTo(projectRoot, noGitHook, os.Stdout)
+}
+
+func connectWireHooksTo(projectRoot string, noGitHook bool, out io.Writer) error {
 	targets, err := resolveAgentTargets(projectRoot, agentAuto)
 	if err != nil {
 		return err
 	}
 
-	installed, err := wireAgents(projectRoot, targets)
+	installed, err := wireAgentsTo(projectRoot, targets, out)
 	if err != nil {
 		return err
 	}
@@ -284,17 +328,16 @@ func connectWireHooks(projectRoot string, noGitHook bool) error {
 	// and doctor will name it.
 	if !noGitHook {
 		if outcome, err := wireGitHook(projectRoot); err != nil {
-			fmt.Printf("  ⚠ Git pre-push hook not configured: %v\n", err)
+			Verbosef(out, "  Git pre-push hook not configured: %v\n", err)
 		} else {
-			reportGitHookSkipped(outcome)
+			reportGitHookWiredTo(out, outcome)
+			reportGitHookSkippedTo(out, outcome)
 		}
 	}
 	// Agents read their hook config at session startup, so a session that was
 	// already running when this ran won't capture until it is restarted. This
 	// is the single most common "why wasn't my change captured?" cause.
-	fmt.Printf("  ⚠ Restart any Claude Code / Codex session already open in this repo —\n")
-	fmt.Printf("    agents load hooks at startup, so a running session won't capture until\n")
-	fmt.Printf("    you restart it. (New sessions, and teammates who clone, are unaffected.)\n")
+	Verbosef(out, "  restart any agent session already open in this repo; hooks load at startup\n")
 	// What this claims and what a clone actually does have to be the same thing.
 	// The hook written into .claude/settings.json names this machine's rgt and
 	// falls back to whatever `rgt` PATH resolves (see sharedHookCommand), so the
@@ -302,11 +345,7 @@ func connectWireHooks(projectRoot string, noGitHook bool) error {
 	// not, `rgt doctor` names the missing binary rather than leaving them to
 	// discover the silence. Saying "installed" was the shorter sentence and the
 	// wrong one (#23).
-	fmt.Printf("  → To auto-wire teammates: commit .regent/config.toml and .claude/settings.json\n")
-	fmt.Printf("    (the rest of .regent/ is git-ignored). A clone with `rgt` on PATH captures\n")
-	fmt.Printf("    with no connect step; if it is not, `rgt doctor` there says so.\n")
-	fmt.Printf("    Codex hooks in .codex/config.toml are this machine's only — teammates run\n")
-	fmt.Printf("    `rgt init --agent codex` themselves.\n")
+	Verbosef(out, "  commit .regent/config.toml and .claude/settings.json to auto-wire teammates\n")
 	return nil
 }
 

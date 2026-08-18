@@ -11,6 +11,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 	"github.com/regent-vcs/regent/internal/config"
 	"github.com/regent-vcs/regent/internal/store"
+	"github.com/regent-vcs/regent/internal/style"
 )
 
 // This file is what is left of `rgt setup`: the server binding a machine
@@ -137,6 +138,38 @@ func offerShare(projects []string, in io.Reader) {
 			continue
 		}
 		fmt.Printf("  ✓ committed — teammates who pull get the wiring automatically\n")
+	}
+}
+
+// offerShareTUI is the terminal-native form of offerShare. The ordinary reader
+// version remains the accessibility and redirected-input fallback; connect
+// reaches this version only after proving stdin is a person at a terminal.
+func offerShareTUI(projects []string, in io.Reader, out io.Writer) {
+	for _, p := range projects {
+		if !isDir(filepath.Join(p, ".git")) {
+			continue
+		}
+		yes, err := style.Confirm(
+			in,
+			out,
+			"Share this setup with your team?",
+			"Commits the re_gent binding and Claude hooks. Never pushes.",
+		)
+		if err != nil {
+			fmt.Fprintf(out, "  confirmation unavailable: %v\n", err)
+			return
+		}
+		flow := style.NewFlow(out)
+		if !yes {
+			flow.Hint("Team sharing skipped — you can commit the wiring later")
+			continue
+		}
+		if err := flow.Run("Committing team wiring", func() error { return commitWiring(p) }); err != nil {
+			flow.Warning("The project is connected, but its wiring was not committed")
+			Verbosef(out, "  %v\n", err)
+			continue
+		}
+		flow.Hint("No push was performed")
 	}
 }
 

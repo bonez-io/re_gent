@@ -44,7 +44,7 @@ func TestE2EFullFlow(t *testing.T) {
 
 	for _, repo := range []struct{ name, dir string }{{"repo1", repo1}, {"repo2", repo2}} {
 		out := e2eRun(t, rgt, repo.dir, nil, "init", "--agent", "both")
-		assertContains(t, out, "Initialization complete", "rgt init in "+repo.name)
+		assertContains(t, out, "Ready to capture", "rgt init in "+repo.name)
 
 		for _, sub := range []string{"objects", "refs/sessions", "log"} {
 			if _, err := os.Stat(filepath.Join(repo.dir, ".regent", sub)); os.IsNotExist(err) {

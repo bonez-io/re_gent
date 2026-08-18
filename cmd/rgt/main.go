@@ -46,6 +46,7 @@ func removedCmd(name, guidance string) *cobra.Command {
 }
 
 func newRootCommand() *cobra.Command {
+	var verbose bool
 	rootCmd := &cobra.Command{
 		Use:          "rgt",
 		Short:        "re_gent - version control for AI agent activity",
@@ -58,6 +59,7 @@ func newRootCommand() *cobra.Command {
 		// failed, so this covers the whole tree rather than one command.
 		SilenceErrors: true,
 		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
+			cli.SetVerbose(verbose)
 			// The application edge chooses the backing store once, before a
 			// command runs. Read and capture packages only receive an opener;
 			// neither can silently decide to switch to a server cache.
@@ -78,6 +80,7 @@ func newRootCommand() *cobra.Command {
 			return cmd.Help()
 		},
 	}
+	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Show setup diagnostics and subprocess output")
 	// Make `rgt --version` print the same line as `rgt version`.
 	rootCmd.SetVersionTemplate(cli.VersionString() + "\n")
 
@@ -130,14 +133,14 @@ func newRootCommand() *cobra.Command {
 func commandStore(cwd string) (*store.Store, error) {
 	cfg, err := remote.LoadConfigForCWD(remote.OSEnv, cwd)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: server-mode config could not be loaded, using local store: %v\n", err)
+		cli.Verbosef(os.Stderr, "warning: server-mode config could not be loaded, using local store: %v\n", err)
 		return store.OpenFromDir(cwd)
 	}
 	if !cfg.Enabled() {
 		return store.OpenFromDir(cwd)
 	}
 	if err := cfg.Validate(); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: server-mode config could not be loaded, using local store: %v\n", err)
+		cli.Verbosef(os.Stderr, "warning: server-mode config could not be loaded, using local store: %v\n", err)
 		return store.OpenFromDir(cwd)
 	}
 	cacheDir, err := remote.CacheDirFor(cfg)

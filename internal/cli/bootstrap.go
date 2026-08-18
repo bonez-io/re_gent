@@ -10,10 +10,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/regent-vcs/regent/internal/style"
 )
 
 type bootstrapper interface {
@@ -87,11 +88,7 @@ func (systemBootstrapper) HasDocker(target string) (bool, error) {
 func (systemBootstrapper) Run(target string) error {
 	cmd := exec.Command("ssh", target, "sh -s")
 	cmd.Stdin = strings.NewReader(remoteBootstrapScript)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("bootstrap server: %w", err)
-	}
-	return nil
+	return runSetupCommand(cmd, "remote setup")
 }
 
 // The script is intentionally convergent.  A failed run leaves its state in
@@ -143,25 +140,31 @@ func confirmBootstrap(in io.Reader, out io.Writer, yes bool) (bool, error) {
 // prepareMachine proves the public endpoint before returning.  Callers must do
 // this before creating .regent or writing hooks/configuration.
 func prepareMachine(target, override string, yes bool, in io.Reader, out io.Writer, b bootstrapper) (string, error) {
+	flow := style.NewFlow(out)
+	flow.Header("server setup", target)
 	publicURL, err := b.PublicURL(target, override)
 	if err != nil {
 		return "", err
 	}
 	if b.Healthy(publicURL) {
-		fmt.Fprintf(out, "  - Server already healthy at %s; skipping provisioning.\n", publicURL)
+		flow.Step("Server already healthy")
+		flow.Detail("Address", publicURL)
+		flow.Hint("skipping provisioning")
+		flow.End()
 		return publicURL, nil
 	}
 	hasDocker, err := b.HasDocker(target)
 	if err != nil {
 		return "", err
 	}
-	fmt.Fprintf(out, "Server at %s is not healthy. Planned remote changes on %s:\n", publicURL, target)
+	flow.Warning("Remote setup required")
+	flow.Detail("Address", publicURL)
 	if !hasDocker {
-		fmt.Fprintln(out, "  - install Docker (apt-based Linux host)")
+		flow.Hint("Will install Docker on the remote Linux host")
 	} else {
-		fmt.Fprintln(out, "  - Docker already installed")
+		flow.Hint("Docker is already installed")
 	}
-	fmt.Fprintln(out, "  - write /opt/regent/compose.yml and start regent-server")
+	flow.Hint("Will configure and start regent-server")
 	ok, err := confirmBootstrap(in, out, yes)
 	if err != nil {
 		return "", fmt.Errorf("confirm provisioning: %w", err)
@@ -169,11 +172,17 @@ func prepareMachine(target, override string, yes bool, in io.Reader, out io.Writ
 	if !ok {
 		return "", fmt.Errorf("provisioning declined; install Docker yourself then re-run with --yes when ready")
 	}
-	if err := b.Run(target); err != nil {
+	if err := flow.Run("Installing re_gent server", func() error { return b.Run(target) }); err != nil {
 		return "", err
 	}
-	if !b.WaitHealthy(publicURL) {
-		return "", fmt.Errorf("server was started but %s/healthz is unreachable from this machine (check port 7654/firewall); project was not changed", publicURL)
+	if err := flow.Run("Verifying public endpoint", func() error {
+		if !b.WaitHealthy(publicURL) {
+			return fmt.Errorf("server was started but %s/healthz is unreachable from this machine (check port 7654/firewall); project was not changed", publicURL)
+		}
+		return nil
+	}); err != nil {
+		return "", err
 	}
+	flow.End()
 	return publicURL, nil
 }

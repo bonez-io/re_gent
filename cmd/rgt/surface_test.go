@@ -35,6 +35,16 @@ func runRoot(t *testing.T, args ...string) (string, error) {
 	return out.String(), err
 }
 
+func TestRootExposesOneVerboseDiagnosticSwitch(t *testing.T) {
+	out, err := runRoot(t, "--help")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "--verbose") {
+		t.Fatalf("root help does not expose verbose diagnostics:\n%s", out)
+	}
+}
+
 // captureDirectStdout redirects os.Stdout for the duration of the test and
 // returns a func that stops the capture and yields what was written to it.
 //
