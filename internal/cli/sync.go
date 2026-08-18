@@ -40,8 +40,8 @@ func SyncCmd() *cobra.Command {
 		Long: "Deliver everything the local server-mode cache owes the re_gent server.\n\n" +
 			"Server mode spools work when the server is unreachable so a live agent turn is\n" +
 			"never blocked. 'rgt sync' drains that queue; 'rgt sync --status' reports it\n" +
-			"without touching the network; 'rgt sync --pull <ref>' rebuilds a lost cache from\n" +
-			"the server, which is the source of truth.",
+			"without touching the network; 'rgt sync --pull <ref>' safely rebuilds a lost cache\n" +
+			"from the server, which is the source of truth.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 1 {
@@ -246,9 +246,18 @@ func runPull(ctx context.Context, out io.Writer, cache *store.Store, client remo
 	defer func() { _ = idx.Close() }()
 
 	for _, refName := range refs {
-		res, err := remote.Hydrate(ctx, cache, client, refName)
+		// Pull fetches the server's objects first, then only advances the ref when
+		// doing so cannot orphan local history. Hydrate is deliberately more
+		// forceful for a genuinely lost cache, but sync --pull also runs against
+		// live caches and must have the same safety contract as rgt pull.
+		res, err := remote.Pull(ctx, cache, client, refName)
 		if err != nil {
 			return fmt.Errorf("pull %s: %w", refName, err)
+		}
+		if res.Status == remote.PullLocalAhead {
+			fmt.Fprintf(out, "%s: this cache is ahead of the server; nothing pulled (server at %s, local at %s; deliver yours with 'rgt sync')\n",
+				refName, res.ServerTip, res.Tip)
+			continue
 		}
 		rebuilt, err := rebuildDerived(cache, idx, res.Tip)
 		if err != nil {
