@@ -172,22 +172,103 @@ func TestReadWriteBlame(t *testing.T) {
 // step before it. Blame's whole claim is "this line came from that prompt", so
 // being off by one makes every answer wrong for edited files.
 func TestComputeBlameAttributesTheLineThatActuallyChanged(t *testing.T) {
-	old := []byte("{\n  \"name\": \"job-hunter\",\n  \"version\": \"0.1.0\",\n  \"description\": \"agent\",\n  \"main\": \"dist/index.js\"\n}\n")
-	new_ := []byte("{\n  \"name\": \"job-hunter\",\n  \"version\": \"0.1.1\",\n  \"description\": \"agent\",\n  \"main\": \"dist/index.js\"\n}\n")
+	// This is deliberately the 36-line package.json fixture that exposed the
+	// defect. The broken line-mode round-trip only shifts chunks for a sufficiently
+	// large input; a six-line fixture passes under both implementations.
+	old := []byte(`{
+  "name": "job-hunter",
+  "version": "0.1.0",
+  "description": "AI-powered job hunting agent",
+  "main": "dist/index.js",
+  "bin": {
+    "job-hunter": "dist/index.js"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test src/**/*.test.ts"
+  },
+  "dependencies": {
+    "openai": "^4.67.0",
+    "better-sqlite3": "^9.6.0",
+    "chalk": "^4.1.2",
+    "commander": "^12.1.0",
+    "dotenv": "^16.4.5",
+    "inquirer": "^8.2.6",
+    "mammoth": "^1.8.0",
+    "ora": "^5.4.1",
+    "pdf-parse": "^1.1.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/inquirer": "^8.2.10",
+    "@types/node": "^22.7.0",
+    "@types/pdf-parse": "^1.1.4",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.2"
+  }
+}
+`)
+	new_ := []byte(`{
+  "name": "job-hunter",
+  "version": "0.1.1",
+  "description": "AI-powered job hunting agent",
+  "main": "dist/index.js",
+  "bin": {
+    "job-hunter": "dist/index.js"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test src/**/*.test.ts"
+  },
+  "dependencies": {
+    "openai": "^4.67.0",
+    "better-sqlite3": "^9.6.0",
+    "chalk": "^4.1.2",
+    "commander": "^12.1.0",
+    "dotenv": "^16.4.5",
+    "inquirer": "^8.2.6",
+    "mammoth": "^1.8.0",
+    "ora": "^5.4.1",
+    "pdf-parse": "^1.1.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/inquirer": "^8.2.10",
+    "@types/node": "^22.7.0",
+    "@types/pdf-parse": "^1.1.4",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.2"
+  }
+}
+`)
 
 	const first, second = Hash("aaaa"), Hash("bbbb")
-	oldBlame := &BlameMap{Lines: []Hash{first, first, first, first, first, first}}
+	oldBlame := &BlameMap{Lines: make([]Hash, 36)}
+	for i := range oldBlame.Lines {
+		oldBlame.Lines[i] = first
+	}
 
 	got := ComputeBlame(old, new_, oldBlame, second)
 
-	if len(got.Lines) != 6 {
-		t.Fatalf("blame has %d lines, want 6", len(got.Lines))
+	if len(got.Lines) != 36 {
+		t.Fatalf("blame has %d lines, want 36", len(got.Lines))
 	}
 	// Line 3 (index 2) is the only line that changed.
 	if got.Lines[2] != second {
 		t.Errorf("the changed line (\"version\") is attributed to %q, want the new step %q", got.Lines[2], second)
 	}
-	for _, i := range []int{0, 1, 3, 4, 5} {
+	for i := range got.Lines {
+		if i == 2 {
+			continue
+		}
 		if got.Lines[i] != first {
 			t.Errorf("line %d did not change but is attributed to %q, want %q", i+1, got.Lines[i], first)
 		}
