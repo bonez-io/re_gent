@@ -234,6 +234,35 @@ func TestSyncPullRebuildsCacheAndIndexFromServer(t *testing.T) {
 	}
 }
 
+// sync --pull is explicit cache recovery, but it must still not silently
+// replace a live cache's divergent session history with the server's tip.
+func TestSyncPullRefusesToOverwriteDivergedLocalHistory(t *testing.T) {
+	pusher := newSyncFixture(t)
+	theirs := pusher.addStep(t, "a.txt", "theirs", "theirs")
+	if _, err := runSyncCapturingOutput(t, pusher.cfg, syncOptions{}); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+
+	me := teammateFixture(t, pusher.srv)
+	mine := me.addStep(t, "a.txt", "mine", "mine")
+
+	out, err := runSyncCapturingOutput(t, me.cfg, syncOptions{pull: true, ref: syncTestRef})
+	if err == nil {
+		t.Fatalf("sync --pull over diverged history succeeded:\n%s", out)
+	}
+	report := out + err.Error()
+	for _, want := range []string{syncTestRef, "diverged", string(theirs), string(mine)} {
+		if !strings.Contains(report, want) {
+			t.Errorf("divergence report does not mention %q:\n%s", want, report)
+		}
+	}
+
+	local, readErr := me.cache.ReadRef(syncTestRef)
+	if readErr != nil || local != mine {
+		t.Fatalf("local ref = %s, %v; want it untouched at %s", local, readErr, mine)
+	}
+}
+
 func TestSyncPullWithoutARefExplainsItself(t *testing.T) {
 	f := newSyncFixture(t)
 	_, err := runSyncCapturingOutput(t, f.cfg, syncOptions{pull: true})
