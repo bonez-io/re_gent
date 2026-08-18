@@ -92,6 +92,33 @@ web_search = true
 	}
 }
 
+func TestInstallCodexHook_WritesPortablePlatformCommands(t *testing.T) {
+	root := t.TempDir()
+	binary := "/opt/re_gent tools/rgt"
+	if _, err := installCodexHookWith(root, binary); err != nil {
+		t.Fatalf("install hook: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(root, ".codex", "config.toml"))
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	var config map[string]interface{}
+	if err := toml.Unmarshal(data, &config); err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	for _, eventName := range []string{"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"} {
+		groups := normalizeHookGroups(config["hooks"].(map[string]interface{})[eventName])
+		entry := groups[0].(map[string]interface{})["hooks"].([]interface{})[0].(map[string]interface{})
+		if got, want := entry["command"], sharedHookCommand(binary, codexHookArgs); got != want {
+			t.Errorf("%s Unix command = %q, want %q", eventName, got, want)
+		}
+		if got, want := entry["commandWindows"], sharedHookCommandWindows(binary, codexHookArgs); got != want {
+			t.Errorf("%s Windows command = %q, want %q", eventName, got, want)
+		}
+	}
+}
+
 func TestInstallCodexHook_PreservesExistingHooks(t *testing.T) {
 	root := t.TempDir()
 	configDir := filepath.Join(root, ".codex")

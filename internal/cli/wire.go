@@ -240,11 +240,6 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// hookCommand builds a hook command for the running binary.
-func hookCommand(args string) string {
-	return hookCommandWith(hookBinary(), args)
-}
-
 // reportWired names the file that was actually written. Naming the path (rather
 // than printing a bare "hooks configured") is what lets a user verify the claim
 // without trusting it.
@@ -463,4 +458,12 @@ func summaryStatus(outcome hookOutcome) (string, bool) {
 // installer uses — so that a caller comparing against it cannot be told a
 // command re_gent does not actually write.
 func claudeAssistantHook() string { return sharedHookCommand(hookBinary(), claudeAssistantHookArgs) }
-func codexHookCommand() string    { return hookCommand(codexHookArgs) }
+func codexHookCommand() string    { return sharedHookCommand(hookBinary(), codexHookArgs) }
+
+// sharedHookCommandWindows is the cmd.exe counterpart to sharedHookCommand.
+// Codex selects it through the documented commandWindows setting. Quoting the
+// absolute path preserves installations below directories with spaces, and the
+// right-hand side gives a teammate's PATH-installed rgt a chance to run.
+func sharedHookCommandWindows(binary, args string) string {
+	return `"` + binary + `" ` + args + ` || rgt ` + args
+}

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pelletier/go-toml/v2"
 	"github.com/regent-vcs/regent/internal/remote"
 )
 
@@ -73,6 +74,80 @@ func TestACommittedHookRunsOnATeammatesMachineToo(t *testing.T) {
 		if ran != teammateBinary {
 			t.Errorf("cloned hook %q ran %q, want the teammate's own rgt (%q)", command, ran, teammateBinary)
 		}
+	}
+}
+
+// Codex command hooks use the same absolute-path-then-PATH contract as Claude
+// on Unix. The Codex runtime executes the configured command through
+// $SHELL -lc; runHookCommand uses /bin/sh -c, which exercises the syntax that
+// contract relies on without coupling the Go suite to a locally installed
+// Codex binary. docs/CODEX-HOOKS.md records the upstream source evidence.
+func TestACommittedCodexHookRunsOnATeammatesMachineToo(t *testing.T) {
+	installer := t.TempDir()
+	installerBinary := fakeRgt(t, filepath.Join(installer, "tools with spaces", "rgt"))
+	if _, err := installCodexHookWith(installer, installerBinary); err != nil {
+		t.Fatalf("installCodexHookWith: %v", err)
+	}
+
+	withPath(t, t.TempDir())
+	for _, command := range codexHookCommands(t, installer) {
+		ran, err := runHookCommand(command)
+		if err != nil {
+			t.Fatalf("the installing machine's Codex hook %q did not run: %v", command, err)
+		}
+		if ran != installerBinary {
+			t.Errorf("Codex hook %q ran %q, want installer binary %q", command, ran, installerBinary)
+		}
+	}
+
+	teammate := t.TempDir()
+	copyTestFile(t, filepath.Join(installer, ".codex", "config.toml"),
+		filepath.Join(teammate, ".codex", "config.toml"))
+	teammateBinary := fakeRgt(t, filepath.Join(teammate, "opt", "bin", "rgt"))
+	if err := os.RemoveAll(filepath.Dir(installerBinary)); err != nil {
+		t.Fatalf("remove installer binary: %v", err)
+	}
+	withPath(t, filepath.Dir(teammateBinary))
+	for _, command := range codexHookCommands(t, teammate) {
+		ran, err := runHookCommand(command)
+		if err != nil {
+			t.Fatalf("the teammate's Codex hook %q did not run: %v", command, err)
+		}
+		if ran != teammateBinary {
+			t.Errorf("cloned Codex hook %q ran %q, want teammate binary %q", command, ran, teammateBinary)
+		}
+	}
+}
+
+func TestDoctorReportsMissingCodexHookBinary(t *testing.T) {
+	installer := t.TempDir()
+	installerBinary := fakeRgt(t, filepath.Join(installer, "tools", "rgt"))
+	if _, err := installCodexHookWith(installer, installerBinary); err != nil {
+		t.Fatalf("installCodexHookWith: %v", err)
+	}
+
+	teammate := t.TempDir()
+	mustMkdir(t, filepath.Join(teammate, ".regent"))
+	copyTestFile(t, filepath.Join(installer, ".codex", "config.toml"),
+		filepath.Join(teammate, ".codex", "config.toml"))
+	if err := os.RemoveAll(filepath.Dir(installerBinary)); err != nil {
+		t.Fatalf("remove installer binary: %v", err)
+	}
+	withPath(t, t.TempDir())
+
+	findings := diagnose(teammate)
+	if codex := findFinding(t, findings, "codex hooks"); !codex.OK {
+		t.Fatalf("doctor did not recognise the installed Codex hooks: %s", codex.Detail)
+	}
+	finding := findFinding(t, findings, "hook binary")
+	if finding.OK {
+		t.Fatalf("doctor calls a cloned Codex hook healthy although neither binary can run: %s", finding.Detail)
+	}
+	if finding.Severity != severityFailure {
+		t.Error("a Codex hook without a runnable binary must block doctor")
+	}
+	if !strings.Contains(finding.Detail, installerBinary) || !strings.Contains(finding.Detail, "rgt init --agent codex") {
+		t.Errorf("doctor's Codex remediation is not actionable: %s", finding.Detail)
 	}
 }
 
@@ -381,4 +456,25 @@ func claudeHookCommands(t *testing.T, projectRoot string) []string {
 	}
 
 	return claudeHookCommandsIn(settings)
+}
+
+func codexHookCommands(t *testing.T, projectRoot string) []string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(projectRoot, ".codex", "config.toml"))
+	if err != nil {
+		t.Fatalf("read Codex config: %v", err)
+	}
+	var config map[string]interface{}
+	if err := toml.Unmarshal(data, &config); err != nil {
+		t.Fatalf("parse Codex config: %v", err)
+	}
+	hooks, ok := config["hooks"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Codex config has no hooks")
+	}
+	var commands []string
+	for _, event := range []string{"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"} {
+		commands = append(commands, hookCommands(t, hooks[event])...)
+	}
+	return commands
 }
