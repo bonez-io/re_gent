@@ -9,4 +9,4 @@ const meta = { component: App, title: 'Product/Re_gent Explorer', tags: ['ai-gen
 export default meta
 type Story = StoryObj<typeof meta>
 
-export const ConversationsIndex: Story = {}
+export const Sessions: Story = {}

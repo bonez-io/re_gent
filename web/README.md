@@ -21,8 +21,8 @@ registered. `VITE_REGENT_TOKEN` adds a bearer token for protected servers.
 
 Runtime routes are repository-scoped:
 
-- `/repos/:repoId/conversations`
-- `/repos/:repoId/conversations/:sessionId`
+- `/repos/:repoId/sessions`
+- `/repos/:repoId/sessions/:sessionId`
 - `/repos/:repoId/steps`
 - `/repos/:repoId/files`
 - `/repos/:repoId/sync`

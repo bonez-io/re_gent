@@ -1,4 +1,3 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <rect width="32" height="32" rx="9" fill="#6c5ce7"/>
-  <path fill="#fff" d="M10 9h5v2.3c1.1-1.8 2.8-2.7 5.2-2.7v4.8c-3.4-.2-5.2 1.2-5.2 4.4V24h-5V9Z"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 63 63">
+  <image width="63" height="63" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAD8AAAA/CAMAAABggeDtAAAAIVBMVEVMaXH///////////////////////////////////////8c1D1MAAAACnRSTlMAQF+e1O8qELt0PhjXLwAAAAlwSFlzAAALEwAACxMBAJqcGAAAAA50RVh0U29mdHdhcmUARmlnbWGesZZjAAABOElEQVR42u2X27aEIAhAGQW8/P8HT+dMtRIxJV7jscXeWRAmwF+kkrFagnJgOKNQtQeWA4/1WUQfvgtKfR7bIzA6eEoQanUtILv4DOTiEcbqrmW0rCEfRGGI1ULDEG8rS6x3Cozxq4B40Gpwg8NZHGJx4Z4/8CDxsHR/A67xFlzhTXjP2/CON+KSt+KCLzI7TPCWR5mdZ3jLR5ldZnjLFzlQ9wu4yGc50PcFJVzjKwvBNh8ngpbHJATHioYCUf9OECcC2X9WQdf/RkH//dkEyvdvEmjzxyJQ598pyFOBPn93AZNoRKbF+f8vuGZHHR/uP5ugzY4qPt7/8COyo4aP+cV4+ZeX4/s2+OVHPH4WQuzFgK7ykfv/v7j4AMlzgEB2n7/c5z/3+XN7hCdFpHJpqpBtrxFz+e2RX1+1fqQopsnzAAAAAElFTkSuQmCC"/>
 </svg>
