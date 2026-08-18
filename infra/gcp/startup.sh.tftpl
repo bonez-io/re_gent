@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euxo pipefail
+
+export DEBIAN_FRONTEND=noninteractive
+for attempt in 1 2 3 4 5; do
+  apt-get update && apt-get install -y --no-install-recommends docker.io curl jq ca-certificates unattended-upgrades && break
+  if [[ $attempt -eq 5 ]]; then exit 1; fi
+  sleep $((attempt * 5))
+done
+
+systemctl enable --now docker
+systemctl enable --now unattended-upgrades
+
+disk=/dev/disk/by-id/google-regent-data
+for _ in $(seq 1 60); do
+  [[ -b $disk ]] && break
+  sleep 1
+done
+[[ -b $disk ]]
+
+if ! blkid "$disk" >/dev/null 2>&1; then
+  mkfs.ext4 -F -L regent-data "$disk"
+fi
+
+install -d -m 0755 /var/lib/regent
+if ! grep -qF "$disk /var/lib/regent " /etc/fstab; then
+  echo "$disk /var/lib/regent ext4 defaults,nofail 0 2" >>/etc/fstab
+fi
+mountpoint -q /var/lib/regent || mount /var/lib/regent
+install -d -o 10001 -g 10001 -m 0750 /var/lib/regent/data
+install -d -m 0750 /var/lib/regent-deploy
+
+# The application port is reachable only through the IAP-source firewall rule.
+# A release is installed by CI after this bootstrap completes.
+echo "re_gent ${environment} host ready" >/var/lib/regent-deploy/bootstrap-status

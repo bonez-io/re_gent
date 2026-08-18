@@ -1,0 +1,172 @@
+name: Deploy to GCP
+
+on:
+  push:
+    branches: [dev, main]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: gcp-${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REPOSITORY }}
+
+jobs:
+  validate:
+    name: Validate release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.23"
+          cache: true
+
+      - name: Test Go service and CLI
+        run: go test ./...
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Install UI dependencies
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      - name: Install browser runtime
+        working-directory: web
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Lint UI
+        working-directory: web
+        run: pnpm lint
+
+      - name: Check UI
+        working-directory: web
+        run: pnpm check
+
+  build:
+    name: Publish immutable images
+    needs: validate
+    runs-on: ubuntu-latest
+    outputs:
+      server-image: ${{ steps.images.outputs.server }}
+      web-image: ${{ steps.images.outputs.web }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - id: auth
+        name: Authenticate to GCP with GitHub OIDC
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_BUILD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_BUILD_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+
+      - name: Configure Artifact Registry
+        run: gcloud auth configure-docker "${{ vars.GCP_REGION }}-docker.pkg.dev" --quiet
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - id: images
+        name: Resolve image names
+        shell: bash
+        run: |
+          echo "server=${REGISTRY}/regent-server:${GITHUB_SHA}" >>"$GITHUB_OUTPUT"
+          echo "web=${REGISTRY}/regent-web:${GITHUB_SHA}" >>"$GITHUB_OUTPUT"
+
+      - name: Build and push server
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.images.outputs.server }}
+          cache-from: type=gha,scope=server
+          cache-to: type=gha,mode=max,scope=server
+
+      - name: Build and push UI
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: web
+          push: true
+          tags: ${{ steps.images.outputs.web }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+
+      - name: Smoke-test production images
+        run: infra/gcp/scripts/smoke-release '${{ steps.images.outputs.server }}' '${{ steps.images.outputs.web }}'
+
+  deploy:
+    name: Deploy ${{ github.ref_name }}
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.ref_name == 'main' && 'production' || 'development' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - id: auth
+        name: Authenticate to GCP with GitHub OIDC
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_DEPLOY_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+
+      - name: Wait for host bootstrap
+        run: |
+          for attempt in $(seq 1 20); do
+            if gcloud compute ssh "${{ vars.GCP_INSTANCE }}" \
+              --project "${{ vars.GCP_PROJECT_ID }}" \
+              --zone "${{ vars.GCP_ZONE }}" \
+              --tunnel-through-iap --quiet \
+              --command "test -f /var/lib/regent-deploy/bootstrap-status"; then
+              exit 0
+            fi
+            echo "host is not ready yet (attempt ${attempt}/20)"
+            sleep 15
+          done
+          exit 1
+
+      - name: Install deployment runner
+        run: |
+          remote="/tmp/regent-deploy-${GITHUB_SHA}"
+          gcloud compute scp infra/gcp/scripts/regent-deploy \
+            "${{ vars.GCP_INSTANCE }}:${remote}" \
+            --project "${{ vars.GCP_PROJECT_ID }}" \
+            --zone "${{ vars.GCP_ZONE }}" \
+            --tunnel-through-iap --quiet
+          gcloud compute ssh "${{ vars.GCP_INSTANCE }}" \
+            --project "${{ vars.GCP_PROJECT_ID }}" \
+            --zone "${{ vars.GCP_ZONE }}" \
+            --tunnel-through-iap --quiet \
+            --command "sudo install -m 0755 '${remote}' /usr/local/sbin/regent-deploy && rm -f '${remote}'"
+
+      - name: Deploy and verify
+        run: |
+          gcloud compute ssh "${{ vars.GCP_INSTANCE }}" \
+            --project "${{ vars.GCP_PROJECT_ID }}" \
+            --zone "${{ vars.GCP_ZONE }}" \
+            --tunnel-through-iap --quiet \
+            --command "sudo /usr/local/sbin/regent-deploy '${{ needs.build.outputs.server-image }}' '${{ needs.build.outputs.web-image }}' '${GITHUB_SHA}'"
+
+      - name: Deployment summary
+        run: |
+          {
+            echo "### re_gent deployment"
+            echo "- Environment: ${{ github.ref_name == 'main' && 'production' || 'development' }}"
+            echo "- Instance: ${{ vars.GCP_INSTANCE }}"
+            echo "- Release: \`${GITHUB_SHA}\`"
+          } >>"$GITHUB_STEP_SUMMARY"
