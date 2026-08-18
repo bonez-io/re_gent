@@ -9,7 +9,10 @@ func TestWriteRepoConfig_ReadRepoConfig_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	want := RepoConfig{Remote: RemoteConfig{URL: "https://example.com", RepoID: "abc-123"}}
+	want := RepoConfig{
+		Remote:  RemoteConfig{URL: "https://example.com", RepoID: "abc-123"},
+		Capture: CaptureConfig{Root: "project"},
+	}
 	if err := s.WriteRepoConfig(want); err != nil {
 		t.Fatalf("WriteRepoConfig: %v", err)
 	}
@@ -22,6 +25,9 @@ func TestWriteRepoConfig_ReadRepoConfig_RoundTrip(t *testing.T) {
 	}
 	if got.Remote.RepoID != want.Remote.RepoID {
 		t.Errorf("RepoID: got %q, want %q", got.Remote.RepoID, want.Remote.RepoID)
+	}
+	if got.Capture.Root != want.Capture.Root {
+		t.Errorf("Capture.Root: got %q, want %q", got.Capture.Root, want.Capture.Root)
 	}
 }
 

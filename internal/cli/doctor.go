@@ -381,10 +381,10 @@ func claudeHookFinding(projectRoot string) doctorFinding {
 	// aimed the other way. Doctor's exit code is the installer's exit code (see
 	// findingSeverity), so a false verdict here unwinds a good install.
 	//
-	// It never reports OK. The hazard is real and has to be said; it is simply
-	// not something doctor is in a position to decide (#27, and #29 for letting
-	// the user record the answer once).
-	if shadow := shadowingClaudeWorkspace(projectRoot); shadow.found() {
+	// It reports OK only when the project binding records that its owner opens
+	// agents here. Without that durable answer the hazard is real and has to be
+	// said; doctor cannot infer it from the filesystem (#27, #29).
+	if shadow := shadowingClaudeWorkspace(projectRoot); shadow.found() && !intentionalProjectCaptureRoot(projectRoot) {
 		return doctorFinding{
 			Name:     "claude hooks",
 			OK:       false,
@@ -394,6 +394,16 @@ func claudeHookFinding(projectRoot string) doctorFinding {
 	}
 
 	return doctorFinding{Name: "claude hooks", OK: true, Detail: path}
+}
+
+// intentionalProjectCaptureRoot is deliberately narrow: only an explicit
+// project-root acknowledgement suppresses the ancestor-layout advisory. A
+// missing, malformed, or workspace-root binding remains unacknowledged here.
+// The repository and hook findings are still evaluated independently, so this
+// can never turn a project with no capture path into a green doctor result.
+func intentionalProjectCaptureRoot(projectRoot string) bool {
+	cfg, err := readRepoConfig(projectRoot)
+	return err == nil && cfg.Capture.Root == "project"
 }
 
 // claudeSettingsFileHasRegentHook answers claudeSettingsHaveRegentHook's
