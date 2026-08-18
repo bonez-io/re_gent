@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -66,6 +67,9 @@ func InitCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("get working directory: %w", err)
 			}
+			out := cmd.OutOrStdout()
+			flow := style.NewFlow(out)
+			flow.Header("init", filepath.Base(cwd))
 
 			targets, err := resolveAgentTargets(cwd, agentTarget(agent))
 			if err != nil {
@@ -91,7 +95,7 @@ func InitCmd() *cobra.Command {
 				defer func() { _ = idx.Close() }()
 
 				if !binding.bound() {
-					fmt.Printf("  %s Using existing .regent/\n", style.DimText("-"))
+					Verbosef(out, "  using existing .regent/\n")
 				}
 			} else {
 				s, err = store.Init(cwd)
@@ -106,42 +110,55 @@ func InitCmd() *cobra.Command {
 				defer func() { _ = idx.Close() }()
 
 				if err := createRegentGitignore(cwd); err != nil {
-					fmt.Printf("  %s Could not create .regent/.gitignore: %v\n", style.Warning(""), err)
+					Verbosef(out, "  could not create .regent/.gitignore: %v\n", err)
 				}
 
 				if !binding.bound() {
-					fmt.Printf("  %s Initialized .regent/\n", style.Success(""))
+					Verbosef(out, "  initialized .regent/\n")
 				}
 			}
 			if captureRoot != "" {
 				if err := recordCaptureRoot(s, captureRoot); err != nil {
 					return err
 				}
-				fmt.Printf("  %s Capture root intentionally set to %s\n", style.Success(""), captureRoot)
+				Verbosef(out, "  capture root set to %s\n", captureRoot)
 			}
 			if binding.bound() {
-				printServerBinding(binding)
+				Verbosef(out, "  connected to %s (repo: %s)\n", binding.url, binding.repoID)
 			}
+			flow.Step("Repository ready")
 
-			if reinit {
+			if reinit && Verbose() {
 				printExistingHooks(cwd)
 			}
-			outcome, hookErr := configureHooks(cwd, targets, hookOptions{skip: skipHook, noGitHook: noGitHook})
+			var outcome hookOutcome
+			var hookOutput bytes.Buffer
+			hookErr := flow.Wait("Configuring agent integrations", func() error {
+				var configureErr error
+				outcome, configureErr = configureHooksTo(cwd, targets, hookOptions{skip: skipHook, noGitHook: noGitHook}, &hookOutput)
+				return configureErr
+			})
+			if hookOutput.Len() > 0 {
+				_, _ = io.Copy(out, &hookOutput)
+			}
 			if hookErr != nil {
-				fmt.Printf("  %s Could not configure hooks: %v\n", style.Warning(""), hookErr)
-				printManualInstructions(targets)
+				Verbosef(out, "  %v\n", hookErr)
+				if Verbose() {
+					printManualInstructions(targets)
+				}
 			}
 
 			if withSkills && !skipSkills {
 				if err := offerSkillInstall(cwd, outcome.installed, input); err != nil {
-					fmt.Printf("  %s Could not install skills: %v\n", style.Warning(""), err)
+					flow.Warning("Optional agent skills were not installed")
+					Verbosef(out, "  %v\n", err)
 				}
 			}
 
 			// The summary reports what was installed, not what was detected,
 			// and the exit code follows it. A run that wired nothing must not
 			// look like a success to a script, a devcontainer, or a teammate.
-			printSummary(cwd, outcome, binding)
+			printSummary(out, cwd, outcome, binding)
 			if hookErr != nil {
 				return fmt.Errorf("configure hooks: %w", hookErr)
 			}
@@ -205,54 +222,65 @@ func resolveServerBinding(cwd string) serverBinding {
 	return serverBinding{url: cfg.ServerURL, repoID: cfg.RepoID}
 }
 
-// printServerBinding replaces the local-initialisation narration for a project
-// whose history lives on a server.
-//
-// `rgt init` in a connected project used to print the same three lines as a
-// fresh local one — "Created .regent/ directory", "Initialized object store",
-// "Created SQLite index" — and then close by naming .regent/ as "Repository".
-// None of the user's history is there: once a [remote] binding exists the
-// server is the source of truth and the local directory holds the binding plus
-// a disposable cache. Reported while setting up a project that was already
-// connected, where nothing in the output distinguished the two situations.
-func printServerBinding(binding serverBinding) {
-	fmt.Printf("  %s Connected to %s (repo: %s)\n", style.Success(""), binding.url, binding.repoID)
-	fmt.Printf("  %s This project's history is recorded on that server, not in a local repository here.\n", style.DimText("-"))
-	fmt.Println()
-}
-
 // printSummary takes a hookOutcome rather than []agentTarget so that the
 // requested agents cannot be passed here by mistake. See hookOutcome.
-func printSummary(projectRoot string, outcome hookOutcome, binding serverBinding) {
+func printSummary(out io.Writer, projectRoot string, outcome hookOutcome, binding serverBinding) {
+	flow := style.NewFlow(out)
 	headline, ok := summaryStatus(outcome)
 
 	if ok {
-		fmt.Printf("\n%s %s\n", style.Success(""), headline)
+		flow.Step(agentSummary(outcome.installed) + " hooks configured")
 	} else {
-		fmt.Printf("\n%s %s\n", style.Warning(""), headline)
+		flow.Warning(headline)
 	}
 	if !ok {
-		fmt.Println("Run: rgt init --agent <claude|codex|opencode|pi>")
-		fmt.Println("Check: rgt doctor")
+		flow.Next("Run rgt init --agent <claude|codex|opencode|pi>")
+		flow.End()
 		return
 	}
 	// Name the place the user's history will actually be. Printing the local
 	// .regent/ path for a server-bound project sends them to a directory that
 	// holds a cache and a config file and none of their work.
 	if binding.bound() {
-		fmt.Printf("%s %s\n", style.Label("Server:"), binding.url)
-		fmt.Printf("%s %s\n", style.Label("Repo:"), binding.repoID)
+		flow.Detail("Server", binding.url)
+		flow.Detail("Project", binding.repoID)
 	} else {
-		fmt.Printf("%s %s\n", style.Label("Repository:"), filepath.Join(projectRoot, ".regent"))
+		flow.Detail("Store", filepath.Join(projectRoot, ".regent"))
 	}
-	fmt.Println("Restart your agent in this directory, then run: rgt doctor")
+	flow.Complete("Ready to capture")
+	flow.Next("Restart your agent here, then run rgt doctor")
+	flow.End()
+}
+
+func agentSummary(installed []agentTarget) string {
+	if len(installed) == 0 {
+		return "Agent"
+	}
+	names := make([]string, 0, len(installed))
+	for _, target := range installed {
+		switch target {
+		case agentClaude:
+			names = append(names, "Claude")
+		case agentCodex:
+			names = append(names, "Codex")
+		case agentOpenCode:
+			names = append(names, "OpenCode")
+		case agentPi:
+			names = append(names, "Pi")
+		}
+	}
+	return strings.Join(names, " + ")
 }
 
 func printHookInstallWarning(result hookInstallResult) {
+	printHookInstallWarningTo(os.Stdout, result)
+}
+
+func printHookInstallWarningTo(out io.Writer, result hookInstallResult) {
 	if result.BackupPath == "" {
 		return
 	}
-	fmt.Printf("  %s Existing hook config was invalid; backed up to %s before rewriting\n", style.Warning(""), result.BackupPath)
+	fmt.Fprintf(out, "  %s Existing hook config was invalid; backed up to %s before rewriting\n", style.Warning(""), result.BackupPath)
 }
 
 func installClaudeHook(projectRoot string) (hookInstallResult, error) {
@@ -379,15 +407,9 @@ func installOpenCodeHook(projectRoot string) error {
 }
 
 func npmInstallOpenCodePlugin(opencodeDir string) error {
-	fmt.Printf("  %s Installing @regent-vcs/opencode-plugin...\n", style.DimText("⟳"))
 	cmd := exec.Command("npm", "install", "--save", "@regent-vcs/opencode-plugin")
 	cmd.Dir = opencodeDir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("npm install @regent-vcs/opencode-plugin: %w", err)
-	}
-	return nil
+	return runSetupCommand(cmd, "install OpenCode integration")
 }
 
 func registerOpenCodePlugin(projectRoot string) error {
@@ -422,7 +444,7 @@ func registerOpenCodePlugin(projectRoot string) error {
 
 func installPiHook(projectRoot string) bool {
 	if piPackageConfigured(projectRoot) {
-		fmt.Printf("  %s Pi extension package already configured\n", style.Success(""))
+		Verbosef(os.Stdout, "  Pi extension package already configured\n")
 		return false
 	}
 	if !commandExists("pi") {
@@ -430,21 +452,18 @@ func installPiHook(projectRoot string) bool {
 		return false
 	}
 
-	fmt.Printf("  %s Installing regent-pi-extension...\n", style.DimText("⟳"))
 	cmd := exec.Command("pi", "install", "-l", piPackageSource)
 	cmd.Dir = projectRoot
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		printPiInstallWarning(fmt.Sprintf("Pi package install failed: %v", err))
+	if err := runSetupCommand(cmd, "install Pi integration"); err != nil {
+		printPiInstallWarning(err.Error())
 		return false
 	}
 	return true
 }
 
 func printPiInstallWarning(reason string) {
-	fmt.Printf("  %s %s\n", style.Warning(""), reason)
-	fmt.Printf("  %s Install the Pi extension manually with: %s\n", style.DimText("-"), piInstallCommand)
+	Verbosef(os.Stdout, "  %s %s\n", style.Warning(""), reason)
+	Verbosef(os.Stdout, "  %s Install the Pi extension manually with: %s\n", style.DimText("-"), piInstallCommand)
 }
 
 func piPackageConfigured(projectRoot string) bool {

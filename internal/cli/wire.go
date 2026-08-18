@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,6 +32,10 @@ import (
 // produce. Failures are collected and returned together, so the caller can both
 // report the agents that were written and fail the run.
 func wireAgents(projectRoot string, targets []agentTarget) ([]agentTarget, error) {
+	return wireAgentsTo(projectRoot, targets, os.Stdout)
+}
+
+func wireAgentsTo(projectRoot string, targets []agentTarget, out io.Writer) ([]agentTarget, error) {
 	installed := make([]agentTarget, 0, len(targets))
 	var failures []error
 
@@ -42,9 +47,9 @@ func wireAgents(projectRoot string, targets []agentTarget) ([]agentTarget, error
 				failures = append(failures, fmt.Errorf("configure Claude Code hooks: %w", err))
 				continue
 			}
-			printHookInstallWarning(result)
-			reportWired("Claude Code", filepath.Join(projectRoot, ".claude", "settings.json"))
-			reportClaudeSettingsScope(projectRoot)
+			printHookInstallWarningTo(out, result)
+			reportWiredTo(out, "Claude Code", filepath.Join(projectRoot, ".claude", "settings.json"))
+			reportClaudeSettingsScopeTo(out, projectRoot)
 			installed = append(installed, agentClaude)
 
 		case agentCodex:
@@ -53,8 +58,8 @@ func wireAgents(projectRoot string, targets []agentTarget) ([]agentTarget, error
 				failures = append(failures, fmt.Errorf("configure Codex hooks: %w", err))
 				continue
 			}
-			printHookInstallWarning(result)
-			reportWired("Codex", filepath.Join(projectRoot, ".codex", "config.toml"))
+			printHookInstallWarningTo(out, result)
+			reportWiredTo(out, "Codex", filepath.Join(projectRoot, ".codex", "config.toml"))
 			installed = append(installed, agentCodex)
 
 		case agentOpenCode:
@@ -62,7 +67,7 @@ func wireAgents(projectRoot string, targets []agentTarget) ([]agentTarget, error
 				failures = append(failures, fmt.Errorf("configure OpenCode plugin: %w", err))
 				continue
 			}
-			reportWired("OpenCode", filepath.Join(projectRoot, "opencode.jsonc"))
+			reportWiredTo(out, "OpenCode", filepath.Join(projectRoot, "opencode.jsonc"))
 			installed = append(installed, agentOpenCode)
 
 		case agentPi:
@@ -70,7 +75,7 @@ func wireAgents(projectRoot string, targets []agentTarget) ([]agentTarget, error
 			// extend. A false return is not an error, but it is also not an
 			// install, so it must not appear in the summary.
 			if installPiHook(projectRoot) {
-				reportWired("Pi", filepath.Join(projectRoot, ".pi", "settings.json"))
+				reportWiredTo(out, "Pi", filepath.Join(projectRoot, ".pi", "settings.json"))
 				installed = append(installed, agentPi)
 			}
 
@@ -243,8 +248,8 @@ func shellQuote(s string) string {
 // reportWired names the file that was actually written. Naming the path (rather
 // than printing a bare "hooks configured") is what lets a user verify the claim
 // without trusting it.
-func reportWired(agent, path string) {
-	fmt.Printf("  %s %s hooks configured -> %s\n", style.Success(""), agent, path)
+func reportWiredTo(out io.Writer, agent, path string) {
+	Verbosef(out, "  %s %s hooks configured -> %s\n", style.Success(""), agent, path)
 }
 
 // reportClaudeSettingsScope warns when the settings just written are not the
@@ -264,14 +269,18 @@ func reportWired(agent, path string) {
 // to make. So both directories are named and the choice stays with the user —
 // but the recommendation is no longer neutral between them, because the two
 // outcomes are not equivalent. See claudeShadowRemedy.
-func reportClaudeSettingsScope(projectRoot string) {
+func reportClaudeSettingsScopeTo(out io.Writer, projectRoot string) {
 	shadow := shadowingClaudeWorkspace(projectRoot)
 	if !shadow.found() {
 		return
 	}
-	fmt.Printf("  %s An agent opened at %s will not load them.\n", style.Warning(""), shadow.Dir)
+	fmt.Fprintf(out, "  %s Important: open the agent inside this project so it loads the new hooks.\n", style.Warning(""))
+	fmt.Fprintf(out, "    An agent opened at %s will not load them.\n", shadow.Dir)
+	if !Verbose() {
+		return
+	}
 	for _, line := range strings.Split(claudeShadowRemedy(projectRoot, shadow), "\n") {
-		fmt.Printf("    %s\n", line)
+		fmt.Fprintf(out, "    %s\n", line)
 	}
 }
 
@@ -416,13 +425,19 @@ type hookOutcome struct {
 // non-default path that duplicates the default one earns its bugs. Choosing
 // agents is what --agent is for, and that works everywhere.
 func configureHooks(projectRoot string, targets []agentTarget, opts hookOptions) (hookOutcome, error) {
+	return configureHooksTo(projectRoot, targets, opts, os.Stdout)
+}
+
+func configureHooksTo(projectRoot string, targets []agentTarget, opts hookOptions, out io.Writer) (hookOutcome, error) {
 	if opts.skip {
-		fmt.Printf("  %s Hook configuration skipped\n", style.DimText("-"))
-		printManualInstructions(targets)
+		Verbosef(out, "  %s Hook configuration skipped\n", style.DimText("-"))
+		if Verbose() {
+			printManualInstructions(targets)
+		}
 		return hookOutcome{}, nil
 	}
 
-	installed, err := wireAgents(projectRoot, targets)
+	installed, err := wireAgentsTo(projectRoot, targets, out)
 	// The Git hook is not an agent and does not count towards `installed`,
 	// which is what decides whether init reports success. It is wired here,
 	// at the decision layer, so init and connect share one call shape and
@@ -430,9 +445,10 @@ func configureHooks(projectRoot string, targets []agentTarget, opts hookOptions)
 	// push is a convenience over capture, never a reason for init to fail.
 	if !opts.noGitHook {
 		if outcome, gitErr := wireGitHook(projectRoot); gitErr != nil {
-			fmt.Printf("  %s Git pre-push hook not configured: %v\n", style.Warning(""), gitErr)
+			Verbosef(out, "  Git pre-push hook not configured: %v\n", gitErr)
 		} else {
-			reportGitHookSkipped(outcome)
+			reportGitHookWiredTo(out, outcome)
+			reportGitHookSkippedTo(out, outcome)
 		}
 	}
 	return hookOutcome{installed: installed}, err

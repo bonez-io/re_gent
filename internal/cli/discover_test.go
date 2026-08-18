@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -86,5 +87,34 @@ func TestConnectInsideAProjectWiresOnlyThatProject(t *testing.T) {
 	}
 	if isConnected(sibling) {
 		t.Errorf("connect wired %s, which the user never named", sibling)
+	}
+	visible := out.String()
+	for _, want := range []string{"re_gent", "Server verified", "Agent hooks configured", "Ready to capture", "rgt doctor"} {
+		if !strings.Contains(visible, want) {
+			t.Errorf("compact connect output missing %q:\n%s", want, visible)
+		}
+	}
+	for _, noise := range []string{"Wrote remote config", "No history recorded", "hooks configured ->", "npm install"} {
+		if strings.Contains(visible, noise) {
+			t.Errorf("compact connect output leaked %q:\n%s", noise, visible)
+		}
+	}
+}
+
+func TestConnectVerboseShowsSetupDiagnostics(t *testing.T) {
+	SetVerbose(true)
+	t.Cleanup(func() { SetVerbose(false) })
+	t.Setenv("HOME", t.TempDir())
+
+	srv := newTestServer(t, http.StatusCreated, "verbose-repo")
+	project := mkProject(t, t.TempDir(), "verbose")
+	var out bytes.Buffer
+	if err := connectHere(srv.URL, project, "", false, &out, false); err != nil {
+		t.Fatalf("connectHere: %v", err)
+	}
+	for _, want := range []string{"initialized .regent", "registered repo_id", "wrote remote config", "No history recorded"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("verbose connect output missing %q:\n%s", want, out.String())
+		}
 	}
 }

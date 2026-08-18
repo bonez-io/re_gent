@@ -258,12 +258,39 @@ Download pre-built binaries from [GitHub Releases](https://github.com/regent-vcs
 
 Hooks auto-configure on `rgt init`. No manual setup required.
 
+### Terminal experience
+
+In a terminal, setup is an inline TUI: responsive re_gent cards, animated work,
+one persistent row per verified milestone, a keyboard-driven sharing choice,
+and a distinct completion panel. It does not take over the alternate screen, so
+the useful setup history remains visible after it exits.
+
+When output is redirected, the same flow automatically becomes stable plain
+text with no animation, cursor control, or ANSI sequences. Package-manager,
+provisioning, hook-path, and other internal detail stays out of the way unless
+setup fails.
+
+Use verbose mode when troubleshooting:
+
+```bash
+rgt --verbose init
+rgt --verbose connect http://127.0.0.1:7654
+
+# Equivalent for scripts and the server-hosted installer
+REGENT_VERBOSE=1 rgt connect http://127.0.0.1:7654
+curl -fsSL http://127.0.0.1:7654/install | REGENT_VERBOSE=1 sh
+```
+
+Color is disabled automatically for non-interactive output and can be disabled
+explicitly with `NO_COLOR=1`.
+
 ---
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
+| `rgt --verbose <command>` | Show setup diagnostics hidden by the compact default experience. `REGENT_VERBOSE=1` is the script-friendly equivalent. |
 | `rgt connect [server-url-or-ssh-target]` | Bind to an existing `http(s)` server, or give an SSH target to provision it first. A project is written only after its public `/healthz` answers. |
 | `rgt connect --as <name>` | Register this project under a name you choose instead of one derived from its git remote. Recorded in the project binding, so it is said once. |
 | `rgt init` | Initialize `.regent/` in current directory |

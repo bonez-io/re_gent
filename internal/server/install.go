@@ -55,11 +55,43 @@ var installScriptTemplate = template.Must(template.New("install").Parse(`#!/bin/
 set -eu
 
 BASE_URL="{{.BaseURL}}"
+VERBOSE="${REGENT_VERBOSE:-0}"
 
-info() { printf '  %s\n' "$*"; }
-warn() { printf '  ! %s\n' "$*" >&2; }
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+  PURPLE='\033[38;5;141m'; GREEN='\033[38;5;42m'; AMBER='\033[38;5;214m'
+  BLUE='\033[38;5;69m'; BOLD='\033[1m'; DIM='\033[2m'; RESET='\033[0m'
+else
+  PURPLE=''; GREEN=''; AMBER=''; BLUE=''; BOLD=''; DIM=''; RESET=''
+fi
 
-printf '\n== re_gent installer ==\n\n'
+detail() { [ "$VERBOSE" = 1 ] || [ "$VERBOSE" = true ] || return 0; printf '  %s%s%s\n' "$DIM" "$*" "$RESET"; }
+step() { printf '  %s│%s  %s✓%s  %s\n' "$PURPLE" "$RESET" "$GREEN" "$RESET" "$*"; }
+warn() { printf '  %s│%s  %s!%s  %s\n' "$PURPLE" "$RESET" "$AMBER" "$RESET" "$*" >&2; }
+
+# Animate only when the output is a terminal. Pipes and CI get one stable line
+# per result, with no cursor movement or escape-code debris.
+spin_wait() {
+  spin_pid="$1"; spin_label="$2"; spin_i=0
+  if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+    while kill -0 "$spin_pid" 2>/dev/null; do
+      case "$spin_i" in
+        0) spin_frame='⣾' ;; 1) spin_frame='⣽' ;; 2) spin_frame='⣻' ;; 3) spin_frame='⢿' ;;
+        4) spin_frame='⡿' ;; 5) spin_frame='⣟' ;; 6) spin_frame='⣯' ;; *) spin_frame='⣷' ;;
+      esac
+      printf '\r  %s│%s  %s%s%s  %s%s%s' "$PURPLE" "$RESET" "$PURPLE" "$spin_frame" "$RESET" "$DIM" "$spin_label" "$RESET"
+      spin_i=$(( (spin_i + 1) % 8 ))
+      sleep 0.08
+    done
+    printf '\r\033[2K'
+  fi
+  if wait "$spin_pid"; then return 0; else return $?; fi
+}
+
+printf '\n'
+printf '%s╭──────────────────────────────────────────────────────╮%s\n' "$PURPLE" "$RESET"
+printf '%s│%s  %s◆  RE_GENT%s  %sAGENT VERSION CONTROL%s                 %s│%s\n' "$PURPLE" "$RESET" "$PURPLE$BOLD" "$RESET" "$DIM" "$RESET" "$PURPLE" "$RESET"
+printf '%s│%s  %s INSTALL %s  %sOne-command project setup%s              %s│%s\n' "$PURPLE" "$RESET" "$BLUE$BOLD" "$RESET" "$BOLD" "$RESET" "$PURPLE" "$RESET"
+printf '%s╰──────────────────────────────────────────────────────╯%s\n\n' "$PURPLE" "$RESET"
 
 # ---------------------------------------------------------------------------
 # 0. Always (re)install from THIS server rather than keeping whatever rgt is
@@ -70,7 +102,7 @@ printf '\n== re_gent installer ==\n\n'
 #    few MB is the cheap, correct answer.
 # ---------------------------------------------------------------------------
 if command -v rgt >/dev/null 2>&1; then
-  info "Replacing existing rgt: $(command -v rgt)"
+  detail "Replacing existing rgt: $(command -v rgt)"
 fi
   # -------------------------------------------------------------------------
   # 1. Pick an install dir without touching a binary outside this shell's PATH.
@@ -123,15 +155,17 @@ fi
     BIN_URL="${BASE_URL}/bin/rgt?os=${GOOS}&arch=${GOARCH}"
   fi
 
-  info "Downloading rgt (${GOOS:-?}/${GOARCH:-?}) from ${BASE_URL}/bin/rgt ..."
-  if curl -fsSL "$BIN_URL" -o "$TARGET.tmp"; then
+  detail "Downloading rgt (${GOOS:-?}/${GOARCH:-?}) from ${BASE_URL}/bin/rgt"
+  curl -fsSL "$BIN_URL" -o "$TARGET.tmp" &
+  download_pid=$!
+  if spin_wait "$download_pid" "Downloading re_gent CLI"; then
     chmod +x "$TARGET.tmp"
     # Verify the downloaded binary actually executes on this OS/arch before
     # committing it; a mismatch fails with a platform-specific explanation.
     if "$TARGET.tmp" version >/dev/null 2>&1 || "$TARGET.tmp" --help >/dev/null 2>&1; then
       mv "$TARGET.tmp" "$TARGET"
       installed=1
-      info "Installed rgt to $TARGET"
+      detail "Installed rgt to $TARGET"
     else
       warn "Downloaded binary does not run here (likely an OS/arch mismatch)."
       rm -f "$TARGET.tmp"
@@ -157,7 +191,8 @@ if ! command -v rgt >/dev/null 2>&1; then
   warn "directory to PATH, then re-run this installer."
   exit 1
 fi
-info "rgt is ready: $(command -v rgt)"
+step "CLI installed"
+detail "Binary: $(command -v rgt)"
 
 # ---------------------------------------------------------------------------
 # 4. Wire the current project, so this one command is the whole setup.
@@ -171,7 +206,9 @@ info "rgt is ready: $(command -v rgt)"
 # says what to do when it is not standing in one. See the Go comment on this
 # template for why the installer no longer inspects the terminal.
 CONNECT_LOG="${TARGET}.connect.$$"
-if ! rgt connect "{{.BaseURL}}" >"$CONNECT_LOG" 2>&1; then
+rgt connect "{{.BaseURL}}" >"$CONNECT_LOG" 2>&1 &
+connect_pid=$!
+if ! spin_wait "$connect_pid" "Connecting this project"; then
   cat "$CONNECT_LOG" >&2
   rm -f "$CONNECT_LOG"
   warn "Setup did not finish. You can re-run it any time with:"
@@ -179,7 +216,7 @@ if ! rgt connect "{{.BaseURL}}" >"$CONNECT_LOG" 2>&1; then
   exit 1
 fi
 rm -f "$CONNECT_LOG"
-info "Connected this project to {{.BaseURL}}"
+step "Project connected"
 
 # ---------------------------------------------------------------------------
 # 5. Verify, rather than assume.
@@ -188,11 +225,19 @@ info "Connected this project to {{.BaseURL}}"
 # rgt command exits 0 in that state. Whoever pasted this command is usually not
 # whoever would notice the silence, so the command checks its own work and
 # fails loudly instead of ending on an unearned success message.
-if ! rgt doctor; then
+DOCTOR_LOG="${TARGET}.doctor.$$"
+rgt doctor --issues-only >"$DOCTOR_LOG" 2>&1 &
+doctor_pid=$!
+if ! spin_wait "$doctor_pid" "Verifying capture"; then
+  cat "$DOCTOR_LOG" >&2
+  rm -f "$DOCTOR_LOG"
   warn "Setup ran, but verification failed - see the report above."
   warn "Nothing will be captured until those problems are fixed."
   exit 1
 fi
+if grep -q '[^[:space:]]' "$DOCTOR_LOG"; then cat "$DOCTOR_LOG"; fi
+rm -f "$DOCTOR_LOG"
+step "Integration verified"
 
 # ---------------------------------------------------------------------------
 # 6. End on the one thing the installer cannot do.
@@ -209,11 +254,13 @@ fi
 # instruction whether or not doctor found a shadowing directory above — doctor
 # names that case specifically, and this is the move that answers it either way.
 printf '\n'
-info "One thing left, and only you can do it: open your agent IN this project."
-info "  cd $(pwd) && claude        # or codex, or whichever agent you use"
-info "Started from a directory above this one, the agent loads that directory's"
-info "hooks and records its work there instead of here."
-info "Agents read hooks at startup, so restart any session already open here."
+printf '%s╭──────────────────────────────────────────────────────╮%s\n' "$GREEN" "$RESET"
+printf '%s│%s  %s READY %s  %sReady to capture%s                       %s│%s\n' "$GREEN" "$RESET" "$GREEN$BOLD" "$RESET" "$BOLD" "$RESET" "$GREEN" "$RESET"
+printf '%s╰──────────────────────────────────────────────────────╯%s\n' "$GREEN" "$RESET"
+printf '  %sOne thing left:%s open the agent inside this project.\n' "$BOLD" "$RESET"
+printf '  %s→%s  %sNEXT%s  cd %s && restart your agent\n' "$BLUE" "$RESET" "$BLUE$BOLD" "$RESET" "$(pwd)"
+printf '              Then run rgt doctor\n'
+detail "Agent command: cd $(pwd) && claude  # or codex, OpenCode, Pi"
 printf '\n'
 `))
 

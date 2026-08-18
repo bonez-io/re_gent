@@ -52,7 +52,8 @@ type doctorFinding struct {
 // Doctor is deliberately local-only. It reads configuration on this machine and
 // prints to this terminal. It contacts nothing and reports nothing anywhere.
 func DoctorCmd() *cobra.Command {
-	return &cobra.Command{
+	var issuesOnly bool
+	cmd := &cobra.Command{
 		Use:          "doctor",
 		Short:        "Check that re_gent is wired up and capturing",
 		Long:         "Inspects this project's re_gent repository and agent hook configuration, and reports anything that would stop capture from working. Runs entirely locally.",
@@ -67,7 +68,7 @@ func DoctorCmd() *cobra.Command {
 			}
 
 			findings := diagnose(cwd)
-			printFindings(findings)
+			printFindings(findings, issuesOnly)
 
 			// Only failure-level findings set the exit code. Doctor's question
 			// is "will this project capture anything", and a warning is a
@@ -79,6 +80,8 @@ func DoctorCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&issuesOnly, "issues-only", false, "Show only warnings and failures")
+	return cmd
 }
 
 // diagnose collects every check without stopping at the first failure, so one
@@ -519,10 +522,13 @@ func hasFailures(findings []doctorFinding) bool {
 // A finding whose explanation is two facts and a command to run reads as three
 // lines; the single-line version put the third one hard against the left margin
 // where it no longer looked like part of the finding above it.
-func printFindings(findings []doctorFinding) {
+func printFindings(findings []doctorFinding, issuesOnly bool) {
 	fmt.Println()
 	for _, f := range findings {
 		if f.OK {
+			if issuesOnly {
+				continue
+			}
 			fmt.Printf("  %s %s\n", style.Success(""), f.Name)
 			printDetail(f.Detail, style.DimText)
 			continue
