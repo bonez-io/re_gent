@@ -8,9 +8,9 @@ export interface ConversationTranscriptProps { entries: TranscriptEntry[] }
 
 function Message({ label, at, children, user = false }: { label: string; at: string; children: React.ReactNode; user?: boolean }) {
   return <div className={`grid grid-cols-[54px_minmax(0,1fr)_48px] gap-2 border-b border-line px-3 py-2.5 ${user ? 'bg-hover/40' : ''}`}>
-    <div className="pt-0.5 font-mono text-[9px] uppercase tracking-[0.06em] text-ink-3">{label}</div>
+    <div className="pt-0.5 text-[9.5px] font-medium text-ink-3">{label}</div>
     <div className="min-w-0 text-[11.5px] leading-[1.55] text-ink-2">{children}</div>
-    <time className="pt-0.5 text-right font-mono text-[9px] tabular-nums text-ink-3">{at}</time>
+    <time className="pt-0.5 text-right text-[9px] tabular-nums text-ink-3">{at}</time>
   </div>
 }
 

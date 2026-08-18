@@ -15,10 +15,14 @@ function Topbar({ view }: { view: RegentView }) {
   </header>
 }
 
+function FilterControl({ children }: { children: React.ReactNode }) {
+  return <button type="button" className="inline-flex h-6 items-center gap-1.5 rounded-[4px] bg-field px-2 text-[9.5px] font-medium leading-none text-ink-2 shadow-hairline hover:bg-hover-2 max-sm:hidden">{children}<svg width="9" height="9" viewBox="0 0 12 12" fill="none" className="mt-px text-ink-3" aria-hidden><path d="m3 4.5 3 3 3-3" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" /></svg></button>
+}
+
 function FilterBar({ query, setQuery }: { query: string; setQuery: (query: string) => void }) {
   return <div className="flex h-9 items-center gap-1.5 border-b border-line px-3">
     <input value={query} onChange={(event) => setQuery(event.target.value)} className="h-6 w-60 rounded-[4px] bg-field px-2 text-[10.5px] outline-none shadow-hairline placeholder:text-ink-3 max-sm:min-w-0 max-sm:flex-1" placeholder="Filter conversations…" />
-    {['All branches', 'All agents', 'Any status'].map((label) => <button key={label} className="h-6 rounded-[4px] bg-field px-2 text-[9.5px] text-ink-2 shadow-hairline hover:bg-hover-2 max-sm:hidden">{label} <span className="ml-1 text-ink-3">⌄</span></button>)}
+    {['All branches', 'All agents', 'Any status'].map((label) => <FilterControl key={label}>{label}</FilterControl>)}
     <span className="ml-auto text-[9.5px] tabular-nums text-ink-3 max-md:hidden">7 conversations · 155 steps</span>
   </div>
 }
@@ -30,13 +34,13 @@ function ConversationIndex({ onOpen }: { onOpen: () => void }) {
     <div className="border-b border-line px-4 py-4"><h1 className="m-0 text-[15px] font-semibold tracking-[-0.01em]">Conversations</h1><p className="m-0 mt-1 text-[10.5px] text-ink-3">Captured agent work across sessions, branches, and hosts.</p></div>
     <FilterBar query={query} setQuery={setQuery} />
     <div className="mx-auto max-w-[980px] px-3 pb-8 pt-2">
-      {(['Today', 'Yesterday', 'Earlier'] as const).map((group) => { const rows = visible.filter((item) => item.dateGroup === group); return rows.length > 0 && <section key={group} className="mb-3"><div className="flex h-6 items-center px-2 text-[9px] font-semibold uppercase tracking-[0.1em] text-ink-3">{group}<span className="ml-2 font-normal tracking-normal">{rows.length}</span></div><div className="border-x border-t border-line">{rows.map((item) => <SessionRow key={item.id} {...item} onClick={onOpen} />)}</div></section> })}
+      {(['Today', 'Yesterday', 'Earlier'] as const).map((group) => { const rows = visible.filter((item) => item.dateGroup === group); return rows.length > 0 && <section key={group} className="mb-3"><div className="flex h-6 items-center px-2 text-[10px] font-medium text-ink-3">{group}<span className="ml-1.5 tabular-nums text-ink-3/80">{rows.length}</span></div><div className="border-x border-t border-line">{rows.map((item) => <SessionRow key={item.id} {...item} onClick={onOpen} />)}</div></section> })}
     </div>
   </div>
 }
 
 function ConversationList({ onOpen }: { onOpen: () => void }) {
-  return <aside className="min-h-0 overflow-auto border-r border-line bg-canvas max-lg:hidden" aria-label="Conversation list"><div className="sticky top-0 z-10 flex h-9 items-center border-b border-line bg-canvas px-2.5"><span className="text-[10.5px] font-semibold">Conversations</span><button className="ml-auto text-[9.5px] text-ink-3">Filter ⌄</button></div>{conversations.map((item, index) => <SessionRow key={item.id} {...item} selected={index === 0} onClick={onOpen} />)}</aside>
+  return <aside className="min-h-0 overflow-auto border-r border-line bg-canvas max-lg:hidden" aria-label="Conversation list"><div className="sticky top-0 z-10 flex h-9 items-center border-b border-line bg-canvas px-2.5"><span className="text-[10.5px] font-semibold">Conversations</span><span className="ml-auto"><FilterControl>Filter</FilterControl></span></div>{conversations.map((item, index) => <SessionRow key={item.id} {...item} selected={index === 0} onClick={onOpen} />)}</aside>
 }
 
 function TranscriptScreen({ onOpen }: { onOpen: () => void }) {
@@ -53,7 +57,7 @@ function StepsScreen({ onOpen }: { onOpen: () => void }) {
   const steps = transcript.filter((entry) => entry.type === 'step')
   return <section className="min-h-0 flex-1 overflow-auto bg-canvas p-4">
     <div className="mb-4"><h1 className="m-0 text-[14px] font-semibold">Steps</h1><p className="m-0 mt-1 text-[10px] text-ink-3">Immutable checkpoints ordered by session ref.</p></div>
-    <div className="border border-line"><div className="grid h-7 grid-cols-[90px_90px_minmax(160px,1fr)_90px_80px_65px_60px] items-center bg-inset px-2 font-mono text-[8.5px] uppercase tracking-[0.06em] text-ink-3"><span>Step</span><span>Parent</span><span>Session</span><span>Turn</span><span>Tree</span><span>Tokens</span><span>Files</span></div>{steps.map((step, index) => <button key={step.id} onClick={onOpen} className="grid h-8 w-full grid-cols-[90px_90px_minmax(160px,1fr)_90px_80px_65px_60px] items-center border-t border-line px-2 text-left font-mono text-[9.5px] text-ink-3 hover:bg-hover"><span className="text-accent-ink">{step.hash}</span><span>{index ? steps[index - 1].hash : '41ac200'}</span><span className="truncate">codex:01JZQ8MX7D</span><span>{step.turn}</span><span>{step.tree}</span><span className="tabular-nums">{step.tokens}</span><span>{step.files}</span></button>)}</div>
+    <div className="border border-line"><div className="grid h-7 grid-cols-[90px_90px_minmax(160px,1fr)_90px_80px_65px_60px] items-center bg-inset px-2 text-[9px] font-medium text-ink-3"><span>Step</span><span>Parent</span><span>Session</span><span>Turn</span><span>Tree</span><span>Tokens</span><span>Files</span></div>{steps.map((step, index) => <button key={step.id} onClick={onOpen} className="grid h-8 w-full grid-cols-[90px_90px_minmax(160px,1fr)_90px_80px_65px_60px] items-center border-t border-line px-2 text-left font-mono text-[9.5px] text-ink-3 hover:bg-hover"><span className="text-accent-ink">{step.hash}</span><span>{index ? steps[index - 1].hash : '41ac200'}</span><span className="truncate">codex:01JZQ8MX7D</span><span>{step.turn}</span><span>{step.tree}</span><span className="tabular-nums">{step.tokens}</span><span>{step.files}</span></button>)}</div>
     <div className="mt-5 grid grid-cols-3 border border-line max-md:grid-cols-1">{[['155', 'Total steps'], ['42,819', 'Captured tokens'], ['1,284', 'Stored objects']].map(([value, label]) => <div key={label} className="border-r border-line px-3 py-3 last:border-r-0 max-md:border-b max-md:border-r-0"><div className="font-mono text-[14px] text-ink">{value}</div><div className="mt-1 text-[9.5px] text-ink-3">{label}</div></div>)}</div>
   </section>
 }

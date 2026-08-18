@@ -44,11 +44,11 @@ export function ProjectSidebar({ project = 'girlfriend-assistant', deployment = 
       <button className="flex w-full items-center gap-2 rounded-[5px] px-1.5 py-1.5 text-left hover:bg-hover">
         <span className="flex size-6 items-center justify-center rounded-[5px] bg-field font-mono text-[10px] text-accent-ink shadow-hairline">ga</span>
         <span className="min-w-0 flex-1"><span className="block truncate text-[11.5px] font-medium">{project}</span><span className="block truncate text-[9.5px] text-ink-3">{deployment}</span></span>
-        <span className="text-[10px] text-ink-3">⌄</span>
+        <svg width="10" height="10" viewBox="0 0 12 12" fill="none" className="text-ink-3" aria-hidden><path d="m3 4.5 3 3 3-3" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" /></svg>
       </button>
     </div>
     <nav className="mt-3 px-2" aria-label="Workspace">
-      <div className="mb-1 px-1.5 text-[9px] font-semibold uppercase tracking-[0.11em] text-ink-3">Workspace</div>
+      <div className="mb-1 px-1.5 text-[9.5px] font-medium text-ink-3">Workspace</div>
       {items.map((item) => <button key={item.key} type="button" onClick={() => navigate(item.key)} aria-current={active === item.key ? 'page' : undefined} className={`mb-px flex h-7 w-full items-center gap-2 rounded-[5px] px-1.5 text-left transition-colors ${active === item.key ? 'bg-hover-2 text-ink' : 'text-ink-2 hover:bg-hover hover:text-ink'}`}>
         <span className={active === item.key ? 'text-accent-ink' : 'text-ink-3'}><NavIcon kind={item.key} /></span>
         <span className="flex-1 text-[11.5px] font-medium">{item.label}</span>
