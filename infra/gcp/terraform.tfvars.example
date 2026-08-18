@@ -4,3 +4,9 @@ zone       = "europe-west4-a"
 
 # github_repository = "regent-vcs/re_gent_headless"
 # production_deletion_protection = true
+
+# The server has no application authentication yet. Never use 0.0.0.0/0 here.
+public_access_source_ranges = {
+  dev  = ["203.0.113.10/32"]
+  main = ["203.0.113.10/32"]
+}

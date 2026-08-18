@@ -43,3 +43,19 @@ variable "production_deletion_protection" {
   type        = bool
   default     = true
 }
+
+variable "public_access_source_ranges" {
+  description = "Approved source CIDRs allowed to reach each environment on TCP 8080. Empty lists reserve static IPs without exposing the application."
+  type        = map(list(string))
+  default = {
+    dev  = []
+    main = []
+  }
+
+  validation {
+    condition = alltrue([
+      for environment in ["dev", "main"] : can(var.public_access_source_ranges[environment])
+    ])
+    error_message = "public_access_source_ranges must define both dev and main."
+  }
+}
