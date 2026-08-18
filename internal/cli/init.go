@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -125,13 +126,22 @@ func InitCmd() *cobra.Command {
 			if binding.bound() {
 				Verbosef(out, "  connected to %s (repo: %s)\n", binding.url, binding.repoID)
 			}
+			flow.Step("Repository ready")
 
 			if reinit && Verbose() {
 				printExistingHooks(cwd)
 			}
-			outcome, hookErr := configureHooks(cwd, targets, hookOptions{skip: skipHook, noGitHook: noGitHook})
+			var outcome hookOutcome
+			var hookOutput bytes.Buffer
+			hookErr := flow.Wait("Configuring agent integrations", func() error {
+				var configureErr error
+				outcome, configureErr = configureHooksTo(cwd, targets, hookOptions{skip: skipHook, noGitHook: noGitHook}, &hookOutput)
+				return configureErr
+			})
+			if hookOutput.Len() > 0 {
+				_, _ = io.Copy(out, &hookOutput)
+			}
 			if hookErr != nil {
-				flow.Warning("Some agent hooks could not be configured")
 				Verbosef(out, "  %v\n", hookErr)
 				if Verbose() {
 					printManualInstructions(targets)
@@ -219,7 +229,6 @@ func printSummary(out io.Writer, projectRoot string, outcome hookOutcome, bindin
 	headline, ok := summaryStatus(outcome)
 
 	if ok {
-		flow.Step("Repository ready")
 		flow.Step(agentSummary(outcome.installed) + " hooks configured")
 	} else {
 		flow.Warning(headline)
@@ -264,10 +273,14 @@ func agentSummary(installed []agentTarget) string {
 }
 
 func printHookInstallWarning(result hookInstallResult) {
+	printHookInstallWarningTo(os.Stdout, result)
+}
+
+func printHookInstallWarningTo(out io.Writer, result hookInstallResult) {
 	if result.BackupPath == "" {
 		return
 	}
-	fmt.Printf("  %s Existing hook config was invalid; backed up to %s before rewriting\n", style.Warning(""), result.BackupPath)
+	fmt.Fprintf(out, "  %s Existing hook config was invalid; backed up to %s before rewriting\n", style.Warning(""), result.BackupPath)
 }
 
 func installClaudeHook(projectRoot string) (hookInstallResult, error) {

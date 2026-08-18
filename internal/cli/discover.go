@@ -65,5 +65,5 @@ func isProjectDir(dir string) bool {
 // the only caller reaches this after checking isTerminal(os.Stdin) — so stdin
 // is a person, not a script being swallowed.
 func shareWithTeam(projects []string) {
-	offerShare(projects, os.Stdin)
+	offerShareTUI(projects, os.Stdin, os.Stdout)
 }

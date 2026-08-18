@@ -65,10 +65,33 @@ else
 fi
 
 detail() { [ "$VERBOSE" = 1 ] || [ "$VERBOSE" = true ] || return 0; printf '  %s%s%s\n' "$DIM" "$*" "$RESET"; }
-step() { printf '  %s✓%s %s\n' "$GREEN" "$RESET" "$*"; }
-warn() { printf '  %s⚠%s %s\n' "$AMBER" "$RESET" "$*" >&2; }
+step() { printf '  %s│%s  %s✓%s  %s\n' "$PURPLE" "$RESET" "$GREEN" "$RESET" "$*"; }
+warn() { printf '  %s│%s  %s!%s  %s\n' "$PURPLE" "$RESET" "$AMBER" "$RESET" "$*" >&2; }
 
-printf '\n  %sre_gent%s %s/%s %sinstall%s\n\n' "$PURPLE" "$RESET" "$DIM" "$RESET" "$BOLD" "$RESET"
+# Animate only when the output is a terminal. Pipes and CI get one stable line
+# per result, with no cursor movement or escape-code debris.
+spin_wait() {
+  spin_pid="$1"; spin_label="$2"; spin_i=0
+  if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+    while kill -0 "$spin_pid" 2>/dev/null; do
+      case "$spin_i" in
+        0) spin_frame='⣾' ;; 1) spin_frame='⣽' ;; 2) spin_frame='⣻' ;; 3) spin_frame='⢿' ;;
+        4) spin_frame='⡿' ;; 5) spin_frame='⣟' ;; 6) spin_frame='⣯' ;; *) spin_frame='⣷' ;;
+      esac
+      printf '\r  %s│%s  %s%s%s  %s%s%s' "$PURPLE" "$RESET" "$PURPLE" "$spin_frame" "$RESET" "$DIM" "$spin_label" "$RESET"
+      spin_i=$(( (spin_i + 1) % 8 ))
+      sleep 0.08
+    done
+    printf '\r\033[2K'
+  fi
+  if wait "$spin_pid"; then return 0; else return $?; fi
+}
+
+printf '\n'
+printf '%s╭──────────────────────────────────────────────────────╮%s\n' "$PURPLE" "$RESET"
+printf '%s│%s  %s◆  RE_GENT%s  %sAGENT VERSION CONTROL%s                 %s│%s\n' "$PURPLE" "$RESET" "$PURPLE$BOLD" "$RESET" "$DIM" "$RESET" "$PURPLE" "$RESET"
+printf '%s│%s  %s INSTALL %s  %sOne-command project setup%s              %s│%s\n' "$PURPLE" "$RESET" "$BLUE$BOLD" "$RESET" "$BOLD" "$RESET" "$PURPLE" "$RESET"
+printf '%s╰──────────────────────────────────────────────────────╯%s\n\n' "$PURPLE" "$RESET"
 
 # ---------------------------------------------------------------------------
 # 0. Always (re)install from THIS server rather than keeping whatever rgt is
@@ -133,7 +156,9 @@ fi
   fi
 
   detail "Downloading rgt (${GOOS:-?}/${GOARCH:-?}) from ${BASE_URL}/bin/rgt"
-  if curl -fsSL "$BIN_URL" -o "$TARGET.tmp"; then
+  curl -fsSL "$BIN_URL" -o "$TARGET.tmp" &
+  download_pid=$!
+  if spin_wait "$download_pid" "Downloading re_gent CLI"; then
     chmod +x "$TARGET.tmp"
     # Verify the downloaded binary actually executes on this OS/arch before
     # committing it; a mismatch fails with a platform-specific explanation.
@@ -181,7 +206,9 @@ detail "Binary: $(command -v rgt)"
 # says what to do when it is not standing in one. See the Go comment on this
 # template for why the installer no longer inspects the terminal.
 CONNECT_LOG="${TARGET}.connect.$$"
-if ! rgt connect "{{.BaseURL}}" >"$CONNECT_LOG" 2>&1; then
+rgt connect "{{.BaseURL}}" >"$CONNECT_LOG" 2>&1 &
+connect_pid=$!
+if ! spin_wait "$connect_pid" "Connecting this project"; then
   cat "$CONNECT_LOG" >&2
   rm -f "$CONNECT_LOG"
   warn "Setup did not finish. You can re-run it any time with:"
@@ -199,7 +226,9 @@ step "Project connected"
 # whoever would notice the silence, so the command checks its own work and
 # fails loudly instead of ending on an unearned success message.
 DOCTOR_LOG="${TARGET}.doctor.$$"
-if ! rgt doctor --issues-only >"$DOCTOR_LOG" 2>&1; then
+rgt doctor --issues-only >"$DOCTOR_LOG" 2>&1 &
+doctor_pid=$!
+if ! spin_wait "$doctor_pid" "Verifying capture"; then
   cat "$DOCTOR_LOG" >&2
   rm -f "$DOCTOR_LOG"
   warn "Setup ran, but verification failed - see the report above."
@@ -225,9 +254,12 @@ step "Integration verified"
 # instruction whether or not doctor found a shadowing directory above — doctor
 # names that case specifically, and this is the move that answers it either way.
 printf '\n'
-printf '  %s✓%s %sReady to capture%s\n' "$GREEN" "$RESET" "$BOLD" "$RESET"
-printf '  %sOne thing left%s: open the agent inside this project.\n' "$BLUE" "$RESET"
-printf '  %sNext%s cd %s && restart your agent, then run rgt doctor\n' "$BLUE" "$RESET" "$(pwd)"
+printf '%s╭──────────────────────────────────────────────────────╮%s\n' "$GREEN" "$RESET"
+printf '%s│%s  %s READY %s  %sReady to capture%s                       %s│%s\n' "$GREEN" "$RESET" "$GREEN$BOLD" "$RESET" "$BOLD" "$RESET" "$GREEN" "$RESET"
+printf '%s╰──────────────────────────────────────────────────────╯%s\n' "$GREEN" "$RESET"
+printf '  %sOne thing left:%s open the agent inside this project.\n' "$BOLD" "$RESET"
+printf '  %s→%s  %sNEXT%s  cd %s && restart your agent\n' "$BLUE" "$RESET" "$BLUE$BOLD" "$RESET" "$(pwd)"
+printf '              Then run rgt doctor\n'
 detail "Agent command: cd $(pwd) && claude  # or codex, OpenCode, Pi"
 printf '\n'
 `))

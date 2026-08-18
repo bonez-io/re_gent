@@ -260,10 +260,15 @@ Hooks auto-configure on `rgt init`. No manual setup required.
 
 ### Terminal experience
 
-Setup commands use a compact terminal flow by default: verified milestones,
-the final action to take, and warnings that affect safety or correctness. Output
-from package managers, provisioning scripts, hook paths, and other setup details
-stays out of the way unless setup fails.
+In a terminal, setup is an inline TUI: responsive re_gent cards, animated work,
+one persistent row per verified milestone, a keyboard-driven sharing choice,
+and a distinct completion panel. It does not take over the alternate screen, so
+the useful setup history remains visible after it exits.
+
+When output is redirected, the same flow automatically becomes stable plain
+text with no animation, cursor control, or ANSI sequences. Package-manager,
+provisioning, hook-path, and other internal detail stays out of the way unless
+setup fails.
 
 Use verbose mode when troubleshooting:
 

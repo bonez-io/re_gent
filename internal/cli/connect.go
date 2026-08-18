@@ -155,10 +155,19 @@ connect replaces setup, which did the same job with different answers.`,
 // `curl | sh`, in CI, in a devcontainer — and the share question is simply not
 // asked there.
 func connectHere(serverURL, dir, repoID string, noGitHook bool, out io.Writer, canPrompt bool) error {
+	if out == nil {
+		out = io.Discard
+	}
 	flow := style.NewFlow(out)
 	flow.Header("connect", filepath.Base(dir))
-	if err := runConnect(connectParams{serverURL: serverURL, projectRoot: dir, repoID: repoID, noGitHook: noGitHook, out: out}); err != nil {
-		flow.Warning("Connection did not finish")
+	var setupOutput bytes.Buffer
+	err := flow.Wait("Installing project integration", func() error {
+		return runConnect(connectParams{serverURL: serverURL, projectRoot: dir, repoID: repoID, noGitHook: noGitHook, out: &setupOutput})
+	})
+	if setupOutput.Len() > 0 {
+		_, _ = io.Copy(out, &setupOutput)
+	}
+	if err != nil {
 		return fmt.Errorf("%s could not be connected: %w", filepath.Base(dir), err)
 	}
 	rememberServer(serverURL)
@@ -304,7 +313,7 @@ func connectWireHooksTo(projectRoot string, noGitHook bool, out io.Writer) error
 		return err
 	}
 
-	installed, err := wireAgents(projectRoot, targets)
+	installed, err := wireAgentsTo(projectRoot, targets, out)
 	if err != nil {
 		return err
 	}
@@ -321,7 +330,8 @@ func connectWireHooksTo(projectRoot string, noGitHook bool, out io.Writer) error
 		if outcome, err := wireGitHook(projectRoot); err != nil {
 			Verbosef(out, "  Git pre-push hook not configured: %v\n", err)
 		} else {
-			reportGitHookSkipped(outcome)
+			reportGitHookWiredTo(out, outcome)
+			reportGitHookSkippedTo(out, outcome)
 		}
 	}
 	// Agents read their hook config at session startup, so a session that was

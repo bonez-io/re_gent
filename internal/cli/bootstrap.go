@@ -172,14 +172,17 @@ func prepareMachine(target, override string, yes bool, in io.Reader, out io.Writ
 	if !ok {
 		return "", fmt.Errorf("provisioning declined; install Docker yourself then re-run with --yes when ready")
 	}
-	if err := b.Run(target); err != nil {
+	if err := flow.Run("Installing re_gent server", func() error { return b.Run(target) }); err != nil {
 		return "", err
 	}
-	flow.Step("Server installed")
-	if !b.WaitHealthy(publicURL) {
-		return "", fmt.Errorf("server was started but %s/healthz is unreachable from this machine (check port 7654/firewall); project was not changed", publicURL)
+	if err := flow.Run("Verifying public endpoint", func() error {
+		if !b.WaitHealthy(publicURL) {
+			return fmt.Errorf("server was started but %s/healthz is unreachable from this machine (check port 7654/firewall); project was not changed", publicURL)
+		}
+		return nil
+	}); err != nil {
+		return "", err
 	}
-	flow.Step("Public health check passed")
 	flow.End()
 	return publicURL, nil
 }

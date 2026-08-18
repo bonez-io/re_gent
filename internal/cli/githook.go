@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -87,7 +88,6 @@ func wireGitHook(projectRoot string) (gitHookOutcome, error) {
 	if err != nil {
 		return outcome, err
 	}
-	reportGitHookWired(outcome)
 	return outcome, nil
 }
 
@@ -356,14 +356,18 @@ func writeExecutable(path, content string) error {
 // says when a previous hook was kept — that is the one thing a user with an
 // existing hook will want to know.
 func reportGitHookWired(o gitHookOutcome) {
+	reportGitHookWiredTo(os.Stdout, o)
+}
+
+func reportGitHookWiredTo(out io.Writer, o gitHookOutcome) {
 	if o.Path == "" {
 		return
 	}
-	fmt.Printf("  %s Git pre-push hook configured\n", style.Success(""))
-	Verbosef(os.Stdout, "    path: %s\n", o.Path)
+	fmt.Fprintf(out, "  %s  %s  Git pre-push hook configured\n", style.Brand("│"), style.Success(""))
+	Verbosef(out, "    path: %s\n", o.Path)
 	if o.Chained {
-		fmt.Printf("    your existing pre-push hook was kept and still runs first\n")
-		Verbosef(os.Stdout, "    previous hook: %s\n",
+		fmt.Fprintln(out, "    your existing pre-push hook was kept and still runs first")
+		Verbosef(out, "    previous hook: %s\n",
 			filepath.Base(o.Path)+gitHookPrevSuffix)
 	}
 }
@@ -371,10 +375,14 @@ func reportGitHookWired(o gitHookOutcome) {
 // reportGitHookSkipped prints why no hook was written. Dim, not a warning:
 // most reasons are the user's own configuration, and none of them stop capture.
 func reportGitHookSkipped(o gitHookOutcome) {
+	reportGitHookSkippedTo(os.Stdout, o)
+}
+
+func reportGitHookSkippedTo(out io.Writer, o gitHookOutcome) {
 	if o.Skipped == "" {
 		return
 	}
-	Verbosef(os.Stdout, "  %s Git pre-push hook not configured: %s\n", style.DimText("-"), o.Skipped)
+	Verbosef(out, "  %s Git pre-push hook not configured: %s\n", style.DimText("-"), o.Skipped)
 }
 
 // gitHookFinding is doctor's view of the pre-push hook. The bool is false when
