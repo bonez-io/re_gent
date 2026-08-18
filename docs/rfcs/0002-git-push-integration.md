@@ -2,7 +2,7 @@
 
 - Status: Draft
 - Date: 2026-08-17
-- Implementation: None
+- Implementation: Proposed in [#71](https://github.com/regent-vcs/re_gent_headless/pull/71), pending acceptance of this RFC
 - Owners: @Amirshrim
 - Issue: [#31](https://github.com/regent-vcs/re_gent_headless/issues/31)
 
@@ -231,20 +231,27 @@ From RFC 0001 and the workflow contract, the implementation must hold:
 
 ## Acceptance contract
 
+Implemented in [#71](https://github.com/regent-vcs/re_gent_headless/pull/71). The test names below
+are the ones that exist, not the ones this RFC first guessed at: a contract naming tests nobody
+wrote is worse than a shorter one.
+
 | Requirement | Executable coverage |
 |---|---|
 | `git push` with work owed and a live server delivers it | `TestE2EGitPushDeliversQueuedSteps` |
 | `git push` with the server down completes and leaves the queue intact | `TestE2EGitPushWithServerDownDoesNotBlockThePush` |
-| A pre-existing `pre-push` hook still runs and can still abort the push | `TestE2EPrePushChainPreservesExistingHook` |
-| No Regent failure can abort a push | `TestGitHookRegentBlockAlwaysExitsZero` |
-| `rgt disconnect` removes only the Regent block and restores prior behavior | `TestE2EDisconnectRestoresPriorPrePushHook` |
-| Repeated pushes during an outage respect the cooldown | `TestGitPushDuringOutageHonorsRetryCooldown` |
-| Concurrent agent-turn sync and pre-push sync corrupt nothing | `TestConcurrentFlushFromHookAndAgentTurnIsSafe` |
-| `init` and `connect` both wire it; local mode leaves it inert | `TestWireAgentsInstallsGitHookForBothInitAndConnect` |
-| `--no-git-hook` and the env variable each disable it at their scope | `TestGitHookOptOutScopes` |
-| `core.hooksPath` present → nothing written to `.git/hooks`, guidance printed | `TestWireDetectsHooksPathManager` |
+| A pre-existing `pre-push` hook still runs and can still abort the push | `TestE2EPrePushChainPreservesExistingHook`, `TestGitHookPreservesAndChainsAnExistingHook` |
+| No Regent failure can abort a push | `TestGitHookRegentBlockAlwaysExitsZero`, `TestGitHookDiscardsRegentExitCode`, `TestGitPrePushHookRecoversFromPanic` |
+| `rgt disconnect` removes only the Regent block and restores prior behaviour | `TestE2EDisconnectRestoresPriorPrePushHook`, `TestRemoveGitHookRestoresThePreviousHookExactly`, `TestRemoveGitHookLeavesAForeignHookAlone` |
+| Repeated pushes during an outage respect the cooldown | `TestE2EGitPushDuringOutageHonoursRetryCooldown` |
+| Concurrent agent-turn sync and pre-push sync corrupt nothing | `TestE2EConcurrentPushHookAndAgentTurnIsSafe` |
+| `init` and `connect` both wire it | `TestConfigureHooksInstallsGitHookAndHonoursOptOut`, `TestE2EConnectWiresTheGitPushHook` |
+| Local mode leaves it inert | `TestE2EGitPushInLocalModeIsSilent`, `TestGitPrePushHookIsInertInLocalMode` |
+| `--no-git-hook` and the env variable each disable it at their scope | `TestE2EGitHookOptOutScopes`, `TestGitHookOptOutEnvSkipsWiring`, `TestGitHookOptOutRequiresLiteralZero` |
+| `git push --no-verify` bypasses it, as documented | `TestE2EGitPushNoVerifySkipsTheHook` |
+| `core.hooksPath` present → nothing written to `.git/hooks`, guidance printed | `TestGitHookDetectsCoreHooksPath` |
+| Worktrees resolve to the shared common dir | `TestGitHookResolvesWorktreeCommonDir` |
 | Regent invokes no Git write command anywhere in the hook path | `TestGitHookNeverInvokesGitWriteCommands` |
-| `rgt doctor` reports hook state, chain integrity, and queue depth | `TestDoctorReportsGitHookWiring` |
+| `rgt doctor` reports hook state and chain integrity | `TestDoctorReportsGitHookWiring`, `TestDoctorGitHookFindingReportsAForeignHook`, `TestDoctorGitHookFindingIsOmittedOutsideAGitRepo` |
 
 ## Implementation order
 
