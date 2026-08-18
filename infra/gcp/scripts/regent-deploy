@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+if [[ $# -ne 3 ]]; then
+  echo "usage: regent-deploy <server-image> <web-image> <release>" >&2
+  exit 2
+fi
+
+server_image=$1
+web_image=$2
+release=$3
+state_dir=/var/lib/regent-deploy
+current_file="$state_dir/current.env"
+previous_file="$state_dir/previous.env"
+
+install -d -m 0750 "$state_dir"
+exec 9>"$state_dir/deploy.lock"
+flock -n 9 || { echo "another deployment is already running" >&2; exit 1; }
+
+registry=${server_image%%/*}
+if [[ $registry != *-docker.pkg.dev ]]; then
+  echo "refusing non-Artifact Registry server image: $server_image" >&2
+  exit 2
+fi
+if [[ ${web_image%%/*} != "$registry" ]]; then
+  echo "server and web images must use the same Artifact Registry host" >&2
+  exit 2
+fi
+
+metadata_token=$(curl -fsS -H 'Metadata-Flavor: Google' \
+  'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token' \
+  | jq -r .access_token)
+test -n "$metadata_token" && test "$metadata_token" != null
+printf '%s' "$metadata_token" | docker login -u oauth2accesstoken --password-stdin "https://$registry" >/dev/null
+
+docker pull "$server_image"
+docker pull "$web_image"
+
+if [[ -f $current_file ]]; then
+  cp "$current_file" "$previous_file"
+fi
+
+run_release() {
+  local next_server=$1 next_web=$2
+  docker network inspect regent >/dev/null 2>&1 || docker network create regent >/dev/null
+  docker rm -f regent-web regent-server >/dev/null 2>&1 || true
+  docker run -d \
+    --name regent-server \
+    --network regent \
+    --restart unless-stopped \
+    --log-opt max-size=10m --log-opt max-file=3 \
+    --mount type=bind,src=/var/lib/regent/data,dst=/data \
+    "$next_server" >/dev/null
+  docker run -d \
+    --name regent-web \
+    --network regent \
+    --restart unless-stopped \
+    --log-opt max-size=10m --log-opt max-file=3 \
+    -p 8080:8080 \
+    "$next_web" >/dev/null
+}
+
+healthy() {
+  for _ in $(seq 1 30); do
+    if curl -fsS --max-time 2 http://127.0.0.1:8080/healthz >/dev/null; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+run_release "$server_image" "$web_image"
+if ! healthy; then
+  echo "release $release failed its health check" >&2
+  docker logs --tail 100 regent-server >&2 || true
+  docker logs --tail 100 regent-web >&2 || true
+  if [[ -f $previous_file ]]; then
+    # shellcheck disable=SC1090
+    source "$previous_file"
+    echo "rolling back to ${REGENT_RELEASE:-previous release}" >&2
+    run_release "$REGENT_SERVER_IMAGE" "$REGENT_WEB_IMAGE"
+    healthy || echo "rollback health check also failed" >&2
+  fi
+  exit 1
+fi
+
+cat >"$current_file" <<EOF
+REGENT_SERVER_IMAGE='$server_image'
+REGENT_WEB_IMAGE='$web_image'
+REGENT_RELEASE='$release'
+EOF
+chmod 0640 "$current_file"
+
+docker image prune -f --filter 'until=168h' >/dev/null || true
+echo "deployed re_gent $release"

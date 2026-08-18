@@ -352,13 +352,9 @@ func writeExecutable(path, content string) error {
 	return nil
 }
 
-// reportGitHookWired names the file, like reportWired does for agents, and
+// reportGitHookWiredTo names the file, like reportWired does for agents, and
 // says when a previous hook was kept — that is the one thing a user with an
 // existing hook will want to know.
-func reportGitHookWired(o gitHookOutcome) {
-	reportGitHookWiredTo(os.Stdout, o)
-}
-
 func reportGitHookWiredTo(out io.Writer, o gitHookOutcome) {
 	if o.Path == "" {
 		return
@@ -372,12 +368,8 @@ func reportGitHookWiredTo(out io.Writer, o gitHookOutcome) {
 	}
 }
 
-// reportGitHookSkipped prints why no hook was written. Dim, not a warning:
+// reportGitHookSkippedTo prints why no hook was written. Dim, not a warning:
 // most reasons are the user's own configuration, and none of them stop capture.
-func reportGitHookSkipped(o gitHookOutcome) {
-	reportGitHookSkippedTo(os.Stdout, o)
-}
-
 func reportGitHookSkippedTo(out io.Writer, o gitHookOutcome) {
 	if o.Skipped == "" {
 		return

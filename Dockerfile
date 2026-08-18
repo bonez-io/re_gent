@@ -1,8 +1,10 @@
 # syntax=docker/dockerfile:1
 
 # --- build stage -----------------------------------------------------------
-FROM golang:1.23-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.23-alpine AS build
 WORKDIR /src
+ARG TARGETOS
+ARG TARGETARCH
 
 # Download modules first so they cache independently of source changes.
 COPY go.mod go.sum ./
@@ -10,8 +12,8 @@ RUN go mod download
 
 COPY . .
 # Static, CGO-free binary (matches .goreleaser.yaml: CGO_ENABLED=0).
-RUN CGO_ENABLED=0 go build -trimpath -o /out/rgt ./cmd/rgt \
- && CGO_ENABLED=0 go build -trimpath -o /out/regent-server ./cmd/regent-server
+RUN GOOS="$TARGETOS" GOARCH="$TARGETARCH" CGO_ENABLED=0 go build -trimpath -o /out/rgt ./cmd/rgt \
+ && GOOS="$TARGETOS" GOARCH="$TARGETARCH" CGO_ENABLED=0 go build -trimpath -o /out/regent-server ./cmd/regent-server
 
 # Cross-compile per-OS/arch binaries so /install can hand every teammate a
 # runnable rgt, not only those matching the server's platform. Served from

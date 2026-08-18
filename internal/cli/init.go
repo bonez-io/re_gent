@@ -272,10 +272,6 @@ func agentSummary(installed []agentTarget) string {
 	return strings.Join(names, " + ")
 }
 
-func printHookInstallWarning(result hookInstallResult) {
-	printHookInstallWarningTo(os.Stdout, result)
-}
-
 func printHookInstallWarningTo(out io.Writer, result hookInstallResult) {
 	if result.BackupPath == "" {
 		return

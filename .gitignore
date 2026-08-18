@@ -49,6 +49,14 @@ Desktop.ini
 *.seed
 *.pid.lock
 
+# Terraform runtime state and local plans. Remote state lives in the dedicated
+# versioned GCS bucket created by infra/gcp/provision.sh.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+terraform.tfvars
+
 # Demo/dev artifacts
 demo/.agents/
 demo/.opencode/

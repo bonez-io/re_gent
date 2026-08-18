@@ -365,7 +365,11 @@ rgt pull
 ```
 
 The server is currently unauthenticated, and Compose binds it to `127.0.0.1`.
-Remote authentication, TLS, and Terraform are intentionally not part of this local baseline yet. To provision a Linux VPS, run `rgt connect root@host` from a project (or add `--url https://public.example` for NAT/DNS), review the plan, and confirm. `make server-down` stops it; the named Docker
+For the private dev/main GCP deployment, CI/CD, persistence, rollback, and IAP
+access model, see **[infra/gcp/README.md](infra/gcp/README.md)**. To provision a
+generic Linux VPS, run `rgt connect root@host` from a project (or add `--url
+https://public.example` for NAT/DNS), review the plan, and confirm. `make
+server-down` stops it; the named Docker
 volume preserves its data between runs.
 
 ---

@@ -11,6 +11,8 @@ docs
 wiki
 assets
 examples
+infra
+web
 *.md
 .claude
 .agents

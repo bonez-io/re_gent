@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+if [[ $# -ne 2 ]]; then
+  echo "usage: smoke-release <server-image> <web-image>" >&2
+  exit 2
+fi
+
+server_image=$1
+web_image=$2
+suffix="${GITHUB_RUN_ID:-$$}-${GITHUB_RUN_ATTEMPT:-1}"
+network="regent-smoke-${suffix}"
+volume="regent-smoke-${suffix}"
+server="regent-smoke-server-${suffix}"
+web="regent-smoke-web-${suffix}"
+
+cleanup() {
+  docker rm -f "$web" "$server" >/dev/null 2>&1 || true
+  docker network rm "$network" >/dev/null 2>&1 || true
+  docker volume rm "$volume" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+docker network create "$network" >/dev/null
+docker volume create "$volume" >/dev/null
+docker run -d \
+  --name "$server" --network "$network" --network-alias regent-server \
+  --mount type=volume,src="$volume",dst=/data \
+  "$server_image" >/dev/null
+docker run -d \
+  --name "$web" --network "$network" -p 127.0.0.1::8080 \
+  "$web_image" >/dev/null
+
+port=$(docker inspect "$web" --format '{{(index (index .NetworkSettings.Ports "8080/tcp") 0).HostPort}}')
+base_url="http://127.0.0.1:${port}"
+
+for attempt in $(seq 1 30); do
+  if curl -fsS --max-time 2 "$base_url/healthz" >/dev/null; then
+    break
+  fi
+  if [[ $attempt -eq 30 ]]; then
+    docker logs "$web" >&2 || true
+    docker logs "$server" >&2 || true
+    exit 1
+  fi
+  sleep 1
+done
+
+[[ $(curl -fsS "$base_url/healthz") == ok ]]
+curl -fsS -X POST -H 'Content-Type: application/json' \
+  -d '{"repo_id":"smoke"}' "$base_url/repos" \
+  | jq -e '.repo_id == "smoke" and .created == true' >/dev/null
+curl -fsS "$base_url/repos" | jq -e '.repos == ["smoke"]' >/dev/null
+curl -fsS "$base_url/smoke/api/sessions" | jq -e '.total_sessions == 0' >/dev/null
+curl -fsS "$base_url/repos/smoke/conversations" | grep -q '<div id="root"></div>'
+
+echo "production image smoke test passed"
