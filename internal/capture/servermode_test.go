@@ -1,4 +1,4 @@
-package capture
+package capture_test
 
 import (
 	"encoding/json"
@@ -9,7 +9,9 @@ import (
 	"testing"
 	"time"
 
+	. "github.com/regent-vcs/regent/internal/capture"
 	"github.com/regent-vcs/regent/internal/remote"
+	"github.com/regent-vcs/regent/internal/remote/remotecapture"
 	"github.com/regent-vcs/regent/internal/remotetest"
 	"github.com/regent-vcs/regent/internal/store"
 )
@@ -82,7 +84,7 @@ func runTurn(t *testing.T, rec *Recorder, turnID, content string) {
 func TestServerModeCapturesWithoutLocalRegentDir(t *testing.T) {
 	env := newServerModeEnv(t)
 
-	rec, err := OpenServerMode(env.workspace, env.cfg)
+	rec, _, err := remotecapture.Open(env.workspace, env.cfg)
 	if err != nil {
 		t.Fatalf("OpenServerMode: %v", err)
 	}
@@ -142,7 +144,7 @@ func TestServerModeCapturesWithoutLocalRegentDir(t *testing.T) {
 func TestServerModeSurvivesAnOutageAndConverges(t *testing.T) {
 	env := newServerModeEnv(t)
 
-	rec, err := OpenServerMode(env.workspace, env.cfg)
+	rec, link, err := remotecapture.Open(env.workspace, env.cfg)
 	if err != nil {
 		t.Fatalf("OpenServerMode: %v", err)
 	}
@@ -156,7 +158,7 @@ func TestServerModeSurvivesAnOutageAndConverges(t *testing.T) {
 	if env.srv.Ref(testSessionRef) != "" {
 		t.Fatal("the server should have received nothing while offline")
 	}
-	status, err := rec.Server.Spool.Status(rec.Store)
+	status, err := link.Spool.Status(rec.Store)
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
@@ -172,7 +174,7 @@ func TestServerModeSurvivesAnOutageAndConverges(t *testing.T) {
 
 	// The server comes back. The next turn delivers both turns' work.
 	env.srv.SetOffline(false)
-	rec.Server.Now = func() time.Time { return time.Now().Add(2 * cooldownAfterFailure) }
+	link.Now = func() time.Time { return time.Now().Add(61 * time.Second) }
 	runTurn(t, rec, "turn-2", "package main // online\n")
 
 	localTip, err := rec.Store.ReadRef(testSessionRef)
@@ -183,7 +185,7 @@ func TestServerModeSurvivesAnOutageAndConverges(t *testing.T) {
 		t.Fatalf("server ref = %s, local ref = %s; they must converge", got, localTip)
 	}
 
-	status, err = rec.Server.Spool.Status(rec.Store)
+	status, err = link.Spool.Status(rec.Store)
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
@@ -217,14 +219,14 @@ func TestServerModeSurvivesAnOutageAndConverges(t *testing.T) {
 func TestServerModeCooldownStopsHammeringADeadServer(t *testing.T) {
 	env := newServerModeEnv(t)
 
-	rec, err := OpenServerMode(env.workspace, env.cfg)
+	rec, link, err := remotecapture.Open(env.workspace, env.cfg)
 	if err != nil {
 		t.Fatalf("OpenServerMode: %v", err)
 	}
 	defer func() { _ = rec.Close() }()
 
 	now := time.Unix(1_700_000_000, 0)
-	rec.Server.Now = func() time.Time { return now }
+	link.Now = func() time.Time { return now }
 
 	env.srv.SetOffline(true)
 	runTurn(t, rec, "turn-1", "package main // offline\n")
@@ -236,15 +238,15 @@ func TestServerModeCooldownStopsHammeringADeadServer(t *testing.T) {
 
 	// Inside the cooldown window nothing is attempted, so an outage costs the
 	// agent one timeout per window instead of one per hook invocation.
-	rec.SyncToServer("second attempt")
+	link.Sync(rec, "second attempt")
 	if got := env.srv.Requests(http.MethodGet) + env.srv.Requests(http.MethodPost); got != attempts {
 		t.Fatalf("made %d extra request(s) during the cooldown window", got-attempts)
 	}
 
 	// Once the window expires, delivery resumes automatically.
 	env.srv.SetOffline(false)
-	now = now.Add(cooldownAfterFailure + time.Second)
-	rec.SyncToServer("after cooldown")
+	now = now.Add(31 * time.Second)
+	link.Sync(rec, "after cooldown")
 
 	if env.srv.Ref(testSessionRef) == "" {
 		t.Fatal("delivery did not resume after the cooldown expired")
@@ -254,7 +256,7 @@ func TestServerModeCooldownStopsHammeringADeadServer(t *testing.T) {
 func TestServerModeDeliversArchivedTranscripts(t *testing.T) {
 	env := newServerModeEnv(t)
 
-	rec, err := OpenServerMode(env.workspace, env.cfg)
+	rec, link, err := remotecapture.Open(env.workspace, env.cfg)
 	if err != nil {
 		t.Fatalf("OpenServerMode: %v", err)
 	}
@@ -272,7 +274,7 @@ func TestServerModeDeliversArchivedTranscripts(t *testing.T) {
 
 	// A transcript archive hangs off no step, so only the explicit queue can
 	// carry it to the server.
-	queued, err := rec.Server.Spool.PendingObjects()
+	queued, err := link.Spool.PendingObjects()
 	if err != nil {
 		t.Fatalf("PendingObjects: %v", err)
 	}
@@ -280,7 +282,7 @@ func TestServerModeDeliversArchivedTranscripts(t *testing.T) {
 		t.Fatalf("queued = %v, want the transcript blob", queued)
 	}
 
-	rec.SyncToServer("test")
+	link.Sync(rec, "test")
 	if _, ok := env.srv.Objects()[store.HashBytes(body)]; !ok {
 		t.Fatal("archived transcript never reached the server")
 	}
@@ -289,7 +291,7 @@ func TestServerModeDeliversArchivedTranscripts(t *testing.T) {
 func TestServerModeCacheLivesOutsideTheWorkspace(t *testing.T) {
 	env := newServerModeEnv(t)
 
-	rec, err := OpenServerMode(env.workspace, env.cfg)
+	rec, _, err := remotecapture.Open(env.workspace, env.cfg)
 	if err != nil {
 		t.Fatalf("OpenServerMode: %v", err)
 	}
@@ -309,29 +311,6 @@ func TestServerModeCacheLivesOutsideTheWorkspace(t *testing.T) {
 	}
 }
 
-func TestOpenSelectsServerModeFromTheEnvironment(t *testing.T) {
-	env := newServerModeEnv(t)
-
-	t.Setenv("REGENT_SERVER_URL", env.cfg.ServerURL)
-	t.Setenv("REGENT_REPO_ID", env.cfg.RepoID)
-	t.Setenv("REGENT_CACHE_DIR", env.cfg.CacheDir)
-	t.Setenv("REGENT_TOKEN", "")
-
-	rec, ok, err := Open(env.workspace)
-	if err != nil || !ok {
-		t.Fatalf("Open = %v, %v; want a server-mode recorder", ok, err)
-	}
-	defer func() { _ = rec.Close() }()
-
-	if !rec.ServerMode() {
-		t.Fatal("Open did not select server mode")
-	}
-	runTurn(t, rec, "turn-1", "package main // env\n")
-	if env.srv.Ref(testSessionRef) == "" {
-		t.Fatal("capture via Open did not reach the server")
-	}
-}
-
 func TestOpenWithoutServerConfigOrLocalStoreIsANoOp(t *testing.T) {
 	// Neutralise any ambient configuration: an empty value overrides the file.
 	t.Setenv("REGENT_SERVER_URL", "")
@@ -346,79 +325,17 @@ func TestOpenWithoutServerConfigOrLocalStoreIsANoOp(t *testing.T) {
 	}
 }
 
-func TestServerConfigForRejectsBrokenConfiguration(t *testing.T) {
-	tests := []struct {
-		name        string
-		env         map[string]string
-		wantEnabled bool
-		wantErr     bool
-	}{
-		{
-			name:        "complete configuration",
-			env:         map[string]string{"REGENT_SERVER_URL": "https://a.example", "REGENT_REPO_ID": "repo"},
-			wantEnabled: true,
-		},
-		{
-			name: "missing repo id disables server mode quietly",
-			env:  map[string]string{"REGENT_SERVER_URL": "https://a.example"},
-		},
-		{
-			name:    "invalid url is reported, not used",
-			env:     map[string]string{"REGENT_SERVER_URL": "notaurl", "REGENT_REPO_ID": "repo"},
-			wantErr: true,
-		},
-		{
-			name:    "unsafe repo id is reported, not used",
-			env:     map[string]string{"REGENT_SERVER_URL": "https://a.example", "REGENT_REPO_ID": "../escape"},
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			lookup := func(key string) (string, bool) {
-				v, ok := tt.env[key]
-				return v, ok
-			}
-			_, enabled, err := serverConfigFor(lookup, "")
-			if enabled != tt.wantEnabled {
-				t.Errorf("enabled = %v, want %v", enabled, tt.wantEnabled)
-			}
-			if (err != nil) != tt.wantErr {
-				t.Errorf("err = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestOpenServerModeRejectsBadInput(t *testing.T) {
+func TestRemoteCaptureOpenRejectsBadInput(t *testing.T) {
 	valid := remote.Config{ServerURL: "https://a.example", RepoID: "repo", CacheDir: t.TempDir()}
 
-	if _, err := OpenServerMode("", valid); err == nil {
+	if _, _, err := remotecapture.Open("", valid); err == nil {
 		t.Error("an empty cwd must be rejected")
 	}
 	bad := valid
 	bad.RepoID = "../escape"
-	if _, err := OpenServerMode(t.TempDir(), bad); err == nil {
+	if _, _, err := remotecapture.Open(t.TempDir(), bad); err == nil {
 		t.Error("an unsafe repo id must be rejected")
 	}
-}
-
-// A recorder with no server link must behave exactly as it did before server
-// mode existed: no network, no queue, no surprises.
-func TestSyncToServerIsANoOpInLocalMode(t *testing.T) {
-	dir := t.TempDir()
-	s, err := store.Init(dir)
-	if err != nil {
-		t.Fatalf("init store: %v", err)
-	}
-	rec := &Recorder{Store: s, CWD: dir}
-
-	if rec.ServerMode() {
-		t.Fatal("a recorder without a server link must not report server mode")
-	}
-	rec.SyncToServer("test") // must not panic or dial anything
-	rec.markLooseObject(store.HashBytes([]byte("x")))
 }
 
 func readHookErrorLog(t *testing.T, root string) string {

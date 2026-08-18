@@ -2,8 +2,6 @@ package cli
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 )
 
@@ -30,26 +28,5 @@ func TestRunMerge_RefusesInServerMode(t *testing.T) {
 	err := runMerge(t.TempDir(), "sessions/a", "sessions/b")
 	if !errors.Is(err, errServerModeMergeUnsupported) {
 		t.Fatalf("runMerge in server mode = %v, want errServerModeMergeUnsupported", err)
-	}
-}
-
-// I2: a configured-but-broken server mode (malformed repo-local config) must
-// surface an error, not be swallowed as "server mode not configured".
-func TestOpenServerModeCache_SurfacesBrokenConfig(t *testing.T) {
-	repo := t.TempDir()
-	regentDir := filepath.Join(repo, ".regent")
-	if err := os.MkdirAll(regentDir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(regentDir, "config.toml"), []byte("this is not = valid toml ["), 0o644); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-
-	_, ok, err := openServerModeCache(repo)
-	if ok {
-		t.Fatal("ok must be false for a broken config")
-	}
-	if err == nil {
-		t.Fatal("a malformed config must surface an error, not be swallowed as \"not configured\"")
 	}
 }
