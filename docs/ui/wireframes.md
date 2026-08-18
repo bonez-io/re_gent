@@ -10,13 +10,12 @@ Primary test project: `girlfriend-assistant`
 
 ```mermaid
 flowchart LR
-    Projects["Projects"] --> Overview["Project overview"]
-    Overview --> Sessions["Sessions"]
+    Projects["Projects"] --> Sessions["Project sessions"]
     Sessions --> Step["Step detail"]
-    Overview --> Files["Historical files"]
+    Sessions --> Files["Historical files"]
     Files --> Blame["Line blame"]
     Blame --> Step
-    Overview --> Health["Sync health"]
+    Sessions --> Health["Sync health"]
 ```
 
 The hierarchy follows re_gent's domain rather than Git hosting conventions:
@@ -34,7 +33,7 @@ The hierarchy follows re_gent's domain rather than Git hosting conventions:
 | Route | Purpose |
 |---|---|
 | `/projects` | Discover projects available to the current server/user. |
-| `/projects/:projectId` | Project overview: sync health, recent activity, people, sessions. |
+| `/projects/:projectId` | Redirect to the project's session history. |
 | `/projects/:projectId/sessions` | Filterable session list in canonical activity order. |
 | `/projects/:projectId/sessions/:sessionId` | Session timeline. |
 | `/projects/:projectId/steps/:stepHash` | Complete conversation, causes, effects, usage, and changed files. |
@@ -48,30 +47,28 @@ can be copied, reopened, and reviewed. Filters use search parameters.
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────────┐
-│ r  re_gent   [ girlfriend-assistant ▾ ]       ● Self-hosted · Connected  │
+│ r  re_gent   girlfriend-assistant / sessions        Search   ● Connected │
 ├─────────────────┬──────────────────────────────────────────────────────────┤
-│ Explore         │ Projects / girlfriend-assistant                         │
+│ Project         │ Sessions                         Branch: main   Filter   │
+│ girlfriend-     ├──────────────────────────────────────────────────────────┤
+│ assistant    ▾  │ Today                                                   │
 │                 │                                                         │
-│ ▣ Overview      │ girlfriend-assistant                  ● Synced 34s ago  │
-│ ⌁ Sessions      │ Agent activity, decisions, and file provenance.         │
-│ ↳ Step detail   │                                                         │
-│ ⌘ Files & blame │ ┌───────────┐ ┌───────────┐ ┌──────────────┐           │
-│                 │ │ Sessions  │ │ Steps     │ │ Contributors │           │
-│                 │ │ 12        │ │ 186       │ │ 3            │           │
-│                 │ └───────────┘ └───────────┘ └──────────────┘           │
-│ Server          │                                                         │
-│ localhost:7654  │ ┌────────────────────────────┐ ┌────────────────────┐   │
-│ Read-only       │ │ Recent activity            │ │ People             │   │
-│                 │ │ Shay · Codex · 2m          │ │ Shay          2m   │   │
-│                 │ │ Arad · Claude Code · 18m   │ │ Arad         18m   │   │
-│                 │ │ Amir · Codex · 1h          │ │ Amir          1h   │   │
-│                 │ └────────────────────────────┘ └────────────────────┘   │
+│ ● Sessions      │ SL  Refine reminder scheduling                         │
+│   Step context  │     Shay · 2m       Codex   gpt-5.6        42 steps  › │
+│   Files & blame │ ─────────────────────────────────────────────────────── │
+│                 │ AA  Add relationship context                            │
+│ Server          │     Arad · 18m      Claude  Sonnet         28 steps  › │
+│ localhost:7654  │                                                         │
+│ Self-hosted     │ Yesterday                                               │
+│                 │ AL  Document onboarding prompt                          │
+│                 │     Amir · 1h       Codex   gpt-5.6         9 steps  › │
 └─────────────────┴──────────────────────────────────────────────────────────┘
 ```
 
 The top bar owns deployment/server context and project selection. The left rail
 owns project-local navigation. Screen-local filters and display controls stay
-inside the content area.
+inside the content area. The project's primary screen is its history, not a
+dashboard of counts already visible in that history.
 
 ## Session and step flow
 
@@ -123,22 +120,20 @@ the whole application to scroll.
 ```text
 ┌──────────────────────────────────┐
 │ r re_gent          ● Connected  │
-│ [ girlfriend-assistant       ▾ ]│
+│ girlfriend-assistant         ▾  │
 ├──────────────────────────────────┤
-│ Overview  Sessions  Step  Files →│
+│ Sessions  Step context  Files → │
 ├──────────────────────────────────┤
-│ girlfriend-assistant             │
-│ ● Synced 34s ago                 │
+│ Sessions       main ▾   Filter  │
 │                                  │
-│ Sessions 12      Steps 186       │
-│ Contributors 3                   │
-│                                  │
-│ Recent activity                  │
-│ Shay · Refined reminder flow     │
-│ 2 min ago                        │
+│ Today                            │
+│ SL  Refine reminder scheduling  │
+│     Shay · 2m                    │
+│     Codex · gpt-5.6 · 42 steps  │
 │ ──────────────────────────────── │
-│ Arad · Added context extraction  │
-│ 18 min ago                       │
+│ AA  Add relationship context    │
+│     Arad · 18m                   │
+│     Claude · Sonnet · 28 steps  │
 └──────────────────────────────────┘
 ```
 
@@ -168,12 +163,35 @@ Every data route implements the following states before it is considered done:
 
 ## Visual direction
 
-- Clean developer-tool density: closer to GitHub's code/history surfaces than
-  to a marketing dashboard.
-- re_gent purple is the product accent, not a background wash. Blue structures
-  navigation and links; green/amber/red remain semantic.
+- Use [Entire](https://entire.io/) as the hierarchy reference: a dense history
+  surface with repository context, search, filters, and scan-friendly rows.
+- Use [AI CSS](https://www.aicss.dev/) and [Beautiful
+  UI](https://www.beautifului.dev/) as component-craft references for agent
+  messages, reasoning, tools, diffs, code, and task state.
+- re_gent is a developer history tool, not a marketing or metrics dashboard.
+  Prefer flat rows, dividers, gutters, and whitespace over nested cards.
+- re_gent purple marks provenance and selection. Green, amber, and red remain
+  semantic; neutral surfaces carry most of the interface.
 - System sans for interface text; monospace only for hashes, ids, paths, tools,
   and source code.
 - Light and dark themes share the same hierarchy and meet WCAG 2.2 AA contrast.
 - Avoid decorative metrics, gradients, oversized icons, and fictional status.
   Every visible value must be returned by the API or be clearly derived from it.
+
+## Storybook review contract
+
+The foundation is approved as components before routes are assembled. The
+initial review matrix is:
+
+- `AppShell`: desktop, narrow, long project name, disconnected.
+- `SessionRow`: Codex, Claude, OpenCode, missing author/model, long title.
+- `SessionList`: populated, loading, empty, unreachable.
+- `StepTrace`: prompt, assistant, collapsed reasoning, expanded tools, failed
+  tool, partial legacy data.
+- `FileChangeRow`: added, modified, deleted, renamed, binary.
+- `CodeViewer` and `BlameGutter`: selected provenance, missing provenance,
+  long lines, empty file, oversized file.
+- Feedback components in light and dark themes.
+
+Stories are the visual, interaction, responsive, and accessibility review gate.
+Only approved variants are consumed by product routes.

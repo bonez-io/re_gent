@@ -20,11 +20,12 @@ The first stack is:
 | Build tool | Vite | Fast local HMR and a static production build that can be served by the Go server. No Node runtime is required in production. |
 | Routing | React Router, data mode | Stable deep links and route-level pending/error boundaries without adopting an SSR framework. |
 | Server state | TanStack Query | Owns request lifecycle, cache, polling, retry, and offline/error states. URL state remains in the router. |
-| Styling | Tailwind CSS with re_gent tokens | A small, consistent visual vocabulary with zero runtime styling. Tokens, not arbitrary one-off colors, define the product. |
+| Styling | Tailwind CSS with owned re_gent tokens and components | Tokens, documented variants, and reviewed stories prevent one-off styling while keeping the implementation portable. |
 | Accessible primitives | Radix Primitives, adopted per component | Keyboard/focus/ARIA behavior for complex controls without imposing a visual identity. Prefer native HTML for simple controls. |
 | Icons | Lucide | Small, consistent open-source icon set. Every icon-only control still needs an accessible name. |
 | API contract | OpenAPI 3.1 + generated TypeScript types + `openapi-fetch` | The Go server and browser share one versioned contract instead of maintaining parallel handwritten types. |
-| Unit/component tests | Vitest + Testing Library | Fast tests through the same Vite transform pipeline, asserted through user-visible behavior. |
+| Component workshop | Storybook for React + Vite | The design system is reviewable in isolation before it is assembled into product routes. |
+| Unit/component tests | Storybook Vitest and accessibility addons + Testing Library | Stories become executable interaction, accessibility, and visual contracts instead of a separate showcase. |
 | Browser tests | Playwright + axe | Real desktop/mobile flows, visual regression, and automated accessibility checks. |
 | Package manager | pnpm, pinned by `packageManager` | Reproducible installs and a small dependency store. |
 | Runtime baseline | Node 24 LTS for development/CI | Stable contributor and CI baseline; production remains the Go server plus static assets. |
@@ -40,6 +41,40 @@ Libraries are added only when a product requirement needs them. In particular:
   an editor and does not need Monaco.
 - Adopt Radix primitives individually. There is no generic component kit whose
   defaults become the re_gent design language by accident.
+
+## Design-system boundary
+
+The UI has an owned re_gent design system. [Entire](https://entire.io/) is the
+reference for information hierarchy and history density. [AI
+CSS](https://www.aicss.dev/) and [Beautiful UI](https://www.beautifului.dev/)
+are references for the craft of agent-native interactions such as reasoning,
+tool calls, diffs, code, and task state. They are not a generic theme to paste
+over the application.
+
+- Copy third-party source only when its license is verified and retained.
+  Otherwise implement original components from the observed interaction and
+  hierarchy.
+- Use purple for provenance, selection, and identity. Reserve green, amber,
+  and red for semantic state.
+- Prefer rows, gutters, dividers, type, and whitespace for hierarchy. A card is
+  for a genuinely bounded object, not every section of a page.
+- Storybook is mandatory from the first component pull request. Product routes
+  consume reviewed stories; they do not invent new visual variants inline.
+
+The first catalog is intentionally small:
+
+```text
+Foundation    Color, Typography, Spacing, Icons
+Navigation    AppShell, ProjectSwitcher, ProjectNav
+History       SessionRow, SessionList, StepTrace
+Conversation  Message, ReasoningDisclosure, ToolCallGroup, ToolCallRow
+Files         FileChangeRow, CodeViewer, BlameGutter
+Feedback      Loading, Empty, Error, ConnectionStatus
+```
+
+Each data-bearing component includes populated, loading, empty, long-content,
+partial-legacy, and error stories where applicable. Automated accessibility
+violations fail CI.
 
 ## Repository boundary
 
