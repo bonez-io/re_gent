@@ -37,7 +37,7 @@ type connectParams struct {
 // ConnectCmd returns the cobra command for `rgt connect`.
 func ConnectCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "connect [server-url]",
+		Use:   "connect [server-url-or-ssh-target]",
 		Short: "Connect this project to a re_gent server and wire agent hooks",
 		Long: `Connect this project to a re_gent server.
 
@@ -68,9 +68,37 @@ connect replaces setup, which did the same job with different answers.`,
 			if len(args) > 0 {
 				explicit = args[0]
 			}
-			serverURL, err := resolveServerURL(explicit)
-			if err != nil {
-				return err
+			// Do not contact or provision a host when no project was named. This
+			// retains connect's promise to touch nothing outside a project.
+			if !isProjectDir(cwd) {
+				serverURL, resolveErr := resolveServerURL(explicit)
+				if resolveErr != nil {
+					return resolveErr
+				}
+				return notAProject(cwd, serverURL)
+			}
+			var serverURL string
+			if explicit != "" && !isServiceURL(explicit) {
+				override, _ := cmd.Flags().GetString("url")
+				yes, _ := cmd.Flags().GetBool("yes")
+				// This phase is deliberately before isProjectDir/connectHere: an
+				// unreachable public URL must never result in a local .regent.
+				serverURL, err = prepareMachine(explicit, override, yes, cmd.InOrStdin(), cmd.OutOrStdout(), systemBootstrapper{})
+				if err != nil {
+					return err
+				}
+			} else {
+				serverURL, err = resolveServerURL(explicit)
+				if err != nil {
+					return err
+				}
+				serverURL, err = normalizeServiceURL(serverURL)
+				if err != nil {
+					return err
+				}
+				if !(systemBootstrapper{}).Healthy(serverURL) {
+					return fmt.Errorf("server %s is unreachable at /healthz; URL form only binds and never provisions", serverURL)
+				}
 			}
 
 			// An identity supplied here is checked before anything is written
@@ -85,13 +113,7 @@ connect replaces setup, which did the same job with different answers.`,
 
 			noGitHook, _ := cmd.Flags().GetBool("no-git-hook")
 
-			// Standing inside a project connects it — the common case, and the
-			// one the installer takes.
-			if isProjectDir(cwd) {
-				return connectHere(serverURL, cwd, explicitID, noGitHook, cmd.OutOrStdout(), isTerminal(os.Stdin))
-			}
-			// Anywhere else, say so and stop. See notAProject.
-			return notAProject(cwd, serverURL)
+			return connectHere(serverURL, cwd, explicitID, noGitHook, cmd.OutOrStdout(), isTerminal(os.Stdin))
 		},
 	}
 	// Derivation is a guess and it will be wrong for someone: a fork's remote,
@@ -104,6 +126,8 @@ connect replaces setup, which did the same job with different answers.`,
 	// remembering `rgt sync`. This is the per-run exit; REGENT_GIT_SYNC_ON_PUSH=0
 	// is the per-machine one, and `git push --no-verify` is Git's own.
 	cmd.Flags().Bool("no-git-hook", false, "do not install the Git pre-push hook that syncs queued history on git push")
+	cmd.Flags().String("url", "", "public http(s) URL to prove and bind when provisioning an SSH target")
+	cmd.Flags().Bool("yes", false, "provision an SSH target without asking for confirmation")
 	return cmd
 }
 

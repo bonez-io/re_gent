@@ -82,7 +82,6 @@ func newRootCommand() *cobra.Command {
 	rootCmd.AddCommand(cli.SessionsCmd())
 	rootCmd.AddCommand(cli.RewindCmd())
 	rootCmd.AddCommand(cli.RepairCmd())
-	rootCmd.AddCommand(cli.ServeCmd())
 	rootCmd.AddCommand(cli.SyncCmd())
 	rootCmd.AddCommand(cli.HookCmd())
 	rootCmd.AddCommand(cli.GitHookCmd())
@@ -105,6 +104,8 @@ func newRootCommand() *cobra.Command {
 		"There is no authentication to sign in to: the server performs no authentication,\nand a sign-in command implied otherwise.\n\n  rgt connect <server-url>   connect a project"))
 	rootCmd.AddCommand(removedCmd("whoami",
 		"Identity comes from your git config, not from a sign-in.\n\n  git config user.name\n  git config user.email\n  rgt doctor                 check what re_gent will record"))
+	rootCmd.AddCommand(removedCmd("serve",
+		"The server now has its own operator binary.\n\n  regent-server --addr 0.0.0.0:7654 --data /data"))
 
 	// Disable alphabetical sorting to preserve our order
 	rootCmd.CompletionOptions.DisableDefaultCmd = false
