@@ -1,4 +1,13 @@
 import type { BlameResponse, CreateRepoResponse, FilesResponse, LogResponse, LogStep, RepoListResponse, SessionsResponse, StatusResponse, TranscriptResponse } from './types'
+import {
+  demoRepoId,
+  mockBlameResponse,
+  mockFilesResponse,
+  mockLogResponse,
+  mockSessionsResponse,
+  mockStatusResponse,
+  mockTranscriptResponse,
+} from '../mocks/regent'
 
 export class ApiError extends Error {
   status: number
@@ -33,20 +42,26 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 const repoPath = (repoId: string) => `/${encodeURIComponent(repoId)}/api`
+const demoOnly = (repoId: string) => repoId === demoRepoId
+const showLocalDemoRepo = import.meta.env.DEV && !import.meta.env.STORYBOOK
 
 export const api = {
-  listRepos: () => request<RepoListResponse>('/repos'),
+  listRepos: async () => {
+    const repos = await request<RepoListResponse>('/repos')
+    return { repos: showLocalDemoRepo ? [demoRepoId, ...repos.repos.filter((repo) => repo !== demoRepoId)] : repos.repos }
+  },
   createRepo: (repoId: string) => request<CreateRepoResponse>('/repos', { method: 'POST', body: JSON.stringify({ repo_id: repoId }) }),
-  sessions: (repoId: string) => request<SessionsResponse>(`${repoPath(repoId)}/sessions`),
-  log: (repoId: string, sessionId: string) => request<LogResponse>(`${repoPath(repoId)}/log?session=${encodeURIComponent(sessionId)}&limit=500`),
-  transcript: (repoId: string, sessionId: string) => request<TranscriptResponse>(`${repoPath(repoId)}/transcript?session=${encodeURIComponent(sessionId)}`),
-  status: (repoId: string) => request<StatusResponse>(`${repoPath(repoId)}/status`),
+  sessions: (repoId: string) => demoOnly(repoId) ? Promise.resolve(mockSessionsResponse) : request<SessionsResponse>(`${repoPath(repoId)}/sessions`),
+  log: (repoId: string, sessionId: string) => demoOnly(repoId) ? Promise.resolve({ ...mockLogResponse, session_id: sessionId }) : request<LogResponse>(`${repoPath(repoId)}/log?session=${encodeURIComponent(sessionId)}&limit=500`),
+  transcript: (repoId: string, sessionId: string) => demoOnly(repoId) ? Promise.resolve({ ...mockTranscriptResponse, session: mockSessionsResponse.sessions.find((session) => session.session_id === sessionId) || mockTranscriptResponse.session }) : request<TranscriptResponse>(`${repoPath(repoId)}/transcript?session=${encodeURIComponent(sessionId)}`),
+  status: (repoId: string) => demoOnly(repoId) ? Promise.resolve(mockStatusResponse) : request<StatusResponse>(`${repoPath(repoId)}/status`),
   step: (repoId: string, hash: string) => request<LogStep>(`${repoPath(repoId)}/steps/${encodeURIComponent(hash)}`),
   files: (repoId: string, scope: { step?: string; session?: string } = {}) => {
+    if (demoOnly(repoId)) return Promise.resolve(mockFilesResponse)
     const query = new URLSearchParams()
     if (scope.step) query.set('step', scope.step)
     else if (scope.session) query.set('session', scope.session)
     return request<FilesResponse>(`${repoPath(repoId)}/files${query.size ? `?${query}` : ''}`)
   },
-  blame: (repoId: string, step: string, path: string) => request<BlameResponse>(`${repoPath(repoId)}/blame?step=${encodeURIComponent(step)}&path=${encodeURIComponent(path)}`),
+  blame: (repoId: string, step: string, path: string) => demoOnly(repoId) ? Promise.resolve({ ...mockBlameResponse, step_hash: step, path }) : request<BlameResponse>(`${repoPath(repoId)}/blame?step=${encodeURIComponent(step)}&path=${encodeURIComponent(path)}`),
 }

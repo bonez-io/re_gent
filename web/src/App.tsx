@@ -8,12 +8,14 @@ import { ConversationTranscript } from './components/ConversationTranscript'
 import { FileTree } from './components/FileTree'
 import { ProjectSidebar, type RegentView } from './components/ProjectSidebar'
 import { SessionRow } from './components/SessionRow'
+import { TeamDashboard } from './components/TeamDashboard'
+import { demoRepoId } from './mocks/regent'
 
 const defaultRepo = import.meta.env.VITE_REGENT_REPO_ID as string | undefined
 const connectServerUrl = ((import.meta.env.VITE_REGENT_SERVER_URL as string | undefined) || (import.meta.env.PROD ? window.location.origin : 'http://127.0.0.1:7654')).replace(/\/+$/, '')
 const connectCommand = `rgt connect ${connectServerUrl}`
 const short = (value?: string) => value ? value.slice(0, 8) : '—'
-const viewFor = (path: string): RegentView => path.endsWith('/steps') ? 'steps' : path.endsWith('/files') ? 'files' : path.endsWith('/sync') ? 'sync' : 'sessions'
+const viewFor = (path: string): RegentView => path.endsWith('/team') ? 'team' : path.endsWith('/steps') ? 'steps' : path.endsWith('/files') ? 'files' : path.endsWith('/sync') ? 'sync' : 'sessions'
 const pathFor = (repoId: string, view: RegentView) => `/repos/${encodeURIComponent(repoId)}/${view}`
 
 function Pending({ label = 'Loading captured work…' }: { label?: string }) {
@@ -45,6 +47,7 @@ function RepoHome() {
   if (repos.isPending) return <main className="flex min-h-screen bg-page text-ink"><Pending label="Connecting to re_gent…" /></main>
   if (repos.error) return <main className="flex min-h-screen bg-page text-ink"><Problem error={repos.error} onRetry={() => repos.refetch()} /></main>
   if (defaultRepo && repos.data.repos.includes(defaultRepo)) return <Navigate replace to={`/repos/${defaultRepo}/sessions`} />
+  if (repos.data.repos.includes(demoRepoId)) return <Navigate replace to={`/repos/${demoRepoId}/sessions`} />
   if (repos.data.repos.length === 1) return <Navigate replace to={`/repos/${repos.data.repos[0]}/sessions`} />
   const hasRepos = repos.data.repos.length > 0
   return <main className="flex min-h-screen items-center justify-center bg-page p-4 text-ink">
@@ -79,14 +82,14 @@ function RepoHome() {
 
 function Topbar({ repoId }: { repoId: string }) {
   const active = viewFor(useLocation().pathname)
-  const labels: Record<RegentView, string> = { sessions: 'Sessions', steps: 'Steps', files: 'Files', sync: 'Server status' }
+  const labels: Record<RegentView, string> = { sessions: 'Sessions', team: 'Team', steps: 'Steps', files: 'Files', sync: 'Server status' }
   return <header className="flex h-11 shrink-0 items-center gap-2 border-b border-line bg-canvas px-3"><span className="text-[11.5px] text-ink-3">{repoId}</span><span className="text-ink-3/50">/</span><span className="text-[12.5px] font-medium">{labels[active]}</span><span className="ml-auto flex items-center gap-1.5 text-[11px] text-ink-3"><span className="size-1.5 rounded-full bg-green" />local server</span></header>
 }
 
 function Shell() {
   const { repoId = '' } = useParams(); const navigate = useNavigate(); const location = useLocation(); const active = viewFor(location.pathname)
   const sessions = useQuery({ queryKey: ['sessions', repoId], queryFn: () => api.sessions(repoId), retry: false })
-  return <div className="flex h-screen min-h-[560px] overflow-hidden bg-page text-ink"><div className="shrink-0 max-sm:hidden"><ProjectSidebar project={repoId} conversationCount={sessions.data?.total_sessions ?? 0} active={active} onProjectClick={() => navigate('/')} onNavigate={(view) => navigate(pathFor(repoId, view))} /></div><main className="flex min-w-0 flex-1 flex-col"><Topbar repoId={repoId} /><div key={location.pathname} className="regent-view flex min-h-0 flex-1"><Routes><Route path="sessions" element={<SessionsScreen repoId={repoId} />} /><Route path="sessions/:sessionId" element={<SessionsScreen repoId={repoId} />} /><Route path="conversations" element={<LegacySessionRedirect repoId={repoId} />} /><Route path="conversations/:sessionId" element={<LegacySessionRedirect repoId={repoId} />} /><Route path="steps" element={<StepsScreen repoId={repoId} />} /><Route path="files" element={<FilesScreen repoId={repoId} />} /><Route path="sync" element={<StatusScreen repoId={repoId} />} /><Route index element={<Navigate replace to="sessions" />} /></Routes></div><nav className="hidden h-11 shrink-0 items-center justify-around border-t border-line bg-canvas max-sm:flex">{(['sessions', 'steps', 'files', 'sync'] as RegentView[]).map((item) => <button key={item} onClick={() => navigate(pathFor(repoId, item))} className={`px-2 text-[11px] capitalize ${active === item ? 'text-accent-ink' : 'text-ink-3'}`}>{item}</button>)}</nav></main></div>
+  return <div className="flex h-screen min-h-[560px] overflow-hidden bg-page text-ink"><div className="shrink-0 max-sm:hidden"><ProjectSidebar project={repoId} conversationCount={sessions.data?.total_sessions ?? 0} active={active} onProjectClick={() => navigate('/')} onNavigate={(view) => navigate(pathFor(repoId, view))} /></div><main className="flex min-w-0 flex-1 flex-col"><Topbar repoId={repoId} /><div key={location.pathname} className="regent-view flex min-h-0 flex-1"><Routes><Route path="sessions" element={<SessionsScreen repoId={repoId} />} /><Route path="sessions/:sessionId" element={<SessionsScreen repoId={repoId} />} /><Route path="conversations" element={<LegacySessionRedirect repoId={repoId} />} /><Route path="conversations/:sessionId" element={<LegacySessionRedirect repoId={repoId} />} /><Route path="team" element={<TeamDashboard repoId={repoId} />} /><Route path="steps" element={<StepsScreen repoId={repoId} />} /><Route path="files" element={<FilesScreen repoId={repoId} />} /><Route path="sync" element={<StatusScreen repoId={repoId} />} /><Route index element={<Navigate replace to="sessions" />} /></Routes></div><nav className="hidden h-11 shrink-0 items-center justify-around border-t border-line bg-canvas max-sm:flex">{(['sessions', 'team', 'steps', 'files', 'sync'] as RegentView[]).map((item) => <button key={item} onClick={() => navigate(pathFor(repoId, item))} className={`px-2 text-[11px] capitalize ${active === item ? 'text-accent-ink' : 'text-ink-3'}`}>{item}</button>)}</nav></main></div>
 }
 
 function LegacySessionRedirect({ repoId }: { repoId: string }) {
