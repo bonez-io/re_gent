@@ -1,26 +1,4 @@
-import type { FileChange, ToolCall } from '../components/ToolCallGroup'
-
-export type Conversation = {
-  id: string
-  title: string
-  author?: string
-  agent?: string
-  model?: string
-  branch: string
-  steps: number
-  files: number
-  relativeTime: string
-  dateGroup: 'Today' | 'Yesterday' | 'Earlier'
-  status?: 'capturing' | 'complete' | 'legacy'
-}
-
-export type TranscriptEntry =
-  | { type: 'user'; id: string; at: string; content: string }
-  | { type: 'assistant'; id: string; at: string; content: string }
-  | { type: 'reasoning'; id: string; at: string; duration: number; lines: string[] }
-  | { type: 'tools'; id: string; at: string; calls: ToolCall[]; files?: FileChange[] }
-  | { type: 'code'; id: string; at: string; filename: string; language: string; code: string }
-  | { type: 'step'; id: string; at: string; hash: string; tree: string; turn: string; tokens: number; files: number }
+import type { Conversation, TranscriptEntry } from '../api/types'
 
 export const conversations: Conversation[] = [
   { id: 'codex:01JZQ8MX7D', title: 'Stabilize reminder scheduling', author: 'Shay Livne', agent: 'Codex', model: 'gpt-5.6', branch: 'main', steps: 42, files: 7, relativeTime: '2m', dateGroup: 'Today', status: 'capturing' },

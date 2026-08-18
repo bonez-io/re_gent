@@ -498,6 +498,7 @@ pushes, or changes a source repository's Git remotes.
 
 **Quick Start:**
 - [QUICK_START.md](.github/QUICK_START.md) — 5-minute setup guide
+- [UI development](docs/ui-development.md) — run the server and real-data session explorer locally
 - [Good first issues](https://github.com/regent-vcs/regent/labels/good%20first%20issue)
 
 **Before opening a PR:**

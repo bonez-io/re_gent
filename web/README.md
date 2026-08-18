@@ -14,6 +14,23 @@ pnpm dev
 
 The app is available at <http://localhost:5173>.
 
+The development server proxies the repository registry and repo-scoped API to
+`http://127.0.0.1:7654`. Override it with `VITE_REGENT_SERVER_URL`; set
+`VITE_REGENT_REPO_ID` to skip the repository picker when that repository is
+registered. `VITE_REGENT_TOKEN` adds a bearer token for protected servers.
+
+Runtime routes are repository-scoped:
+
+- `/repos/:repoId/conversations`
+- `/repos/:repoId/conversations/:sessionId`
+- `/repos/:repoId/steps`
+- `/repos/:repoId/files`
+- `/repos/:repoId/sync`
+
+The runtime reads the real Go server API. Storybook owns the curated fixture
+responses in `.storybook/msw-handlers.ts`; application code does not import
+those fixtures.
+
 ## Component review
 
 ```sh

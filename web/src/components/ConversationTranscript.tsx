@@ -1,4 +1,4 @@
-import type { TranscriptEntry } from '../mocks/regent'
+import type { TranscriptEntry } from '../api/types'
 import { CodeBlock } from './CodeBlock'
 import { StepMarker } from './StepMarker'
 import { ThinkingReasoning } from './ThinkingReasoning'

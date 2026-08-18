@@ -1,4 +1,4 @@
-import type { Conversation } from '../mocks/regent'
+import type { Conversation } from '../api/types'
 
 export type SessionRowProps = Conversation & { selected?: boolean; onClick?: () => void }
 
