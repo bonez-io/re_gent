@@ -47,6 +47,19 @@ func putStep(t *testing.T, ts *httptest.Server, repo string, step store.Step) st
 	return h
 }
 
+func putTree(t *testing.T, ts *httptest.Server, repo string, entries ...store.TreeEntry) store.Hash {
+	t.Helper()
+	data, err := json.Marshal(store.Tree{Entries: entries})
+	if err != nil {
+		t.Fatalf("marshal tree: %v", err)
+	}
+	status, h := putObject(t, ts, repo, data)
+	if status != http.StatusCreated && status != http.StatusOK {
+		t.Fatalf("PUT tree: status %d", status)
+	}
+	return h
+}
+
 // TestAPISessionsReconstructsTitleAndMetadata builds a two-step session whose
 // earliest step carries a known user prompt and asserts /api/sessions returns
 // the session with the right title, agent id, step count, and last activity.
@@ -392,5 +405,229 @@ func TestAPIUnknownRepoIs404(t *testing.T) {
 	_, _, ts := newTestServer(t)
 	if status, _ := getAPI(t, ts, "/ghost/api/sessions", ""); status != http.StatusNotFound {
 		t.Fatalf("GET /ghost/api/sessions: status %d, want 404", status)
+	}
+}
+
+func TestAPISessionsNewestActivityFirst(t *testing.T) {
+	_, _, ts := newTestServer(t)
+	const repo = "alpha"
+	newestSecond := time.Date(2026, 8, 2, 11, 0, 0, 0, time.UTC).UnixNano()
+
+	for _, fixture := range []struct {
+		id string
+		ts int64
+	}{
+		{id: "codex--older", ts: time.Date(2026, 8, 2, 9, 0, 0, 0, time.UTC).UnixNano()},
+		{id: "z-subsecond-newest", ts: newestSecond + 200},
+		{id: "b-tie", ts: newestSecond + 100},
+		{id: "a-tie", ts: newestSecond + 100},
+	} {
+		h := putStep(t, ts, repo, store.Step{
+			Tree: "tree", SessionID: fixture.id, Origin: "test", TimestampNanos: fixture.ts,
+		})
+		if code, _ := postRef(t, ts, repo, "sessions/"+fixture.id, "", string(h)); code != http.StatusOK {
+			t.Fatalf("set %s ref: status %d", fixture.id, code)
+		}
+	}
+
+	status, body := getAPI(t, ts, "/alpha/api/sessions", "")
+	if status != http.StatusOK {
+		t.Fatalf("status %d: %s", status, body)
+	}
+	var got sessionsResponse
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Sessions) != 4 ||
+		got.Sessions[0].SessionID != "z-subsecond-newest" ||
+		got.Sessions[1].SessionID != "a-tie" ||
+		got.Sessions[2].SessionID != "b-tie" ||
+		got.Sessions[3].SessionID != "codex--older" {
+		t.Fatalf("sessions order = %#v, want newest activity then session-id tie-break", got.Sessions)
+	}
+}
+
+func TestAPIStepRequiresFullHash(t *testing.T) {
+	_, _, ts := newTestServer(t)
+	createRepo(t, ts, "alpha")
+	for _, endpoint := range []string{
+		"/alpha/api/steps/deadbeef",
+		"/alpha/api/files?step=deadbeef",
+		"/alpha/api/blame?step=deadbeef&path=README.md",
+	} {
+		status, body := getAPI(t, ts, endpoint, "")
+		if status != http.StatusBadRequest {
+			t.Errorf("GET %s = %d, want 400 (body %s)", endpoint, status, body)
+		}
+	}
+}
+
+func TestReadAPIRealConversationFilesStepAndBlame(t *testing.T) {
+	_, _, ts := newTestServer(t)
+	const repo = "girlfriend-assistant"
+	const sessionID = "codex--mvp"
+	const filePath = "internal/reminders.go"
+	const capturedHostPath = "/Users/shay/Projects/girlfriend-assistant/internal/reminders.go"
+
+	rootContent := []byte("old reminder\nshared line\n")
+	_, rootBlob := putObject(t, ts, repo, rootContent)
+	rootTree := putTree(t, ts, repo, store.TreeEntry{Path: filePath, Blob: rootBlob, Mode: 0o644})
+	rootConvData := []byte(`[{"type":"user","text":"stabilize reminders","ts":1785661200000000000},{"type":"assistant","text":"I will inspect the scheduler.","ts":1785661201000000000}]`)
+	_, rootConv := putObject(t, ts, repo, rootConvData)
+	rootTS := time.Date(2026, 8, 2, 9, 0, 0, 0, time.UTC).UnixNano()
+	rootHash := putStep(t, ts, repo, store.Step{
+		Tree: rootTree, Conversation: rootConv, SessionID: sessionID, Origin: "codex",
+		AgentID: "codex-agent", TurnID: "turn-1", TimestampNanos: rootTS,
+		Author: store.Author{Name: "Shay", Email: "shay@example.com"},
+	})
+
+	tipContent := []byte("new reminder\nshared line\n")
+	_, tipBlob := putObject(t, ts, repo, tipContent)
+	tipTree := putTree(t, ts, repo, store.TreeEntry{Path: filePath, Blob: tipBlob, Mode: 0o644})
+	argsData := []byte(`{"file_path":"` + capturedHostPath + `","old_string":"old reminder","new_string":"new reminder"}`)
+	_, argsHash := putObject(t, ts, repo, argsData)
+	resultData := []byte(`{"ok":true}`)
+	_, resultHash := putObject(t, ts, repo, resultData)
+	tipConvData := []byte(fmt.Sprintf(`[
+		{"type":"reasoning","text":"The boundary is wrong.","ts":1785664800000000000},
+		{"type":"tool_call","tool_name":"Edit","tool_use_id":"edit-1","tool_input":%q,"ts":1785664801000000000},
+		{"type":"tool_result","tool_name":"Edit","tool_use_id":"edit-1","tool_output":%q,"ts":1785664802000000000},
+		{"type":"assistant","text":"The reminder boundary is fixed.","ts":1785664803000000000}
+	]`, argsHash, resultHash))
+	_, tipConv := putObject(t, ts, repo, tipConvData)
+	tipTS := time.Date(2026, 8, 2, 10, 0, 0, 0, time.UTC).UnixNano()
+	tipHash := putStep(t, ts, repo, store.Step{
+		Parent: rootHash, Tree: tipTree, Conversation: tipConv, SessionID: sessionID,
+		Origin: "codex", AgentID: "codex-agent", TurnID: "turn-2", TimestampNanos: tipTS,
+		Causes: []store.Cause{{ToolUseID: "edit-1", ToolName: "Edit", ArgsBlob: argsHash, ResultBlob: resultHash}},
+		Usage:  &store.Usage{InputTokens: 100, OutputTokens: 20, APICalls: 1},
+	})
+	if code, _ := postRef(t, ts, repo, "sessions/"+sessionID, "", string(tipHash)); code != http.StatusOK {
+		t.Fatalf("set session ref: status %d", code)
+	}
+
+	t.Run("status", func(t *testing.T) {
+		status, body := getAPI(t, ts, "/"+repo+"/api/status", "")
+		if status != http.StatusOK {
+			t.Fatalf("status %d: %s", status, body)
+		}
+		var got repositoryStatus
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Status != "ok" || got.Service.Name != "re_gent" || got.Repository.ID != repo {
+			t.Fatalf("unexpected status: %#v", got)
+		}
+		if got.Repository.SessionCount != 1 || got.Repository.RefCount != 1 || got.Repository.ObjectCount == 0 {
+			t.Fatalf("unexpected counts: %#v", got.Repository)
+		}
+		if got.Repository.LatestStep != string(tipHash) {
+			t.Errorf("latest_step = %s, want %s", got.Repository.LatestStep, tipHash)
+		}
+	})
+
+	t.Run("transcript is oldest first and resolves portable tools", func(t *testing.T) {
+		status, body := getAPI(t, ts, "/"+repo+"/api/transcript?session="+sessionID, "")
+		if status != http.StatusOK {
+			t.Fatalf("status %d: %s", status, body)
+		}
+		var got transcriptResponse
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Session.HeadStep != string(tipHash) || got.Session.StartedAt == "" {
+			t.Fatalf("unexpected session: %#v", got.Session)
+		}
+		if len(got.Steps) != 2 || got.Steps[0].Hash != string(rootHash) || got.Steps[1].Hash != string(tipHash) {
+			t.Fatalf("step order = %#v, want root then tip", got.Steps)
+		}
+		tip := got.Steps[1]
+		if tip.Tree != string(tipTree) || tip.Usage == nil || tip.Usage.InputTokens != 100 {
+			t.Fatalf("step metadata missing: %#v", tip)
+		}
+		if len(tip.Events) != 4 || tip.Events[1].Type != "tool_call" || tip.Events[2].Type != "tool_result" {
+			t.Fatalf("events = %#v", tip.Events)
+		}
+		input, ok := tip.Events[1].Input.(map[string]interface{})
+		if !ok || input["file_path"] != capturedHostPath {
+			t.Fatalf("resolved tool input = %#v", tip.Events[1].Input)
+		}
+	})
+
+	t.Run("step detail", func(t *testing.T) {
+		status, body := getAPI(t, ts, "/"+repo+"/api/steps/"+string(tipHash), "")
+		if status != http.StatusOK {
+			t.Fatalf("status %d: %s", status, body)
+		}
+		var got logStepJSON
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Hash != string(tipHash) || len(got.Causes) != 1 || len(got.Files) != 1 || got.Files[0] != filePath {
+			t.Fatalf("unexpected step: %#v", got)
+		}
+	})
+
+	t.Run("files at session tip", func(t *testing.T) {
+		status, body := getAPI(t, ts, "/"+repo+"/api/files?session="+sessionID, "")
+		if status != http.StatusOK {
+			t.Fatalf("status %d: %s", status, body)
+		}
+		var got filesResponse
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.StepHash != string(tipHash) || got.TotalFiles != 1 || got.Files[0].BlobHash != string(tipBlob) || got.Files[0].Size != len(tipContent) {
+			t.Fatalf("unexpected files: %#v", got)
+		}
+	})
+
+	t.Run("blame is derived from canonical history", func(t *testing.T) {
+		status, body := getAPI(t, ts, "/"+repo+"/api/blame?session="+sessionID+"&path="+filePath, "")
+		if status != http.StatusOK {
+			t.Fatalf("status %d: %s", status, body)
+		}
+		var got blameResponse
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Lines) != 2 {
+			t.Fatalf("lines = %#v", got.Lines)
+		}
+		if got.Lines[0].Content != "new reminder" || got.Lines[0].StepHash != string(tipHash) {
+			t.Errorf("changed line = %#v, want tip attribution", got.Lines[0])
+		}
+		if got.Lines[1].Content != "shared line" || got.Lines[1].StepHash != string(rootHash) {
+			t.Errorf("unchanged line = %#v, want root attribution", got.Lines[1])
+		}
+	})
+}
+
+func TestAPITranscriptSynthesizesLegacyToolEvents(t *testing.T) {
+	_, _, ts := newTestServer(t)
+	const repo = "alpha"
+	const sessionID = "claude--legacy"
+	_, argsHash := putObject(t, ts, repo, []byte(`{"path":"README.md"}`))
+	_, resultHash := putObject(t, ts, repo, []byte(`"ok"`))
+	_, convHash := putObject(t, ts, repo, []byte(`[{"type":"user","text":"read it"}]`))
+	stepHash := putStep(t, ts, repo, store.Step{
+		Tree: "legacy-tree", Conversation: convHash, SessionID: sessionID, Origin: "claude_code",
+		TimestampNanos: time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC).UnixNano(),
+		Causes:         []store.Cause{{ToolUseID: "read-1", ToolName: "Read", ArgsBlob: argsHash, ResultBlob: resultHash}},
+	})
+	if code, _ := postRef(t, ts, repo, "sessions/"+sessionID, "", string(stepHash)); code != http.StatusOK {
+		t.Fatalf("set session ref: status %d", code)
+	}
+	status, body := getAPI(t, ts, "/"+repo+"/api/transcript?session="+sessionID, "")
+	if status != http.StatusOK {
+		t.Fatalf("status %d: %s", status, body)
+	}
+	var got transcriptResponse
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	events := got.Steps[0].Events
+	if len(events) != 3 || events[1].Type != "tool_call" || events[2].Type != "tool_result" {
+		t.Fatalf("legacy events = %#v, want user + synthesized call/result", events)
 	}
 }

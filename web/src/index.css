@@ -1,0 +1,55 @@
+@import "tailwindcss";
+
+@theme inline {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --color-page: var(--page); --color-canvas: var(--canvas); --color-surface: var(--surface);
+  --color-inset: var(--inset); --color-hover: var(--hover); --color-hover-2: var(--hover-2);
+  --color-field: var(--field); --color-line: var(--line); --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2); --color-ink-3: var(--ink-3); --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink); --color-accent-tint: var(--accent-tint);
+  --color-green: var(--green); --color-green-tint: var(--green-tint);
+  --color-red: var(--red); --color-red-tint: var(--red-tint);
+  --radius-control: 7px; --radius-chip: 7px; --radius-card: 11px; --radius-window: 14px;
+  --shadow-hairline: var(--shadow-hairline); --shadow-btn: var(--shadow-btn);
+  --shadow-card: var(--shadow-card); --shadow-raised: var(--shadow-raised); --shadow-overlay: var(--shadow-overlay);
+}
+
+:root {
+  color-scheme: dark;
+  --page: #0e0e0d; --canvas: #121211; --surface: #171716; --inset: #111110;
+  --hover: #20201e; --hover-2: #272724; --field: #222220; --line: #2b2b28;
+  --ink: #f1f1ed; --ink-2: #bdbdb6; --ink-3: #92928c;
+  --accent: #8b7cf6; --accent-ink: #b0a7ff; --accent-tint: #26223d;
+  --green: #62c79d; --green-tint: #173128; --red: #ee8383; --red-tint: #3b1e1e;
+  --shadow-hairline: 0 0 0 1px rgba(255, 255, 255, 0.08);
+  --shadow-btn: 0 0 0 1px rgba(255, 255, 255, 0.09), 0 1px 2px rgba(0, 0, 0, 0.22);
+  --shadow-card: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 2px 8px rgba(0, 0, 0, 0.2);
+  --shadow-raised: 0 0 0 1px rgba(255, 255, 255, 0.09), 0 8px 24px rgba(0, 0, 0, 0.3);
+  --shadow-overlay: 0 0 0 1px rgba(255, 255, 255, 0.1), 0 18px 52px rgba(0, 0, 0, 0.55);
+  font-family: var(--font-sans); color: var(--ink); background: var(--page);
+  font-synthesis: none; text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased;
+}
+
+.light {
+  color-scheme: light;
+  --page: #f6f6f5; --canvas: #f1f1ef; --surface: #ffffff; --inset: #f8f8f7;
+  --hover: #f1f1ef; --hover-2: #ececea; --field: #f4f4f2; --line: #e5e5e2;
+  --ink: #20201f; --ink-2: #555552; --ink-3: #686865;
+  --accent: #6c5ce7; --accent-ink: #5545c7; --accent-tint: #efedff;
+  --green: #1d7555; --green-tint: #edf8f3; --red: #b83d3d; --red-tint: #fff0f0;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; min-height: 100vh; background: var(--page); }
+button, input { font-family: inherit; }
+button { color: inherit; }
+
+@keyframes regent-fade-up { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes regent-shimmer { 0%, 18% { background-position: 100% 0; } 82%, 100% { background-position: 0 0; } }
+
+.regent-view { animation: regent-fade-up 160ms cubic-bezier(0.22, 1, 0.36, 1); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
+}

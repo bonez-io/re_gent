@@ -1,4 +1,4 @@
-.PHONY: help build release-binaries test test-race test-cover lint fmt clean install dist install-dist server server-down server-logs
+.PHONY: help build release-binaries test test-race test-cover lint fmt clean install dist install-dist server server-down server-logs ui ui-install ui-check dev
 
 # Default target
 help:
@@ -14,6 +14,9 @@ help:
 	@echo "  make install      - Install this local build to Go's bin directory"
 	@echo "  make dist         - Build the release artifact for this OS/arch via goreleaser (./dist)"
 	@echo "  make install-dist - Build dist and install that binary to GOPATH/bin"
+	@echo "  make dev          - Start the local server, then the UI dev server"
+	@echo "  make ui           - Start the UI dev server (expects the server on :7654)"
+	@echo "  make ui-check     - Build and browser-test the UI"
 	@echo ""
 	@echo "  Local development server (Docker):"
 	@echo "  make server      - Build & start the server (docker compose up -d)"
@@ -120,3 +123,18 @@ server-down:
 
 server-logs:
 	docker compose logs -f
+
+# --- UI development -------------------------------------------------------
+ui-install:
+	cd web && corepack pnpm install --frozen-lockfile
+
+ui:
+	cd web && corepack pnpm dev
+
+ui-check:
+	cd web && corepack pnpm run check
+
+# The server remains in Docker while Vite stays in the foreground. Ctrl-C
+# stops Vite; `make server-down` stops the persistent local server.
+dev: server ui-install
+	cd web && corepack pnpm dev
