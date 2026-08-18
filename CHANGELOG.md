@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `git push` now delivers whatever capture this machine still owes the server.
+  Agent turns already drain the whole queue, so an outage heals itself on the
+  next turn — but not in the window where the outage ends, you push, and no
+  turn has run since. A teammate then sees the code and not the steps behind
+  it. `rgt init` and `rgt connect` install a Git `pre-push` hook that closes
+  that window. It never fails a push: server down, cache gone or binary
+  missing, the work stays queued, one line names `rgt sync`, and the push
+  proceeds. A `pre-push` hook that was already there is preserved, runs first
+  and keeps its veto; `rgt disconnect` restores it exactly. Opt out with
+  `--no-git-hook`, `REGENT_GIT_SYNC_ON_PUSH=0`, or Git's own `--no-verify`.
+  Repositories managed by husky or lefthook are left alone, with the line to
+  add printed instead. See `docs/rfcs/0002-git-push-integration.md`.
 - `rgt repair blame` recomputes the stored blame maps for history already on
   disk. Blame is annotated at write time, so a fix to the line diff reaches
   only steps recorded after it; the maps already written keep whatever the old

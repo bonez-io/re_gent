@@ -78,6 +78,11 @@ func disconnectProject(root string) error {
 	if err := removeClaudeHooks(root); err != nil {
 		return fmt.Errorf("remove hooks: %w", err)
 	}
+	// The Git hook goes with the server binding it delivers to. Only our file
+	// is removed, and a hook that was there before us is put back exactly.
+	if _, err := removeGitHook(root); err != nil {
+		return fmt.Errorf("remove git hook: %w", err)
+	}
 	return nil
 }
 

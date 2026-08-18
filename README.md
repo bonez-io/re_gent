@@ -267,6 +267,7 @@ Hooks auto-configure on `rgt init`. No manual setup required.
 | `rgt connect [server-url]` | Connect the project you are standing in to a server and wire agent hooks. Run outside a project it names the fix and changes nothing. The URL is remembered after the first run. Replaces the former `rgt setup`. |
 | `rgt connect --as <name>` | Register this project under a name you choose instead of one derived from its git remote. Recorded in the project binding, so it is said once. |
 | `rgt init` | Initialize `.regent/` in current directory |
+| `rgt connect --no-git-hook` / `rgt init --no-git-hook` | Wire agent hooks but not the Git `pre-push` hook, so `git push` does not deliver queued capture. |
 | `rgt log` | Show step history (supports `--session`, `-n`, `--json`, `--graph`) |
 | `rgt sessions` | List all active sessions |
 | `rgt status` | Show current repository state |
@@ -301,6 +302,18 @@ rgt pull            # fetch the team's history into this machine's cache
 
 A teammate who clones a connected project runs `rgt pull` once and then reads the team's
 sessions with the ordinary history commands, offline.
+
+### Sync on `git push`
+
+`rgt init` and `rgt connect` also install a Git `pre-push` hook, so queued capture is delivered
+when you share your work — no `rgt sync` to remember after an outage.
+
+The hook **never fails a push**. If the server is unreachable the work stays queued, one line says
+so and names `rgt sync`, and the push proceeds. A `pre-push` hook that was already there is kept,
+runs first, and keeps its veto; `rgt disconnect` restores it. Turn it off with `--no-git-hook` when
+wiring, `REGENT_GIT_SYNC_ON_PUSH=0` on a machine, or `git push --no-verify` once. Repositories
+managed by husky or lefthook (`core.hooksPath`) are left alone, with the line to add printed
+instead.
 
 See **[docs/server-mode.md](docs/server-mode.md)** for the configuration reference, the consistency
 guarantee, and the full failure-mode table (network blip, server down, partial write, divergence,

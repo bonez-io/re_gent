@@ -107,6 +107,14 @@ func diagnose(projectRoot string) []doctorFinding {
 		findings = append(findings, hookBinaryFinding(projectRoot))
 	}
 
+	// Sync-on-push is checked whenever there is something it could deliver —
+	// i.e. whenever an agent is wired. Advisory only; see gitHookFinding.
+	if agentsChecked {
+		if f, present := gitHookFinding(projectRoot); present {
+			findings = append(findings, f)
+		}
+	}
+
 	if !agentsChecked {
 		findings = append(findings, doctorFinding{
 			Name:   "agents",

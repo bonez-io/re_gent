@@ -29,6 +29,9 @@ type connectParams struct {
 	// repoID overrides the identity that would otherwise be derived from the
 	// project's git remote. Empty means derive.
 	repoID string
+	// noGitHook leaves the Git pre-push hook alone (--no-git-hook). Agent hooks
+	// are unaffected: this opts out of sync-on-push, not of capture.
+	noGitHook bool
 }
 
 // ConnectCmd returns the cobra command for `rgt connect`.
@@ -80,10 +83,12 @@ connect replaces setup, which did the same job with different answers.`,
 				}
 			}
 
+			noGitHook, _ := cmd.Flags().GetBool("no-git-hook")
+
 			// Standing inside a project connects it — the common case, and the
 			// one the installer takes.
 			if isProjectDir(cwd) {
-				return connectHere(serverURL, cwd, explicitID, cmd.OutOrStdout(), isTerminal(os.Stdin))
+				return connectHere(serverURL, cwd, explicitID, noGitHook, cmd.OutOrStdout(), isTerminal(os.Stdin))
 			}
 			// Anywhere else, say so and stop. See notAProject.
 			return notAProject(cwd, serverURL)
@@ -94,6 +99,11 @@ connect replaces setup, which did the same job with different answers.`,
 	// remote whose derived id is a hash nobody can read. This is how they say
 	// otherwise. It is recorded in the binding, so it is said once.
 	cmd.Flags().String("as", "", "identity to register this project under, instead of deriving one from its git remote")
+	// Sync-on-push is on by default because a queue that outlives an outage
+	// should drain at the next moment work is shared, without anyone
+	// remembering `rgt sync`. This is the per-run exit; REGENT_GIT_SYNC_ON_PUSH=0
+	// is the per-machine one, and `git push --no-verify` is Git's own.
+	cmd.Flags().Bool("no-git-hook", false, "do not install the Git pre-push hook that syncs queued history on git push")
 	return cmd
 }
 
@@ -109,9 +119,9 @@ connect replaces setup, which did the same job with different answers.`,
 // canPrompt is false wherever there is no person to answer — under
 // `curl | sh`, in CI, in a devcontainer — and the share question is simply not
 // asked there.
-func connectHere(serverURL, dir, repoID string, out io.Writer, canPrompt bool) error {
+func connectHere(serverURL, dir, repoID string, noGitHook bool, out io.Writer, canPrompt bool) error {
 	fmt.Fprintf(out, "\n== %s ==\n", filepath.Base(dir))
-	if err := runConnect(connectParams{serverURL: serverURL, projectRoot: dir, repoID: repoID}); err != nil {
+	if err := runConnect(connectParams{serverURL: serverURL, projectRoot: dir, repoID: repoID, noGitHook: noGitHook}); err != nil {
 		fmt.Fprintf(out, "  ! %v\n", err)
 		return fmt.Errorf("%s could not be connected", filepath.Base(dir))
 	}
@@ -180,7 +190,7 @@ func runConnect(p connectParams) error {
 		// with nothing on screen to say so.
 		if serverKnowsRepo(p.serverURL, repoCfg.Remote.RepoID, p.httpClient, token) {
 			fmt.Printf("  - Already connected to %s (repo_id: %s)\n", p.serverURL, repoCfg.Remote.RepoID)
-			return connectWireHooks(p.projectRoot)
+			return connectWireHooks(p.projectRoot, p.noGitHook)
 		}
 		fmt.Printf("  ⚠ %s has no record of this project (repo_id: %s) — re-registering it.\n",
 			p.serverURL, repoCfg.Remote.RepoID)
@@ -218,7 +228,7 @@ func runConnect(p connectParams) error {
 	carryOverLocalHistory(os.Stdout, s, carryOverConfig(p, repoID, token))
 
 	// 7. Wire Claude hooks (merge/dedupe).
-	return connectWireHooks(p.projectRoot)
+	return connectWireHooks(p.projectRoot, p.noGitHook)
 }
 
 // connectWireHooks wires every agent detected in the project, not just Claude.
@@ -229,7 +239,7 @@ func runConnect(p connectParams) error {
 // work: rgt doctor correctly reports the missing hook, the installer treats
 // that as failure, and the pasted command dies on any machine with a second
 // agent installed. Found by running the installer against a real server.
-func connectWireHooks(projectRoot string) error {
+func connectWireHooks(projectRoot string, noGitHook bool) error {
 	targets, err := resolveAgentTargets(projectRoot, agentAuto)
 	if err != nil {
 		return err
@@ -241,6 +251,19 @@ func connectWireHooks(projectRoot string) error {
 	}
 	if len(installed) == 0 {
 		return fmt.Errorf("no agent hooks were configured in %s", projectRoot)
+	}
+	// The Git hook is wired after the agent hooks and after the "no agents"
+	// verdict above, on purpose: it delivers what the agent hooks capture, so
+	// it is meaningless without them, and it must not turn an unwired project
+	// into one that reports success. Its own failure is not fatal either — a
+	// project that captures but does not sync on push is degraded, not broken,
+	// and doctor will name it.
+	if !noGitHook {
+		if outcome, err := wireGitHook(projectRoot); err != nil {
+			fmt.Printf("  ⚠ Git pre-push hook not configured: %v\n", err)
+		} else {
+			reportGitHookSkipped(outcome)
+		}
 	}
 	// Agents read their hook config at session startup, so a session that was
 	// already running when this ran won't capture until it is restarted. This

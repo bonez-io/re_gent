@@ -44,6 +44,7 @@ const (
 
 func InitCmd() *cobra.Command {
 	var skipHook bool
+	var noGitHook bool
 	var skipSkills bool
 	var withSkills bool
 	var agent string
@@ -114,7 +115,7 @@ func InitCmd() *cobra.Command {
 			if reinit {
 				printExistingHooks(cwd)
 			}
-			outcome, hookErr := configureHooks(cwd, targets, hookOptions{skip: skipHook})
+			outcome, hookErr := configureHooks(cwd, targets, hookOptions{skip: skipHook, noGitHook: noGitHook})
 			if hookErr != nil {
 				fmt.Printf("  %s Could not configure hooks: %v\n", style.Warning(""), hookErr)
 				printManualInstructions(targets)
@@ -141,6 +142,7 @@ func InitCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&skipHook, "skip-hook", false, "Skip automatic hook configuration")
+	cmd.Flags().BoolVar(&noGitHook, "no-git-hook", false, "Do not install the Git pre-push hook that syncs queued history on git push")
 	cmd.Flags().BoolVar(&skipSkills, "skip-skills", false, "Skip agent skill installation")
 	_ = cmd.Flags().MarkHidden("skip-skills") // compatibility: skills are opt-in now
 	cmd.Flags().BoolVar(&withSkills, "skills", false, "Offer to install optional agent skills")

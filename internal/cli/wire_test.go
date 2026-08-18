@@ -193,7 +193,7 @@ func TestConnectWiresEveryDetectedAgentNotJustClaude(t *testing.T) {
 	mustMkdir(t, filepath.Join(root, ".claude"))
 	mustMkdir(t, filepath.Join(root, ".codex"))
 
-	if err := connectWireHooks(root); err != nil {
+	if err := connectWireHooks(root, false); err != nil {
 		t.Fatalf("connectWireHooks: %v", err)
 	}
 
