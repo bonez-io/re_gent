@@ -1,11 +1,14 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
+import { conversations } from '../mocks/regent'
 import { SessionRow } from './SessionRow'
 
-const meta = { component: SessionRow, tags: ['ai-generated'], args: { title: 'Refine reminder scheduling', author: 'Shay Livne', agent: 'Codex', model: 'gpt-5.6', steps: 42, relativeTime: '2m' }, decorators: [(Story) => <div className="w-[680px] max-w-full overflow-hidden rounded-card shadow-hairline"><Story /></div>] } satisfies Meta<typeof SessionRow>
+const meta = { component: SessionRow, tags: ['ai-generated'], args: conversations[0], decorators: [(Story) => <div className="w-[760px] max-w-full overflow-hidden border-x border-t border-line"><Story /></div>] } satisfies Meta<typeof SessionRow>
 export default meta
 type Story = StoryObj<typeof meta>
 
-export const Default: Story = {}
+export const CodexCapturing: Story = {}
 export const Selected: Story = { args: { selected: true } }
-export const PartialLegacyData: Story = { args: { author: undefined, agent: undefined, model: undefined } }
-export const LongTitle: Story = { args: { title: 'Refactor reminder scheduling while preserving timezone context across every supported natural-language input' } }
+export const ClaudeCode: Story = { args: conversations[1] }
+export const OpenCode: Story = { args: conversations[3] }
+export const PartialLegacyData: Story = { args: conversations[5] }
+export const LongTitle: Story = { args: { ...conversations[0], title: 'Refactor reminder scheduling while preserving timezone context across every supported natural-language input' } }

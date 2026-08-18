@@ -16,33 +16,28 @@
 }
 
 :root {
+  color-scheme: dark;
+  --page: #0e0e0d; --canvas: #121211; --surface: #171716; --inset: #111110;
+  --hover: #20201e; --hover-2: #272724; --field: #222220; --line: #2b2b28;
+  --ink: #f1f1ed; --ink-2: #bdbdb6; --ink-3: #92928c;
+  --accent: #8b7cf6; --accent-ink: #b0a7ff; --accent-tint: #26223d;
+  --green: #62c79d; --green-tint: #173128; --red: #ee8383; --red-tint: #3b1e1e;
+  --shadow-hairline: 0 0 0 1px rgba(255, 255, 255, 0.08);
+  --shadow-btn: 0 0 0 1px rgba(255, 255, 255, 0.09), 0 1px 2px rgba(0, 0, 0, 0.22);
+  --shadow-card: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 2px 8px rgba(0, 0, 0, 0.2);
+  --shadow-raised: 0 0 0 1px rgba(255, 255, 255, 0.09), 0 8px 24px rgba(0, 0, 0, 0.3);
+  --shadow-overlay: 0 0 0 1px rgba(255, 255, 255, 0.1), 0 18px 52px rgba(0, 0, 0, 0.55);
+  font-family: var(--font-sans); color: var(--ink); background: var(--page);
+  font-synthesis: none; text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased;
+}
+
+.light {
   color-scheme: light;
   --page: #f6f6f5; --canvas: #f1f1ef; --surface: #ffffff; --inset: #f8f8f7;
   --hover: #f1f1ef; --hover-2: #ececea; --field: #f4f4f2; --line: #e5e5e2;
   --ink: #20201f; --ink-2: #555552; --ink-3: #686865;
   --accent: #6c5ce7; --accent-ink: #5545c7; --accent-tint: #efedff;
   --green: #1d7555; --green-tint: #edf8f3; --red: #b83d3d; --red-tint: #fff0f0;
-  --shadow-hairline: 0 0 0 1px rgba(26, 26, 24, 0.09);
-  --shadow-btn: 0 0 0 1px rgba(26, 26, 24, 0.09), 0 1px 2px rgba(26, 26, 24, 0.05);
-  --shadow-card: 0 0 0 1px rgba(26, 26, 24, 0.08), 0 2px 8px rgba(26, 26, 24, 0.035);
-  --shadow-raised: 0 0 0 1px rgba(26, 26, 24, 0.08), 0 8px 24px rgba(26, 26, 24, 0.08);
-  --shadow-overlay: 0 0 0 1px rgba(26, 26, 24, 0.08), 0 18px 52px rgba(26, 26, 24, 0.16);
-  font-family: var(--font-sans); color: var(--ink); background: var(--page);
-  font-synthesis: none; text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased;
-}
-
-.dark {
-  color-scheme: dark;
-  --page: #121211; --canvas: #171716; --surface: #1d1d1b; --inset: #181817;
-  --hover: #272725; --hover-2: #2d2d2a; --field: #252523; --line: #333330;
-  --ink: #f2f2ef; --ink-2: #c0bfba; --ink-3: #9b9b96;
-  --accent: #998cff; --accent-ink: #b0a7ff; --accent-tint: #2a2547;
-  --green: #54bf91; --green-tint: #183329; --red: #e87d7d; --red-tint: #3d2020;
-  --shadow-hairline: 0 0 0 1px rgba(255, 255, 255, 0.09);
-  --shadow-btn: 0 0 0 1px rgba(255, 255, 255, 0.1), 0 1px 2px rgba(0, 0, 0, 0.2);
-  --shadow-card: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 2px 8px rgba(0, 0, 0, 0.2);
-  --shadow-raised: 0 0 0 1px rgba(255, 255, 255, 0.09), 0 8px 24px rgba(0, 0, 0, 0.28);
-  --shadow-overlay: 0 0 0 1px rgba(255, 255, 255, 0.1), 0 18px 52px rgba(0, 0, 0, 0.5);
 }
 
 * { box-sizing: border-box; }
