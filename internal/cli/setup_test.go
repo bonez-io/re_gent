@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -90,6 +92,30 @@ func TestCommitWiringReportsNothingToCommit(t *testing.T) {
 	dir := gitRepo(t)
 	if err := commitWiring(dir); err == nil {
 		t.Error("want an error when there is no wiring to commit")
+	}
+}
+
+// TestOfferShareTUIReportsAlreadyCommittedAsSuccess covers the idempotent
+// connect path. Accepting the prompt after the wiring commit exists must say
+// that it is already committed, not render a failed task with hidden details.
+func TestOfferShareTUIReportsAlreadyCommittedAsSuccess(t *testing.T) {
+	dir := gitRepo(t)
+	writeFile(t, dir, ".regent/config.toml", "[remote]\nurl = 'http://example.test'\n")
+	writeFile(t, dir, ".claude/settings.json", "{\"hooks\":{}}\n")
+	if err := commitWiring(dir); err != nil {
+		t.Fatalf("first commitWiring: %v", err)
+	}
+	if err := commitWiring(dir); !errors.Is(err, errWiringAlreadyCommitted) {
+		t.Fatalf("second commitWiring error = %v, want errWiringAlreadyCommitted", err)
+	}
+
+	var out bytes.Buffer
+	offerShareTUI([]string{dir}, strings.NewReader("y"), &out)
+	if !strings.Contains(out.String(), "Team wiring already committed") {
+		t.Errorf("already-committed wiring was not reported as success:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "was not committed") {
+		t.Errorf("already-committed wiring was reported as failure:\n%s", out.String())
 	}
 }
 

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -108,6 +109,12 @@ func isDir(p string) bool {
 // and the hook config. The rest of .regent/ stays git-ignored.
 var sharedFiles = []string{".regent/config.toml", ".claude/settings.json"}
 
+// errWiringAlreadyCommitted is the successful no-op result of accepting the
+// share prompt after the wiring files have already landed in Git. Keep it
+// distinct from real commit failures so an idempotent re-run does not look
+// broken to the person connecting the project.
+var errWiringAlreadyCommitted = errors.New("wiring already committed")
+
 // offerShare asks, per project, whether to commit the wiring so teammates get it
 // on clone. It never pushes: reaching a shared remote is the user's call, not a
 // side effect of a setup wizard.
@@ -131,6 +138,10 @@ func offerShare(projects []string, in io.Reader) {
 			continue
 		}
 		if err := commitWiring(p); err != nil {
+			if errors.Is(err, errWiringAlreadyCommitted) {
+				fmt.Printf("  ✓ already committed — teammates who pull already get the wiring\n")
+				continue
+			}
 			// A failure here (no git identity, a pre-commit hook, an ignored
 			// path) must not undo the wiring, which already succeeded.
 			fmt.Printf("  ! could not commit: %v\n", err)
@@ -164,11 +175,26 @@ func offerShareTUI(projects []string, in io.Reader, out io.Writer) {
 			flow.Hint("Team sharing skipped — you can commit the wiring later")
 			continue
 		}
-		if err := flow.Run("Committing team wiring", func() error { return commitWiring(p) }); err != nil {
+		alreadyCommitted := false
+		err = flow.Wait("Committing team wiring", func() error {
+			err := commitWiring(p)
+			if errors.Is(err, errWiringAlreadyCommitted) {
+				alreadyCommitted = true
+				return nil
+			}
+			return err
+		})
+		if err != nil {
 			flow.Warning("The project is connected, but its wiring was not committed")
 			Verbosef(out, "  %v\n", err)
 			continue
 		}
+		if alreadyCommitted {
+			flow.Step("Team wiring already committed")
+			flow.Hint("Teammates who pull already get the wiring")
+			continue
+		}
+		flow.Step("Committed team wiring")
 		flow.Hint("No push was performed")
 	}
 }
@@ -243,7 +269,7 @@ func commitWiring(dir string) error {
 	args := append([]string{"commit", "-m", "Wire re_gent to the team server", "--"}, present...)
 	if out, err := git(args...); err != nil {
 		if strings.Contains(out, "nothing to commit") || strings.Contains(out, "no changes added") {
-			return fmt.Errorf("already committed")
+			return errWiringAlreadyCommitted
 		}
 		return fmt.Errorf("%s", firstLine(out))
 	}
