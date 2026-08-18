@@ -285,6 +285,18 @@ func installClaudeHookWith(projectRoot, binary string) (hookInstallResult, error
 }
 
 func installCodexHook(projectRoot string) (hookInstallResult, error) {
+	return installCodexHookWith(projectRoot, hookBinary())
+}
+
+// installCodexHookWith writes portable Codex hooks for a named binary.
+//
+// Codex executes Unix command hooks through $SHELL -lc (or /bin/sh -lc), so
+// the same absolute-path-then-PATH fallback used by Claude is safe here. Its
+// commandWindows setting is executed by cmd.exe instead, so it needs the
+// equivalent cmd expression rather than the POSIX-only `exec` form. Keeping
+// the binary injectable lets the cross-machine behaviour be tested without
+// relying on the ephemeral binary that `go test` runs.
+func installCodexHookWith(projectRoot, binary string) (hookInstallResult, error) {
 	var result hookInstallResult
 	codexDir := filepath.Join(projectRoot, ".codex")
 	configPath := filepath.Join(codexDir, "config.toml")
@@ -312,7 +324,7 @@ func installCodexHook(projectRoot string) (hookInstallResult, error) {
 	}
 
 	for _, eventName := range []string{"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"} {
-		mergeHookCommand(hooks, eventName, codexHookCommand())
+		mergeCodexHookCommand(hooks, eventName, binary)
 	}
 	enableCodexHooksFeature(config)
 
@@ -495,6 +507,21 @@ func enableCodexHooksFeature(config map[string]interface{}) {
 func mergeHookCommand(hooks map[string]interface{}, eventName, command string) {
 	groups := filterRegentHookCommands(normalizeHookGroups(hooks[eventName]))
 	hooks[eventName] = append(groups, hookGroup(command))
+}
+
+// mergeCodexHookCommand adds the platform-specific forms Codex selects at
+// runtime. Codex's `command` string is evaluated by a POSIX shell on Unix;
+// `commandWindows` is evaluated by cmd.exe, where `exec` is not available.
+func mergeCodexHookCommand(hooks map[string]interface{}, eventName, binary string) {
+	groups := filterRegentHookCommands(normalizeHookGroups(hooks[eventName]))
+	hooks[eventName] = append(groups, map[string]interface{}{
+		"matcher": "",
+		"hooks": []interface{}{map[string]interface{}{
+			"type":           "command",
+			"command":        sharedHookCommand(binary, codexHookArgs),
+			"commandWindows": sharedHookCommandWindows(binary, codexHookArgs),
+		}},
+	})
 }
 
 func removeRegentHookCommands(hooks map[string]interface{}, eventName string) {

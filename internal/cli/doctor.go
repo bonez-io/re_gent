@@ -185,14 +185,22 @@ func hookBinaryFinding(projectRoot string) doctorFinding {
 	if len(unreachable) == 0 {
 		return doctorFinding{Name: "hook binary", OK: true, Detail: "the configured hooks resolve to a binary on this machine"}
 	}
+	remedy := "rgt init"
+	if codexHookFinding(projectRoot).OK && !claudeHookFinding(projectRoot).OK {
+		// A committed Codex config is the precise failure this check is for.
+		// Do not leave the teammate to rediscover which target they need to
+		// select, especially on a machine where automatic agent detection sees
+		// no installed host binary.
+		remedy = "rgt init --agent codex"
+	}
 	return doctorFinding{
 		Name: "hook binary",
 		OK:   false,
 		Detail: fmt.Sprintf(
 			"the hooks configured here run %s, which is not on this machine — nothing is being captured\n"+
 				"that path belongs to whoever ran the install; a clone carries it unchanged\n"+
-				"install rgt and put it on PATH, or wire this machine: rgt init",
-			strings.Join(unreachable, ", ")),
+				"install rgt and put it on PATH, or wire this machine: %s",
+			strings.Join(unreachable, ", "), remedy),
 	}
 }
 
