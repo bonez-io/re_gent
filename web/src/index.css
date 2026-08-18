@@ -48,6 +48,8 @@ button { color: inherit; }
 @keyframes regent-fade-up { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes regent-shimmer { 0%, 18% { background-position: 100% 0; } 82%, 100% { background-position: 0 0; } }
 
+.regent-view { animation: regent-fade-up 160ms cubic-bezier(0.22, 1, 0.36, 1); }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
 }

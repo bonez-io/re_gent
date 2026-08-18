@@ -6,7 +6,7 @@ export interface CodeBlockProps { filename: string; language: string; code: stri
 export function CodeBlock({ filename, language, code }: CodeBlockProps) {
   const [copied, setCopied] = useState(false)
   const copy = async () => { await navigator.clipboard.writeText(code); setCopied(true); window.setTimeout(() => setCopied(false), 1500) }
-  return <div className="w-full overflow-hidden border border-line bg-inset">
+  return <div className="w-full overflow-hidden rounded-[7px] border border-line bg-inset transition-colors duration-150 hover:border-ink-3/40">
     <div className="flex min-h-7 items-center justify-between border-b border-line px-2">
       <span className="flex items-baseline gap-2"><span className="font-mono text-[10px] font-medium text-ink">{filename}</span><span className="text-[9px] text-ink-3">{language}</span></span>
       <button aria-label="Copy code" onClick={copy} className={`flex h-5 items-center gap-1 rounded-[4px] px-1.5 text-[9.5px] font-medium transition-colors hover:bg-hover ${copied ? 'text-green' : 'text-ink-3 hover:text-ink'}`}>{copied ? 'Copied' : 'Copy'}</button>
