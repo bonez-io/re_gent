@@ -152,6 +152,14 @@ Note: because capture consults the ambient environment, `REGENT_SERVER_URL` must
 running the local-mode suites. The `TestMain` guards in `internal/capture` and `cmd/rgt` do this
 automatically, so `go test ./...` is hermetic even on a machine configured for server mode.
 
+## VPS bootstrap (manual before release)
+
+Use a disposable modern Linux host reachable through your normal `ssh` configuration. From a
+throwaway project, run `rgt connect user@host`, inspect the Docker/Compose plan, confirm it, and
+verify `curl http://host:7654/healthz`. Re-run the same command and confirm that it reports the
+healthy server and makes no remote changes. Also verify a firewall-blocked port leaves the project
+without `.regent/`; use `--url` when the public address differs from the SSH hostname.
+
 ## Full Verification
 
 ```bash

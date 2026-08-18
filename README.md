@@ -264,7 +264,7 @@ Hooks auto-configure on `rgt init`. No manual setup required.
 
 | Command | Description |
 |---------|-------------|
-| `rgt connect [server-url]` | Connect the project you are standing in to a server and wire agent hooks. Run outside a project it names the fix and changes nothing. The URL is remembered after the first run. Replaces the former `rgt setup`. |
+| `rgt connect [server-url-or-ssh-target]` | Bind to an existing `http(s)` server, or give an SSH target to provision it first. A project is written only after its public `/healthz` answers. |
 | `rgt connect --as <name>` | Register this project under a name you choose instead of one derived from its git remote. Recorded in the project binding, so it is said once. |
 | `rgt init` | Initialize `.regent/` in current directory |
 | `rgt connect --no-git-hook` / `rgt init --no-git-hook` | Wire agent hooks but not the Git `pre-push` hook, so `git push` does not deliver queued capture. |
@@ -275,7 +275,6 @@ Hooks auto-configure on `rgt init`. No manual setup required.
 | `rgt blame <path>[:<line>]` | Show per-line provenance for a file |
 | `rgt repair blame` | Recompute every stored blame map with the current diff. `rgt blame` is annotated at write time, so a diff fix does not reach maps already on disk; `rgt show` diffs at query time and needs no repair. Idempotent and safe to interrupt. |
 | `rgt cat <hash>` | Inspect any object by hash (debugging tool; runnable but not listed in `rgt --help`) |
-| `rgt serve` | Serve re_gent repositories over HTTP (`--addr`, `--data`) |
 | `rgt push` | Push session history to a repo on a server (`--url`, `--repo`, `--session`) |
 | `rgt version` | Print version information |
 | `rgt completion` | Generate shell completion scripts |
@@ -339,20 +338,19 @@ rgt pull
 ```
 
 The server is currently unauthenticated, and Compose binds it to `127.0.0.1`.
-Remote deployment, authentication, TLS, and Terraform are intentionally not
-part of this local baseline yet. `make server-down` stops it; the named Docker
+Remote authentication, TLS, and Terraform are intentionally not part of this local baseline yet. To provision a Linux VPS, run `rgt connect root@host` from a project (or add `--url https://public.example` for NAT/DNS), review the plan, and confirm. `make server-down` stops it; the named Docker
 volume preserves its data between runs.
 
 ---
 
 ## Multiple repos, one server
 
-One `rgt serve` process hosts any number of repositories. Each repo is addressed
+One `regent-server` process hosts any number of repositories. Each repo is addressed
 by id and stored separately, so two repos never share refs, objects or history —
 even when they use the same session ids and contain identical files.
 
 ```bash
-rgt serve --addr 127.0.0.1:7654 --data ~/.regent-server
+regent-server --addr 127.0.0.1:7654 --data ~/.regent-server
 
 # in each project, once:
 cd ~/code/alpha && rgt push --url http://127.0.0.1:7654 --repo alpha

@@ -101,6 +101,31 @@ func TestConnectOutsideAProjectNamesTheFixAndTouchesNothing(t *testing.T) {
 	}
 }
 
+// A URL names a service, never a machine rgt is allowed to change.  Most
+// importantly, a failed public health check happens before store.Init: an
+// unreachable address cannot leave a project claiming it is connected.
+func TestConnectUnreachableURLDoesNotCreateProjectState(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "down", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+	root := mkProject(t, t.TempDir(), "app")
+	cwd, _ := os.Getwd()
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+
+	cmd := ConnectCmd()
+	cmd.SetArgs([]string{srv.URL})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "never provisions") {
+		t.Fatalf("connect error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".regent")); !os.IsNotExist(err) {
+		t.Fatalf("unreachable URL created project state: %v", err)
+	}
+}
+
 func TestConnect_WritesRemoteConfig(t *testing.T) {
 	srv := newTestServer(t, http.StatusCreated, "repo-abc")
 	root := t.TempDir()

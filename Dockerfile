@@ -10,7 +10,8 @@ RUN go mod download
 
 COPY . .
 # Static, CGO-free binary (matches .goreleaser.yaml: CGO_ENABLED=0).
-RUN CGO_ENABLED=0 go build -trimpath -o /out/rgt ./cmd/rgt
+RUN CGO_ENABLED=0 go build -trimpath -o /out/rgt ./cmd/rgt \
+ && CGO_ENABLED=0 go build -trimpath -o /out/regent-server ./cmd/regent-server
 
 # Cross-compile per-OS/arch binaries so /install can hand every teammate a
 # runnable rgt, not only those matching the server's platform. Served from
@@ -31,6 +32,7 @@ RUN apk add --no-cache wget ca-certificates \
  && chown regent /data
 
 COPY --from=build /out/rgt /usr/local/bin/rgt
+COPY --from=build /out/regent-server /usr/local/bin/regent-server
 # Prebuilt per-OS/arch binaries served by /install (see REGENT_BINARIES_DIR).
 COPY --from=build /out/binaries /binaries
 ENV REGENT_BINARIES_DIR=/binaries
@@ -45,5 +47,5 @@ USER regent
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD wget -qO- http://127.0.0.1:7654/healthz || exit 1
 
-ENTRYPOINT ["rgt"]
-CMD ["serve", "--addr", "0.0.0.0:7654", "--data", "/data"]
+ENTRYPOINT ["regent-server"]
+CMD ["--addr", "0.0.0.0:7654", "--data", "/data"]

@@ -53,6 +53,14 @@ func TestE2ERemoteLifecycleRegistrationFailureLeavesNoBinding(t *testing.T) {
 
 	var registrations int
 	broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// It is a live server whose registry is unavailable.  connect proves
+		// /healthz before it is allowed to write a binding, so model that
+		// distinction explicitly rather than making an outage look like a
+		// registration failure.
+		if r.Method == http.MethodGet && r.URL.Path == "/healthz" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		if r.Method == http.MethodPost && r.URL.Path == "/repos" {
 			registrations++
 		}

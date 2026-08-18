@@ -146,6 +146,7 @@ func TestRemovedCommandsNameTheirReplacement(t *testing.T) {
 		{"setup", "connect", "setup was folded into connect; connect does everything it did"},
 		{"login", "no authentication", "the server authenticates nobody, so there is nothing to sign in to"},
 		{"whoami", "git", "identity comes from git config, not from a sign-in"},
+		{"serve", "regent-server", "the server has a dedicated operator binary"},
 	}
 
 	for _, tc := range cases {
@@ -175,7 +176,7 @@ func TestRemovedCommandsAreNotAdvertisedInHelp(t *testing.T) {
 		t.Fatalf("rgt --help: %v", err)
 	}
 
-	for _, gone := range []string{"login", "whoami", "setup"} {
+	for _, gone := range []string{"login", "whoami", "setup", "serve"} {
 		for _, line := range strings.Split(out, "\n") {
 			if strings.HasPrefix(strings.TrimSpace(line), gone+" ") {
 				t.Errorf("help still lists %q:\n  %s", gone, strings.TrimSpace(line))
