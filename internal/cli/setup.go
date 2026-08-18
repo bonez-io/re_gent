@@ -76,15 +76,26 @@ func isConnected(dir string) bool {
 // A missing or unparseable file is simply "no binding", which is what every
 // caller means by it.
 func readRemoteConfig(dir string) (store.RemoteConfig, error) {
-	data, err := os.ReadFile(filepath.Join(dir, ".regent", "config.toml"))
+	cfg, err := readRepoConfig(dir)
 	if err != nil {
 		return store.RemoteConfig{}, err
 	}
+	return cfg.Remote, nil
+}
+
+// readRepoConfig reads the complete portable project binding. Keep this next
+// to readRemoteConfig: the remote and capture declarations deliberately share
+// .regent/config.toml and must be parsed with the same rules.
+func readRepoConfig(dir string) (store.RepoConfig, error) {
+	data, err := os.ReadFile(filepath.Join(dir, ".regent", "config.toml"))
+	if err != nil {
+		return store.RepoConfig{}, err
+	}
 	var cfg store.RepoConfig
 	if err := toml.Unmarshal(data, &cfg); err != nil {
-		return store.RemoteConfig{}, err
+		return store.RepoConfig{}, err
 	}
-	return cfg.Remote, nil
+	return cfg, nil
 }
 
 func isDir(p string) bool {

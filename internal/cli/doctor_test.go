@@ -434,6 +434,106 @@ func TestAWiredProjectIsNotDeclaredBrokenBecauseAnAncestorMightBeOpened(t *testi
 	}
 }
 
+// A project owner can answer doctor's otherwise unknowable question once in
+// the portable binding. This is intentionally scoped to the ancestor-layout
+// advisory: the hook itself must still be valid before doctor reports green.
+func TestDoctorAcceptsAnIntentionalProjectCaptureRoot(t *testing.T) {
+	workspace := t.TempDir()
+	mustMkdir(t, filepath.Join(workspace, ".claude"))
+	mustWrite(t, filepath.Join(workspace, ".claude", "settings.json"), `{"hooks":{}}`)
+
+	project := filepath.Join(workspace, "project")
+	mustMkdir(t, filepath.Join(project, ".claude"))
+	mustWrite(t, filepath.Join(project, ".claude", "settings.json"), wiredClaudeSettings)
+	s, err := store.Init(project)
+	if err != nil {
+		t.Fatalf("init project store: %v", err)
+	}
+	if err := recordCaptureRoot(s, "project"); err != nil {
+		t.Fatalf("record capture root: %v", err)
+	}
+
+	if finding := claudeHookFinding(project); !finding.OK {
+		t.Errorf("intentional project capture root still warns: %s", finding.Detail)
+	}
+}
+
+func TestInitRecordsCaptureRootInVisibleProjectBinding(t *testing.T) {
+	project := t.TempDir()
+	withWorkingDir(t, project)
+
+	cmd := InitCmd()
+	cmd.SetArgs([]string{"--skip-hook", "--capture-root", "project"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(project, ".regent", "config.toml"))
+	if err != nil {
+		t.Fatalf("read project binding: %v", err)
+	}
+	if !strings.Contains(string(data), "[capture]") || !strings.Contains(string(data), `root = 'project'`) {
+		t.Errorf("capture root is not visible in project binding:\n%s", data)
+	}
+}
+
+// A monorepo can deliberately bind its one capture root at the workspace.
+// No descendant is silently blessed: doctor is green here because this is the
+// directory with both the binding and the hook that captures work.
+func TestDoctorAcceptsAnIntentionalWorkspaceCaptureRoot(t *testing.T) {
+	parent := t.TempDir()
+	mustMkdir(t, filepath.Join(parent, ".claude"))
+	mustWrite(t, filepath.Join(parent, ".claude", "settings.json"), `{"hooks":{}}`)
+
+	workspace := filepath.Join(parent, "workspace")
+	mustMkdir(t, filepath.Join(workspace, ".claude"))
+	mustWrite(t, filepath.Join(workspace, ".claude", "settings.json"), wiredClaudeSettings)
+	s, err := store.Init(workspace)
+	if err != nil {
+		t.Fatalf("init workspace store: %v", err)
+	}
+	if err := recordCaptureRoot(s, "workspace"); err != nil {
+		t.Fatalf("record capture root: %v", err)
+	}
+
+	cfg, err := s.ReadRepoConfig()
+	if err != nil {
+		t.Fatalf("read project binding: %v", err)
+	}
+	if cfg.Capture.Root != "workspace" {
+		t.Fatalf("capture root = %q, want workspace", cfg.Capture.Root)
+	}
+	if shadow := shadowingClaudeWorkspace(workspace); !shadow.found() {
+		t.Fatal("test setup has no ancestor-layout advisory to suppress")
+	}
+	if finding := claudeHookFinding(workspace); !finding.OK {
+		t.Errorf("intentional workspace capture root is not healthy: %s", finding.Detail)
+	}
+}
+
+// An acknowledgement is not a substitute for capture. In particular it must
+// not turn a config file with no re_gent hook into a green doctor result.
+func TestDoctorAcknowledgementNeverHidesMissingCapture(t *testing.T) {
+	project := t.TempDir()
+	mustMkdir(t, filepath.Join(project, ".claude"))
+	mustWrite(t, filepath.Join(project, ".claude", "settings.json"), `{"hooks":{}}`)
+	s, err := store.Init(project)
+	if err != nil {
+		t.Fatalf("init project store: %v", err)
+	}
+	if err := recordCaptureRoot(s, "project"); err != nil {
+		t.Fatalf("record capture root: %v", err)
+	}
+
+	finding := claudeHookFinding(project)
+	if finding.OK {
+		t.Errorf("capture acknowledgement made an unwired project green: %s", finding.Detail)
+	}
+	if !hasFailures([]doctorFinding{finding}) {
+		t.Error("missing hook became non-fatal after capture acknowledgement")
+	}
+}
+
 // wiredClaudeSettings is the shape wireAgents leaves behind: a settings file
 // whose hook invokes one of re_gent's subcommands. Spelled with the bare name
 // on purpose — isRegentHookCommand identifies our hooks by the subcommand, not

@@ -48,6 +48,7 @@ func InitCmd() *cobra.Command {
 	var skipSkills bool
 	var withSkills bool
 	var agent string
+	var captureRoot string
 
 	cmd := &cobra.Command{
 		Use:          "init",
@@ -58,6 +59,9 @@ func InitCmd() *cobra.Command {
 			"commandOrder": "0",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if captureRoot != "" && captureRoot != "project" && captureRoot != "workspace" {
+				return fmt.Errorf("invalid --capture-root %q: use project or workspace", captureRoot)
+			}
 			cwd, err := os.Getwd()
 			if err != nil {
 				return fmt.Errorf("get working directory: %w", err)
@@ -74,8 +78,9 @@ func InitCmd() *cobra.Command {
 			// whole of step 1 is even about. See serverBinding.
 			binding := resolveServerBinding(cwd)
 
+			var s *store.Store
 			if reinit {
-				s, err := store.Open(filepath.Join(cwd, ".regent"))
+				s, err = store.Open(filepath.Join(cwd, ".regent"))
 				if err != nil {
 					return err
 				}
@@ -89,7 +94,7 @@ func InitCmd() *cobra.Command {
 					fmt.Printf("  %s Using existing .regent/\n", style.DimText("-"))
 				}
 			} else {
-				s, err := store.Init(cwd)
+				s, err = store.Init(cwd)
 				if err != nil {
 					return err
 				}
@@ -107,6 +112,12 @@ func InitCmd() *cobra.Command {
 				if !binding.bound() {
 					fmt.Printf("  %s Initialized .regent/\n", style.Success(""))
 				}
+			}
+			if captureRoot != "" {
+				if err := recordCaptureRoot(s, captureRoot); err != nil {
+					return err
+				}
+				fmt.Printf("  %s Capture root intentionally set to %s\n", style.Success(""), captureRoot)
 			}
 			if binding.bound() {
 				printServerBinding(binding)
@@ -147,8 +158,23 @@ func InitCmd() *cobra.Command {
 	_ = cmd.Flags().MarkHidden("skip-skills") // compatibility: skills are opt-in now
 	cmd.Flags().BoolVar(&withSkills, "skills", false, "Offer to install optional agent skills")
 	cmd.Flags().StringVar(&agent, "agent", string(agentAuto), "Agent hooks to configure: auto, claude, codex, opencode, pi, both, all")
+	cmd.Flags().StringVar(&captureRoot, "capture-root", "", "Record this intentional capture layout: project or workspace")
 
 	return cmd
+}
+
+// recordCaptureRoot persists the owner's answer without disturbing the remote
+// binding connect may already have written to the same config file.
+func recordCaptureRoot(s *store.Store, root string) error {
+	cfg, err := s.ReadRepoConfig()
+	if err != nil {
+		return fmt.Errorf("read repo config: %w", err)
+	}
+	cfg.Capture.Root = root
+	if err := s.WriteRepoConfig(cfg); err != nil {
+		return fmt.Errorf("write capture layout: %w", err)
+	}
+	return nil
 }
 
 // serverBinding names the server a project's history belongs to.

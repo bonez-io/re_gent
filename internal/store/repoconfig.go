@@ -14,9 +14,21 @@ type RemoteConfig struct {
 	RepoID string `toml:"repo_id"`
 }
 
+// CaptureConfig records the layout its owner intentionally uses. It is a
+// project binding rather than a doctor flag so the answer survives across
+// terminals and is visible to teammates in .regent/config.toml.
+//
+// Root is either "project" (agents are opened in this project) or
+// "workspace" (this directory intentionally captures one workspace).
+// The empty value means no acknowledgement has been made.
+type CaptureConfig struct {
+	Root string `toml:"root"`
+}
+
 // RepoConfig is the machine-written section of .regent/config.toml.
 type RepoConfig struct {
-	Remote RemoteConfig `toml:"remote"`
+	Remote  RemoteConfig  `toml:"remote"`
+	Capture CaptureConfig `toml:"capture"`
 }
 
 // ReadRepoConfig reads the re_gent-managed sections of .regent/config.toml.
