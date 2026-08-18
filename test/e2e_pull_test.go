@@ -220,3 +220,71 @@ func TestE2EConnectedProjectWithAnEmptyCacheSaysItHasNotPulled(t *testing.T) {
 		}
 	}
 }
+
+// An empty cache says nothing by itself about the server. Exercise the real
+// binary against the production HTTP server for every state the empty-cache
+// reporter has to distinguish. A hand-written Client would only prove the
+// wording branch, not that the request identifies the state on the wire.
+func TestE2EEmptyCacheReportsWhatTheLiveServerActuallyKnows(t *testing.T) {
+	rgt := buildTestBinary(t)
+	srv := startTestServer(t)
+
+	t.Run("known project with no history", func(t *testing.T) {
+		project := gitProject(t, "known-empty", "https://github.com/acme/known-empty.git")
+		env := machineEnv(t, srv.URL)
+		e2eRunEnv(t, rgt, project, env, nil, "connect", srv.URL)
+
+		out, err := e2eRunEnvRaw(t, rgt, project, env, "sessions")
+		if err != nil {
+			t.Fatalf("sessions failed: %v\n%s", err, out)
+		}
+		if !strings.Contains(strings.ToLower(out), "holds no history yet") {
+			t.Errorf("empty registered project did not report its empty server history:\n%s", out)
+		}
+		if strings.Contains(strings.ToLower(out), "not yet pulled") {
+			t.Errorf("empty registered project was reported as awaiting a pull:\n%s", out)
+		}
+	})
+
+	t.Run("unknown project", func(t *testing.T) {
+		project := gitProject(t, "unknown-project", "https://github.com/acme/unknown-project.git")
+		env := machineEnv(t, srv.URL)
+		mustMkdirAll(t, project+"/.regent")
+		writeTestFile(t, project, ".regent/config.toml", "[remote]\nurl = \""+srv.URL+"\"\nrepo_id = \"unknown-project\"\n")
+
+		out, err := e2eRunEnvRaw(t, rgt, project, env, "sessions")
+		if err != nil {
+			t.Fatalf("sessions failed: %v\n%s", err, out)
+		}
+		if !strings.Contains(strings.ToLower(out), "does not know this project") {
+			t.Errorf("unknown project was not identified as unknown to the server:\n%s", out)
+		}
+		if !strings.Contains(out, "rgt connect") {
+			t.Errorf("unknown project report does not name re-registration:\n%s", out)
+		}
+		if strings.Contains(strings.ToLower(out), "history is recorded") {
+			t.Errorf("unknown project claimed its history was safe on the server:\n%s", out)
+		}
+	})
+
+	t.Run("unreachable server", func(t *testing.T) {
+		project := gitProject(t, "unreachable-project", "https://github.com/acme/unreachable-project.git")
+		env := machineEnv(t, srv.URL)
+		e2eRunEnv(t, rgt, project, env, nil, "connect", srv.URL)
+		srv.Close()
+
+		out, err := e2eRunEnvRaw(t, rgt, project, env, "sessions")
+		if err != nil {
+			t.Fatalf("sessions failed: %v\n%s", err, out)
+		}
+		lower := strings.ToLower(out)
+		if !strings.Contains(lower, "cannot reach") {
+			t.Errorf("unreachable server was not reported as unreachable:\n%s", out)
+		}
+		for _, unsafeClaim := range []string{"not yet pulled", "history is recorded"} {
+			if strings.Contains(lower, unsafeClaim) {
+				t.Errorf("unreachable server report made unsafe claim %q:\n%s", unsafeClaim, out)
+			}
+		}
+	})
+}

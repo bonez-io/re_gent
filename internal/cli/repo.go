@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -89,12 +90,11 @@ type notPulledError struct {
 }
 
 func (e *notPulledError) Error() string {
-	return connectedNotPulledReport(e.cfg)
+	return fmt.Sprintf("This machine has no cached history for %s. Run 'rgt status' to check the server.", e.cfg.RepoID)
 }
 
-// connectedNotPulledReport is the single wording for "the history is on the
-// server and none of it is here yet", used by the missing-cache error and by
-// the read commands that find an empty one.
+// connectedNotPulledReport is the wording for the one case where a live server
+// has proved that history exists and none of it is on this machine yet.
 func connectedNotPulledReport(cfg remote.Config) string {
 	return fmt.Sprintf(
 		"Connected to %s as %s, not yet pulled.\n"+
@@ -111,15 +111,18 @@ func reportNotPulled(w io.Writer, err error) bool {
 	if !errors.As(err, &notPulled) {
 		return false
 	}
-	fmt.Fprintln(w, notPulled.Error())
+	reportServerModeCache(w, notPulled.cfg)
 	return true
 }
 
-// reportEmptyServerModeCache prints the same report for the other shape of the
-// same situation: a cache that exists but holds no session at all. A directory
-// created by a hook that never reached the server looks nothing like a missing
-// one, and answering it with "no sessions recorded" points a connected user at
-// a wiring problem they do not have.
+// reportEmptyServerModeCache reports why a configured project's cache is empty.
+//
+// An empty cache is not evidence that history is waiting remotely: the project
+// may never have been registered, the registered project may have no refs, or
+// the server may be unavailable. ListRefs is the read-only protocol request
+// that distinguishes those states without guessing a ref name. Keep this one
+// reporter shared by log, sessions, and status so they cannot tell different
+// stories about the same empty cache.
 //
 // It reports false in local mode, where "no sessions" is the honest answer.
 func reportEmptyServerModeCache(w io.Writer) bool {
@@ -131,6 +134,42 @@ func reportEmptyServerModeCache(w io.Writer) bool {
 	if err != nil || !cfg.Enabled() {
 		return false
 	}
-	fmt.Fprintln(w, connectedNotPulledReport(cfg))
+
+	reportServerModeCache(w, cfg)
 	return true
+}
+
+// reportServerModeCache asks the live server what it knows before describing
+// an otherwise empty local cache. cfg has already been validated by the caller.
+func reportServerModeCache(w io.Writer, cfg remote.Config) {
+	client, err := remote.NewHTTPClient(cfg)
+	if err != nil {
+		fmt.Fprintf(w, "Cannot check %s for this project's history: %v.\n", cfg.ServerURL, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
+	defer cancel()
+	refs, err := client.ListRefs(ctx, "sessions")
+	switch {
+	case errors.Is(err, remote.ErrNotFound):
+		fmt.Fprintf(w,
+			"Connected to %s as %s, but the server does not know this project.\n"+
+				"  - Re-register it: rgt connect %s\n",
+			cfg.ServerURL, cfg.RepoID, cfg.ServerURL)
+	case err != nil:
+		// Do not translate a failed request into "not yet pulled": no remote
+		// safety claim is justified until this request succeeds.
+		fmt.Fprintf(w,
+			"Cannot reach %s to check this project's history; this machine's cache is empty.\n"+
+				"  - Check the server connection, then try: rgt pull\n"+
+				"  - Detail: %v\n",
+			cfg.ServerURL, err)
+	case len(refs) == 0:
+		fmt.Fprintf(w,
+			"Connected to %s as %s; the server knows this project but holds no history yet.\n"+
+				"  - Record a session here, or ask a teammate to deliver one with: rgt sync\n",
+			cfg.ServerURL, cfg.RepoID)
+	default:
+		fmt.Fprintln(w, connectedNotPulledReport(cfg))
+	}
 }
