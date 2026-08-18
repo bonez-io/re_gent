@@ -240,11 +240,6 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// hookCommand builds a hook command for the running binary.
-func hookCommand(args string) string {
-	return hookCommandWith(hookBinary(), args)
-}
-
 // reportWired names the file that was actually written. Naming the path (rather
 // than printing a bare "hooks configured") is what lets a user verify the claim
 // without trusting it.
