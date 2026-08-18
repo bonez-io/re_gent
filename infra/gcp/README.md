@@ -1,13 +1,18 @@
 # GCP deployment
 
-This is the first production-shaped re_gent deployment: one private VM for
-`dev`, one private VM for `main`, and branch-driven GitHub Actions deployment.
+This is the first production-shaped re_gent deployment: one VM with a reserved
+static IPv4 for `dev`, one for `main`, and branch-driven GitHub Actions
+deployment.
 
 ## Security boundary
 
-- Neither VM has an external IP.
-- Firewall ingress accepts only GCP IAP traffic on SSH (`22`) and the combined
-  UI/API entrypoint (`8080`). The raw server container is never published.
+- Each VM has its own reserved external IPv4. The address remains stable across
+  VM stops and updates.
+- Direct ingress to the combined UI/API entrypoint (`8080`) is restricted to
+  the CIDRs in `public_access_source_ranges`. Never allow `0.0.0.0/0` before
+  application authentication and TLS exist. The raw server container is never
+  published.
+- SSH and CI deployment remain IAP-only; port `22` is not publicly reachable.
 - GitHub authenticates with Workload Identity Federation and short-lived OIDC
   credentials. There are no service-account keys or deploy secrets.
 - Each VM has its own service account, data disk, daily snapshot policy, deploy
@@ -15,9 +20,9 @@ This is the first production-shaped re_gent deployment: one private VM for
 - Production deletion protection is enabled by default.
 
 This boundary is intentional because `regent-server` does not yet implement
-application authentication or tenancy. IAP grants access using GCP IAM. A
-public hostname must wait for the auth/security epic or be placed behind an
-approved HTTPS load balancer + IAP design.
+application authentication or tenancy. The direct endpoint is HTTP, not HTTPS,
+and is suitable only for an explicitly allowlisted development network. A
+public hostname must wait for the auth/security epic and an approved TLS design.
 
 ## One-time provisioning
 
@@ -28,7 +33,7 @@ unrelated product project.
 gcloud auth login
 gcloud auth application-default login
 cd infra/gcp
-./provision.sh YOUR_REGENT_PROJECT europe-west4 europe-west4-a
+./provision.sh YOUR_REGENT_PROJECT europe-west4 europe-west4-a YOUR.PUBLIC.IP/32
 ```
 
 The script creates a versioned GCS Terraform state bucket, applies the stack,
@@ -58,25 +63,29 @@ deploys exactly the reviewed merge commit.
 
 ## Access
 
-The UI and API are accessed through a local IAP tunnel:
+Terraform prints the stable URLs after apply:
 
 ```bash
-# Development: http://127.0.0.1:7654
-gcloud compute start-iap-tunnel regent-dev 8080 \
-  --local-host-port=localhost:7654 --zone=europe-west4-a --project=PROJECT
-
-# Production: http://127.0.0.1:7655
-gcloud compute start-iap-tunnel regent-main 8080 \
-  --local-host-port=localhost:7655 --zone=europe-west4-a --project=PROJECT
+terraform -chdir=infra/gcp output access
 ```
 
-Grant teammates `roles/iap.tunnelResourceAccessor` on only the instance they
-need. UI users do not need OS Login; operators additionally need OS Login.
-
-Point a repository at the tunnel while it is running:
+Only callers whose public source IP matches the Terraform allowlist can connect.
+To change it, apply the complete reviewed set of CIDRs:
 
 ```bash
-rgt connect http://127.0.0.1:7654
+terraform -chdir=infra/gcp apply \
+  -var='project_id=PROJECT' \
+  -var='public_access_source_ranges={dev=["203.0.113.10/32"],main=["203.0.113.10/32"]}'
+```
+
+Use a `/32` for each teammate's fixed public egress address. Never put API keys
+or secrets in this variable; CIDRs are ordinary infrastructure metadata.
+Operators additionally need IAP and OS Login permissions for SSH.
+
+Point a repository at the development address:
+
+```bash
+rgt connect http://DEV_STATIC_IP:8080
 ```
 
 ## Operations
@@ -94,11 +103,5 @@ and 30 days in main. Destroying the Terraform stack deliberately fails while
 the data disks are protected; removing that lifecycle protection must be a
 reviewed, explicit change.
 
-The known external blockers are operational rather than code changes:
-
-1. authenticate `gcloud` and select/create the dedicated re_gent project;
-2. repair GitHub Actions billing, because GitHub currently refuses to start
-   any jobs for this private repository;
-3. restore a paid GitHub organization plan (or make the repository public) so
-   private-branch protection and protected deployment environments can enforce
-   the review policy. The organization currently reports the Free plan.
+Before opening the allowlist beyond trusted development networks, implement
+application authentication, HTTPS, rate limiting, and security monitoring.

@@ -16,7 +16,14 @@ output "github" {
 }
 output "access" {
   value = {
-    dev  = "gcloud compute start-iap-tunnel regent-dev 8080 --local-host-port=localhost:7654 --zone=${var.zone} --project=${var.project_id}"
-    main = "gcloud compute start-iap-tunnel regent-main 8080 --local-host-port=localhost:7655 --zone=${var.zone} --project=${var.project_id}"
+    dev  = "http://${google_compute_address.public["dev"].address}:8080"
+    main = "http://${google_compute_address.public["main"].address}:8080"
+  }
+}
+
+output "public_ips" {
+  value = {
+    dev  = google_compute_address.public["dev"].address
+    main = google_compute_address.public["main"].address
   }
 }
