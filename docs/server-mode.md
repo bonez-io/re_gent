@@ -37,6 +37,7 @@ editing shared state):
 | `REGENT_TOKEN` | Reserved for future authenticated remote deployments; the current local server is open. | empty |
 | `REGENT_SERVER_TIMEOUT` | Network budget for one hook invocation. Clamped to 60s. | `5s` |
 | `REGENT_CACHE_DIR` | Overrides the machine-local cache location. | `<user cache>/regent` |
+| `REGENT_GIT_SYNC_ON_PUSH` | Set to `0` to stop `git push` delivering queued capture. Only the literal `0` disables it, so a typo leaves syncing on. | on |
 
 Or `~/.regent/config.toml`:
 

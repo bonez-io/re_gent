@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/regent-vcs/regent/internal/server"
@@ -402,5 +403,64 @@ func expireCooldown(t *testing.T, cacheDir string) {
 	})
 	if removed == 0 {
 		t.Fatalf("no retry-after marker under %s: the outage capture did not start a cooldown, so this test is not exercising what it claims", cacheDir)
+	}
+}
+
+// TestE2EConcurrentPushHookAndAgentTurnIsSafe pins RFC 0002 D4's claim that
+// concurrency needs no lock: spool writes are atomic, objects are content
+// addressed so a duplicate upload is a no-op, and the high-water mark only
+// advances on server confirmation. The worst case is redundant work.
+//
+// It is an end-to-end test because the claim is about separate processes. An
+// in-process test would share a mutex the real thing does not have.
+func TestE2EConcurrentPushHookAndAgentTurnIsSafe(t *testing.T) {
+	rgt := buildTestBinary(t)
+	srv := startTestServer(t)
+	project := pushableGitProject(t)
+	env := hermeticEnv(t, srv)
+	e2eRunEnv(t, rgt, project, env, nil, "connect", srv.URL)
+
+	// Seed several sessions so there is real work in the outbox.
+	for i := 0; i < 4; i++ {
+		id := "race-" + string(rune('a'+i))
+		captureTurn(t, rgt, project, env, id, "t1", id+".go")
+	}
+
+	// Eight hook invocations at once, all draining the same spool, while more
+	// agent turns land underneath them.
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			cmd := exec.Command(rgt, "git-hook", "pre-push", "origin", "url")
+			cmd.Dir = project
+			cmd.Env = append(os.Environ(), env...)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Errorf("hook exited non-zero under contention: %v\n%s", err, out)
+			}
+		}()
+	}
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			id := "race-concurrent-" + string(rune('x'+n))
+			captureTurn(t, rgt, project, env, id, "t1", id+".go")
+		}(i)
+	}
+	wg.Wait()
+
+	// Nothing corrupted: the queue still reads, and a final sync converges.
+	e2eRunEnv(t, rgt, project, env, nil, "sync", "--status")
+	e2eRunEnv(t, rgt, project, env, nil, "sync")
+
+	status := e2eRunEnv(t, rgt, project, env, nil, "sync", "--status")
+	if !strings.Contains(status, "Up to date") {
+		t.Errorf("outbox did not converge after contention:\n%s", status)
+	}
+	if len(serverSessions(t, srv.URL, repoIDOf(t, project))) == 0 {
+		t.Error("server holds nothing after concurrent delivery")
 	}
 }

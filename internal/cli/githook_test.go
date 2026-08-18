@@ -581,3 +581,89 @@ func TestDoctorGitHookFindingHonoursOptOut(t *testing.T) {
 		t.Errorf("opt-out should be OK and say why: OK=%v %q", f.OK, f.Detail)
 	}
 }
+
+// --- RFC 0002 prohibition 1, enforced rather than reviewed ---
+
+// Regent must never run a Git write command. Grepping the source proves it for
+// today's code; this proves it for tomorrow's, by putting a git on PATH that
+// records any write verb it is asked to perform and then exercising the whole
+// hook path against it.
+//
+// exec.LookPath is what the code uses, so a shim first on PATH is what it
+// finds. The real git is still needed for the fixture, so the shim forwards.
+func TestGitHookNeverInvokesGitWriteCommands(t *testing.T) {
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not on PATH")
+	}
+	root := t.TempDir()
+	gitInit(t, root)
+
+	shimDir := t.TempDir()
+	log := filepath.Join(shimDir, "writes.log")
+	shim := "#!/bin/sh\n" +
+		"for a in \"$@\"; do\n" +
+		"  case \"$a\" in\n" +
+		"    add|commit|push|remote|checkout|reset|merge|rebase|tag|stash|clean|update-ref|fetch|pull)\n" +
+		"      echo \"git $*\" >> " + log + " ;;\n" +
+		"  esac\n" +
+		"done\n" +
+		"exec " + realGit + " \"$@\"\n"
+	mustWrite(t, filepath.Join(shimDir, "git"), shim)
+	if err := os.Chmod(filepath.Join(shimDir, "git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	// The whole path: locate hooks, wire, inspect, run the runtime half, remove.
+	if _, err := wireGitHook(root); err != nil {
+		t.Fatalf("wireGitHook: %v", err)
+	}
+	if _, present := gitHookFinding(root); !present {
+		t.Fatal("doctor finding absent inside a Git repository")
+	}
+	var out bytes.Buffer
+	runGitPrePushHook(&out, os.LookupEnv, time.Now)
+	if _, err := removeGitHook(root); err != nil {
+		t.Fatalf("removeGitHook: %v", err)
+	}
+
+	if data, err := os.ReadFile(log); err == nil && len(data) > 0 {
+		t.Errorf("re_gent invoked Git write commands — RFC 0001 forbids it:\n%s", data)
+	}
+}
+
+// --- the wiring reaches both entry points ---
+
+// The issue asks for `rgt init` to set up the correlation, and connect must do
+// the same. Both go through configureHooks/connectWireHooks; this pins init's
+// side and the opt-out that suppresses it. connect's side is covered end to end
+// by TestE2EConnectWiresTheGitPushHook, which needs a live server.
+func TestConfigureHooksInstallsGitHookAndHonoursOptOut(t *testing.T) {
+	t.Run("installs", func(t *testing.T) {
+		root := t.TempDir()
+		gitInit(t, root)
+		if _, err := configureHooks(root, []agentTarget{agentClaude}, hookOptions{}); err != nil {
+			t.Fatalf("configureHooks: %v", err)
+		}
+		if !pathExists(filepath.Join(root, ".git", "hooks", "pre-push")) {
+			t.Error("init's decision layer did not wire the Git hook")
+		}
+	})
+
+	t.Run("noGitHook suppresses only the git hook", func(t *testing.T) {
+		root := t.TempDir()
+		gitInit(t, root)
+		outcome, err := configureHooks(root, []agentTarget{agentClaude}, hookOptions{noGitHook: true})
+		if err != nil {
+			t.Fatalf("configureHooks: %v", err)
+		}
+		if pathExists(filepath.Join(root, ".git", "hooks", "pre-push")) {
+			t.Error("Git hook written despite noGitHook")
+		}
+		// Agent hooks are a separate opt-out and must be unaffected.
+		if len(outcome.installed) == 0 {
+			t.Error("--no-git-hook also suppressed the agent hooks")
+		}
+	})
+}
