@@ -5,10 +5,10 @@
  * data is re_gent's, and the skill is the wiring between them. Each entry here
  * mirrors a `SKILL.md` under `.claude/skills/`.
  *
- * The catalog is bundled rather than fetched. Skills only *work* as files on
- * disk that an agent loads at startup, so the repository is their source of
- * truth today. When the server grows a skills registry, this module is the
- * seam: `listSkills` becomes a fetch and nothing else in the UI changes.
+ * The catalog comes from the server's registry when one is reachable, and falls
+ * back to the list bundled below. Skills only *work* as files on disk that an
+ * agent loads at startup, so installing one always ends in a local write — the
+ * registry decides what is on offer, never what is on your machine.
  */
 
 /** Which captured data a skill reads. Drives the facets in the Skills view. */
@@ -33,6 +33,10 @@ export type Skill = {
   regentOnly: boolean
   /** Shown on the detail panel as a concrete way to invoke it. */
   example: string
+  /** Where the registry served it from: shipped with the server, or published to it. */
+  origin?: 'builtin' | 'local'
+  /** Why the skill is withheld from the default install set, when it is. */
+  withheld?: string
 }
 
 export const skills: Skill[] = [
@@ -143,8 +147,8 @@ export const skills: Skill[] = [
     regentOnly: false,
     example: 'rewind b7ab3e66 --dry-run',
   },
-  // Proposed, not yet written. Listed so the catalog shows where this is going
-  // and so `installed` has a meaningful false case before a registry exists.
+  // Not yet written. They appear only in the bundled fallback: a registry lists
+  // what actually exists, so a server-backed catalog will not show them.
   {
     name: 'token-audit',
     title: 'Token audit',
@@ -187,7 +191,83 @@ export const categoryLabels: Record<SkillCategory, string> = {
   meta: 'Meta',
 }
 
-/** The seam a server-side registry would replace. */
+/** One catalog entry as the server's registry returns it. */
+export type RegistrySkill = {
+  name: string
+  description: string
+  allowed_tools?: string
+  argument_hint?: string
+  /** "builtin" ships with the server; "local" was published by the operator. */
+  source: 'builtin' | 'local'
+  /** Non-empty when the skill is withheld from the default set, and why. */
+  withheld?: string
+}
+
+export type RegistryResponse = { total: number; skills: RegistrySkill[] }
+
+/** Title-case a slug for a skill the bundled catalog has never heard of. */
+function titleFor(name: string): string {
+  const words = name.replace(/[-_]/g, ' ')
+  return words.charAt(0).toUpperCase() + words.slice(1)
+}
+
+/** `Bash(rgt log *), Bash(rgt show *)` -> `['rgt log', 'rgt show']`. */
+function commandsFrom(allowedTools?: string): string[] {
+  if (!allowedTools) return []
+  return [...allowedTools.matchAll(/Bash\(([^)*]+)\*?\)/g)].map((match) => match[1].trim()).filter(Boolean)
+}
+
+/**
+ * Merge the registry's answer with the bundled presentation metadata.
+ *
+ * The server is authoritative about *which* skills exist and what each one may
+ * run — that is the half that changes without a redeploy. The bundled catalog
+ * contributes only presentation: category, a written title, an example. A skill
+ * the server knows and the bundle does not is still shown, with those fields
+ * derived, because refusing to display it would defeat the point of a registry.
+ */
+export function mergeRegistry(response: RegistryResponse): Skill[] {
+  const bundled = new Map(skills.map((skill) => [skill.name, skill]))
+  return response.skills.map((entry) => {
+    const known = bundled.get(entry.name)
+    return {
+      name: entry.name,
+      title: known?.title ?? titleFor(entry.name),
+      description: entry.description || known?.description || '',
+      category: known?.category ?? 'meta',
+      sources: known?.sources ?? ['steps'],
+      commands: commandsFrom(entry.allowed_tools).length ? commandsFrom(entry.allowed_tools) : (known?.commands ?? []),
+      argumentHint: entry.argument_hint || known?.argumentHint,
+      installed: true, // present in the registry means installable
+      regentOnly: known?.regentOnly ?? false,
+      example: known?.example ?? `${entry.name}`,
+      origin: entry.source,
+      withheld: entry.withheld,
+    }
+  })
+}
+
+/**
+ * Fetch the catalog from the server's registry.
+ *
+ * Falls back to the bundled list when the server has no registry — an older
+ * server, or none running. The Skills view is a reference as much as an
+ * installer, so it should still render something true when offline rather than
+ * showing an error where a catalog belongs.
+ */
+export async function fetchSkills(): Promise<{ skills: Skill[]; offline: boolean }> {
+  try {
+    const response = await fetch('/api/skills', { headers: { Accept: 'application/json' } })
+    if (!response.ok) throw new Error(String(response.status))
+    const body = (await response.json()) as RegistryResponse
+    if (!Array.isArray(body?.skills)) throw new Error('malformed registry response')
+    return { skills: mergeRegistry(body), offline: false }
+  } catch {
+    return { skills, offline: true }
+  }
+}
+
+/** The bundled catalog, used offline and by stories. */
 export function listSkills(): Skill[] {
   return skills
 }

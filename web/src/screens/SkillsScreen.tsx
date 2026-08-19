@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
-import { categoryLabels, installCommand, installPrompt, listSkills, type Skill, type SkillCategory } from '../api/skills'
+import { useQuery } from '@tanstack/react-query'
+import { categoryLabels, fetchSkills, installCommand, installPrompt, listSkills, type Skill, type SkillCategory } from '../api/skills'
 import { SkillCard } from '../components/SkillCard'
 import { SkillDetail } from '../components/SkillDetail'
 
@@ -20,17 +21,19 @@ async function copy(text: string): Promise<boolean> {
 /**
  * The skills catalog.
  *
- * Reads the bundled catalog rather than the server: skills only work as files
- * an agent loads from disk, so the repository is their source of truth until a
- * registry exists. The list/detail split and the card fields are chosen so the
- * same screen becomes the marketplace without a rewrite.
+ * Reads the server's registry, falling back to the bundled catalog when no
+ * registry answers. A skill published to the server appears here without
+ * rebuilding this app — that is what makes the page a marketplace rather than
+ * a list.
  *
- * Installation is by generated prompt, not by writing files: the user ticks
- * skills, copies a prompt, and pastes it into whichever agent they use. The UI
- * stays read-only and the flow works in any harness.
+ * Installation never happens here: the user ticks skills and copies
+ * `rgt skill install <names>`. The UI produces text, the CLI does the writing,
+ * so this view stays read-only and the flow works in any harness.
  */
 export function SkillsScreen() {
-  const all = useMemo(() => listSkills(), [])
+  const registry = useQuery({ queryKey: ['skills'], queryFn: fetchSkills, staleTime: 30_000 })
+  const all = registry.data?.skills ?? listSkills()
+  const offline = registry.data?.offline ?? true
   const [filter, setFilter] = useState<Filter>('all')
   const [query, setQuery] = useState('')
   const [selectedName, setSelectedName] = useState<string>(all[0]?.name ?? '')
@@ -48,7 +51,7 @@ export function SkillsScreen() {
   }, [all, filter, query])
 
   const selected = all.find((skill) => skill.name === selectedName) ?? visible[0]
-  const installedCount = all.filter((skill) => skill.installed).length
+  const localCount = all.filter((skill) => skill.origin === 'local').length
   const chosen: Skill[] = useMemo(() => all.filter((skill) => checked.has(skill.name)), [all, checked])
   const prompt = useMemo(() => installPrompt(chosen), [chosen])
   const command = useMemo(() => installCommand(chosen), [chosen])
@@ -71,7 +74,8 @@ export function SkillsScreen() {
       <div className="shrink-0 border-b border-line bg-canvas px-3 py-2">
         <div className="flex items-center gap-2">
           <h1 className="m-0 text-[13px] font-semibold leading-4">Skills</h1>
-          <span className="text-[10.5px] tabular-nums text-ink-3">{installedCount} installed · {all.length - installedCount} proposed</span>
+          <span className="text-[10.5px] tabular-nums text-ink-3">{all.length} available{localCount > 0 ? ` · ${localCount} published here` : ''}</span>
+          {offline && <span title="The server has no skills registry; showing the catalog bundled with this build" className="rounded-[4px] border border-line px-1 text-[9px] text-ink-3">bundled</span>}
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter skills…" className="ml-auto h-7 w-44 rounded-[7px] bg-field px-2 text-[11.5px] outline-none shadow-hairline focus:shadow-btn" />
         </div>
         <div className="mt-1.5 flex flex-wrap items-center gap-1">
