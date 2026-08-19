@@ -20,7 +20,17 @@ export const Available: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement)
     await expect(canvas.getByText('available')).toBeInTheDocument()
-    await expect(canvas.getByText('re_gent')).toBeInTheDocument()
+    await expect(canvas.getByText(bugBlame.title)).toBeInTheDocument()
+  },
+}
+
+/** The card is title, one line, one badge — metadata belongs in the detail panel. */
+export const CarriesNoMetadataClutter: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    await expect(canvas.queryByText('Provenance')).not.toBeInTheDocument()
+    await expect(canvas.queryByText(/blame · steps/)).not.toBeInTheDocument()
+    await expect(canvas.queryByText(bugBlame.name)).not.toBeInTheDocument()
   },
 }
 
@@ -44,8 +54,7 @@ export const Withheld: Story = {
 
 export const Selected: Story = { args: { selected: true } }
 
-/** No `re_gent` mark: coupling is derivable from any per-turn file list. */
-export const WithoutRegentOnlyMark: Story = { args: fileCoupling }
+export const AnotherSkill: Story = { args: fileCoupling }
 
 /** Proposed skills have no file on disk yet; the card must not imply otherwise. */
 export const Proposed: Story = {

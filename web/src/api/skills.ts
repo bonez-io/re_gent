@@ -287,36 +287,6 @@ export function serverBaseUrl(): string {
   return 'http://127.0.0.1:7654'
 }
 
-/**
- * Build the prompt a user pastes into their agent to install skills.
- *
- * The UI deliberately does not write to disk: it produces text, and the agent
- * does the installing. That keeps the first UI epic read-only (RFC 0001) and
- * makes the flow work in any harness that can fetch and write a file, rather
- * than only in the one we happened to code for.
- *
- * The prompt asks the agent to surface each skill's tool grant before writing.
- * A SKILL.md is not inert documentation — `allowed-tools` decides what the
- * skill may run — so the grant belongs in front of the person approving it.
- */
-export function installPrompt(selected: Skill[], baseUrl = serverBaseUrl()): string {
-  if (selected.length === 0) return ''
-  const names = selected.map((skill) => skill.name)
-  const plural = names.length === 1 ? 'skill' : 'skills'
-
-  return [
-    `Run this to install ${names.length} re_gent ${plural}:`,
-    '',
-    `    ${installCommand(selected)}`,
-    '',
-    'It prints what each skill is allowed to run as it installs, and never replaces',
-    'a skill file you have edited without --force. Restart this session afterwards —',
-    'skills load at startup.',
-    '',
-    `If rgt is not installed, fetch each definition from ${baseUrl}/api/skills/<name>`,
-    'and write it to .claude/skills/<name>/SKILL.md instead.',
-  ].join('\n')
-}
 
 /**
  * The one-liner the copy button is really for.
@@ -324,8 +294,16 @@ export function installPrompt(selected: Skill[], baseUrl = serverBaseUrl()): str
  * `rgt skill install` does the work — resolving the host's skill directory,
  * refusing to clobber an edited file, and printing each tool grant — so the
  * thing a user pastes is a command, not a paragraph of instructions.
+ *
+ * When the catalog came from a registry, the command names that registry.
+ * Without it the CLI resolves a server from the project's own binding, so a
+ * command copied here would look elsewhere — or nowhere — for the skill this
+ * page just showed. That is not only a miss for a skill the registry alone
+ * has: a published skill may also override a built-in of the same name, and
+ * the command must fetch the bytes the user was actually looking at.
  */
-export function installCommand(selected: Skill[]): string {
+export function installCommand(selected: Skill[], registry?: string): string {
   if (selected.length === 0) return ''
-  return `rgt skill install ${selected.map((skill) => skill.name).join(' ')}`
+  const names = selected.map((skill) => skill.name).join(' ')
+  return `rgt skill install ${names}${registry ? ` --server ${registry}` : ''}`
 }
