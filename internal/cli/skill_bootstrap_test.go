@@ -43,6 +43,86 @@ func TestBootstrapInstallWritesNothingElse(t *testing.T) {
 	}
 }
 
+func TestBootstrapInstallPreservesAProjectEdit(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, ".claude", "skills", skills.Bootstrap, "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const edited = "---\ndescription: Team-specific discovery.\n---\n\nKeep this version.\n"
+	if err := os.WriteFile(target, []byte(edited), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := installBootstrapSkill(root, []agentTarget{agentClaude}); err != nil {
+		t.Fatalf("install bootstrap: %v", err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != edited {
+		t.Fatal("re-running init overwrote the project's edited bootstrap skill")
+	}
+}
+
+func TestSkillTargetsAutoFollowEveryWiredHost(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{".agents", ".opencode"} {
+		path := filepath.Join(root, dir, "skills", skills.Bootstrap, "SKILL.md")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("bootstrap"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	targets, err := skillTargetsFor(root, "auto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 2 || targets[0].label != ".agents/skills" || targets[1].label != ".opencode/skills" {
+		t.Fatalf("auto targets = %+v, want Codex and OpenCode skill directories", targets)
+	}
+}
+
+func TestSkillTargetsSupportEveryWiredAgent(t *testing.T) {
+	root := t.TempDir()
+	for agent, want := range map[string]string{
+		"claude":   ".claude/skills",
+		"codex":    ".agents/skills",
+		"opencode": ".opencode/skills",
+		"pi":       ".pi/skills",
+	} {
+		t.Run(agent, func(t *testing.T) {
+			targets, err := skillTargetsFor(root, agent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(targets) != 1 || targets[0].label != want {
+				t.Fatalf("targets = %+v, want %s", targets, want)
+			}
+		})
+	}
+}
+
+func TestSkillTargetsAutoDetectLegacyHostRoots(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{".claude", ".codex"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	targets, err := skillTargetsFor(root, "auto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 2 || targets[0].label != ".claude/skills" || targets[1].label != ".agents/skills" {
+		t.Fatalf("auto targets = %+v, want legacy Claude and Codex host roots", targets)
+	}
+}
+
 // A skill written where the host does not read it is a file that does nothing.
 func TestBootstrapFollowsTheHostsThatWereActuallyWired(t *testing.T) {
 	root := t.TempDir()

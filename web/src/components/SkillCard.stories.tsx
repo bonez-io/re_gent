@@ -63,6 +63,7 @@ export const Proposed: Story = {
     const canvas = within(canvasElement)
     await expect(canvas.getByText('proposed')).toBeInTheDocument()
     await expect(canvas.queryByText('available')).not.toBeInTheDocument()
+    await expect(canvas.getByRole('checkbox')).toBeDisabled()
   },
 }
 

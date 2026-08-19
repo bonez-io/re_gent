@@ -810,10 +810,18 @@ func createRegentGitignore(projectRoot string) error {
 func installBootstrapSkill(projectRoot string, targets []agentTarget) error {
 	var wrote []string
 	for _, dir := range skillDirsFor(projectRoot, targets) {
-		if _, _, err := skills.Install(dir, skills.Bootstrap, true); err != nil {
+		_, written, err := skills.Install(dir, skills.Bootstrap, false)
+		if skills.IsExists(err) {
+			// A project-local edit outranks the bundled helper. Re-running init
+			// must never silently replace agent instructions the team changed.
+			continue
+		}
+		if err != nil {
 			return err
 		}
-		wrote = append(wrote, dir)
+		if written {
+			wrote = append(wrote, dir)
+		}
 	}
 	if len(wrote) == 0 {
 		return nil
@@ -896,7 +904,11 @@ func offerSkillInstall(projectRoot string, targets []agentTarget, input *bufio.R
 // one of them invisible to anyone reading .claude/skills.
 func installSkills(skillsDir string) error {
 	for _, name := range skills.DefaultNames() {
-		if _, _, err := skills.Install(skillsDir, name, true); err != nil {
+		_, _, err := skills.Install(skillsDir, name, false)
+		if skills.IsExists(err) {
+			continue
+		}
+		if err != nil {
 			return err
 		}
 	}

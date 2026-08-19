@@ -107,9 +107,13 @@ func skillInstallCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("get working directory: %w", err)
 			}
-			dir, label, err := skillsDirFor(cwd, agent)
+			targets, err := skillTargetsFor(cwd, agent)
 			if err != nil {
 				return err
+			}
+			labels := make([]string, 0, len(targets))
+			for _, target := range targets {
+				labels = append(labels, target.label)
 			}
 
 			base := registryURL(remote.OSEnv, cwd, server)
@@ -128,31 +132,33 @@ func skillInstallCmd() *cobra.Command {
 					fmt.Fprintf(out, "  %s %s: %v\n", style.Warning("!"), name, resolveErr)
 					continue
 				}
-				path, written, err := skills.InstallContent(dir, name, content, force)
-				switch {
-				case skills.IsExists(err):
-					// Their edit outranks our copy. Say so and name the override.
-					edited++
-					fmt.Fprintf(out, "  %s %s left alone (edited locally; --force to replace)\n", style.DimText("-"), name)
-				case err != nil:
-					failures = append(failures, fmt.Sprintf("%s: %v", name, err))
-					fmt.Fprintf(out, "  %s %s\n", style.Warning("!"), err)
-				case !written:
-					skipped++
-					fmt.Fprintf(out, "  %s %s already current\n", style.DimText("-"), name)
-				default:
-					installed++
-					fmt.Fprintf(out, "  %s %s -> %s %s\n", style.Success(""), name, rel(cwd, path), style.DimText("("+string(origin)+")"))
-					// The grant is printed for every install, whatever the source.
-					// A skill fetched from a server is exactly the case where the
-					// user most needs to see what it is permitted to run.
-					if grant := frontMatterLine(content, "allowed-tools"); grant != "" {
-						fmt.Fprintf(out, "      may run: %s\n", style.DimText(grant))
+				for _, target := range targets {
+					path, written, installErr := skills.InstallContent(target.dir, name, content, force)
+					switch {
+					case skills.IsExists(installErr):
+						// Their edit outranks our copy. Say so and name the override.
+						edited++
+						fmt.Fprintf(out, "  %s %s left alone in %s (edited locally; --force to replace)\n", style.DimText("-"), name, target.label)
+					case installErr != nil:
+						failures = append(failures, fmt.Sprintf("%s in %s: %v", name, target.label, installErr))
+						fmt.Fprintf(out, "  %s %s\n", style.Warning("!"), installErr)
+					case !written:
+						skipped++
+						fmt.Fprintf(out, "  %s %s already current in %s\n", style.DimText("-"), name, target.label)
+					default:
+						installed++
+						fmt.Fprintf(out, "  %s %s -> %s %s\n", style.Success(""), name, rel(cwd, path), style.DimText("("+string(origin)+")"))
+						// The grant is printed for every install, whatever the source.
+						// A skill fetched from a server is exactly the case where the
+						// user most needs to see what it is permitted to run.
+						if grant := frontMatterLine(content, "allowed-tools"); grant != "" {
+							fmt.Fprintf(out, "      may run: %s\n", style.DimText(grant))
+						}
 					}
 				}
 			}
 
-			fmt.Fprintf(out, "\n%d installed, %d already current, %d left alone (%s)\n", installed, skipped, edited, label)
+			fmt.Fprintf(out, "\n%d installed, %d already current, %d left alone (%s)\n", installed, skipped, edited, strings.Join(labels, ", "))
 			if installed > 0 {
 				fmt.Fprintf(out, "%s Restart the agent session in this repo — skills load at startup.\n", style.Warning(""))
 			}
@@ -164,25 +170,71 @@ func skillInstallCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "Replace a skill file you have edited")
 	cmd.Flags().BoolVar(&all, "all", false, "Install every skill this build ships")
-	cmd.Flags().StringVar(&agent, "agent", "claude", "Which agent's skill directory to write: claude or codex")
+	cmd.Flags().StringVar(&agent, "agent", "auto", "Agent skill directory: auto, claude, codex, opencode, pi, or all")
 	cmd.Flags().StringVar(&server, "server", "", "Registry to install from (defaults to this project's server)")
 	return cmd
 }
 
-// skillsDirFor resolves where a host loads skills from.
-//
-// Skill directories are host conventions, not re_gent's: Claude Code reads
-// .claude/skills, and the Codex-style hosts read .agents/skills. Writing to the
-// wrong one installs a file nothing will ever load, so the choice is explicit
-// rather than guessed.
-func skillsDirFor(projectRoot, agent string) (dir string, label string, err error) {
+type skillInstallTarget struct {
+	dir   string
+	label string
+}
+
+// skillTargetsFor resolves every host that should receive an installed skill.
+// Auto follows the bootstrap skill written by `rgt init`; a repo wired for two
+// hosts therefore gets the skill in both places instead of silently defaulting
+// to Claude and leaving Codex (or another host) unable to load it.
+func skillTargetsFor(projectRoot, agent string) ([]skillInstallTarget, error) {
+	target := func(dir, label string) skillInstallTarget {
+		return skillInstallTarget{dir: filepath.Join(projectRoot, dir, "skills"), label: label + "/skills"}
+	}
+	all := []skillInstallTarget{
+		target(".claude", ".claude"),
+		target(".agents", ".agents"),
+		target(".opencode", ".opencode"),
+		target(".pi", ".pi"),
+	}
 	switch strings.ToLower(agent) {
-	case "claude", "claude-code", "claude_code", "":
-		return filepath.Join(projectRoot, ".claude", "skills"), ".claude/skills", nil
+	case "auto", "":
+		var wired []skillInstallTarget
+		for _, candidate := range all {
+			if _, err := os.Stat(filepath.Join(candidate.dir, skills.Bootstrap, "SKILL.md")); err == nil {
+				wired = append(wired, candidate)
+			}
+		}
+		if len(wired) > 0 {
+			return wired, nil
+		}
+		// Older projects predate the bootstrap helper. Fall back to the host
+		// directories/config they already carry before choosing the historical
+		// Claude default.
+		markers := [][]string{{".claude"}, {".agents", ".codex"}, {".opencode"}, {".pi"}}
+		for i, candidates := range markers {
+			for _, marker := range candidates {
+				if _, err := os.Stat(filepath.Join(projectRoot, marker)); err == nil {
+					wired = append(wired, all[i])
+					break
+				}
+			}
+		}
+		if len(wired) > 0 {
+			return wired, nil
+		}
+		// Backwards-compatible fallback for projects created before the
+		// bootstrap skill or host markers existed.
+		return all[:1], nil
+	case "claude", "claude-code", "claude_code":
+		return all[0:1], nil
 	case "codex", "agents":
-		return filepath.Join(projectRoot, ".agents", "skills"), ".agents/skills", nil
+		return all[1:2], nil
+	case "opencode":
+		return all[2:3], nil
+	case "pi":
+		return all[3:4], nil
+	case "all", "both":
+		return all, nil
 	default:
-		return "", "", fmt.Errorf("unknown agent %q: use claude or codex", agent)
+		return nil, fmt.Errorf("unknown agent %q: use auto, claude, codex, opencode, pi, or all", agent)
 	}
 }
 

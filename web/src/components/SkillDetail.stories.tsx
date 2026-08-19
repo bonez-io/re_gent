@@ -16,7 +16,7 @@ export const Installed: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement)
     // The path is the thing a reader needs in order to go read the skill.
-    await expect(canvas.getByText('.claude/skills/bug-blame/SKILL.md')).toBeInTheDocument()
+    await expect(canvas.getByText('*/skills/bug-blame/SKILL.md')).toBeInTheDocument()
     // Every granted command is shown, so the tool grant is auditable at a glance.
     await expect(canvas.getByText('rgt blame')).toBeInTheDocument()
     await expect(canvas.getByText('rgt show')).toBeInTheDocument()

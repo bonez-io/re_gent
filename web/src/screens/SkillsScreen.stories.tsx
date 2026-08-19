@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { http, HttpResponse } from 'msw'
 import { expect, userEvent, within } from 'storybook/test'
 import { installCommand, skills } from '../api/skills'
 import { SkillsScreen } from './SkillsScreen'
@@ -8,6 +9,11 @@ const meta = {
   component: SkillsScreen,
   tags: ['ai-generated'],
   parameters: { layout: 'fullscreen' },
+  beforeEach({ msw }) {
+    // Exercise the explicit bundled fallback without letting MSW emit one
+    // unhandled-request warning for every story.
+    msw.use(http.get('/api/skills', () => new HttpResponse(null, { status: 404 })))
+  },
   decorators: [(Story) => {
     // No registry is reachable in Storybook, so fetchSkills falls back to the
     // bundled catalog — which is exactly the offline path worth pinning here.
@@ -51,7 +57,7 @@ export const SelectingACardShowsItsDetail: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement)
     await userEvent.click(canvas.getAllByText('File coupling')[0])
-    await expect(canvas.getByText('.claude/skills/file-coupling/SKILL.md')).toBeInTheDocument()
+    await expect(canvas.getByText('*/skills/file-coupling/SKILL.md')).toBeInTheDocument()
   },
 }
 
@@ -59,9 +65,9 @@ export const SelectingACardShowsItsDetail: Story = {
 export const CheckingDoesNotChangeDetail: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement)
-    await expect(canvas.getByText(`.claude/skills/${skills[0].name}/SKILL.md`)).toBeInTheDocument()
+    await expect(canvas.getByText(`*/skills/${skills[0].name}/SKILL.md`)).toBeInTheDocument()
     await userEvent.click(canvas.getByLabelText('Select File coupling for install'))
-    await expect(canvas.getByText(`.claude/skills/${skills[0].name}/SKILL.md`)).toBeInTheDocument()
+    await expect(canvas.getByText(`*/skills/${skills[0].name}/SKILL.md`)).toBeInTheDocument()
   },
 }
 

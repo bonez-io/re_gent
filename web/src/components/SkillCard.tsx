@@ -30,13 +30,14 @@ function StatusBadge({ installed, origin, withheld }: Pick<Skill, 'installed' | 
  */
 export function SkillCard({ title, description, installed, origin, withheld, selected = false, onClick, checked = false, onCheckedChange }: SkillCardProps) {
   return <div className={`group flex items-start gap-2 rounded-[9px] border p-2.5 transition-[background-color,box-shadow] duration-150 ${checked ? 'border-accent/40 bg-accent-tint/25' : selected ? 'border-line bg-hover-2 shadow-hairline' : 'border-line bg-canvas hover:bg-hover'}`}>
-    <label className="flex cursor-pointer items-center pt-0.5">
+    <label className={`flex items-center pt-0.5 ${installed ? 'cursor-pointer' : 'cursor-not-allowed opacity-45'}`}>
       <input
         type="checkbox"
         checked={checked}
+        disabled={!installed}
         onChange={(event) => onCheckedChange?.(event.target.checked)}
         aria-label={`Select ${title} for install`}
-        className="size-3.5 cursor-pointer accent-[var(--color-accent,#7c6cff)]"
+        className="size-3.5 cursor-pointer accent-[var(--color-accent,#7c6cff)] disabled:cursor-not-allowed"
       />
     </label>
     <button type="button" onClick={onClick} aria-current={selected ? 'page' : undefined} className="min-w-0 flex-1 text-left">

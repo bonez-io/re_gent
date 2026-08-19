@@ -21,7 +21,7 @@ export function SkillDetail({ skill }: SkillDetailProps) {
         {skill.regentOnly && <span className="rounded-[4px] bg-accent-tint px-1 text-[9px] font-medium text-accent-ink">re_gent</span>}
         {!skill.installed && <span className="rounded-[4px] border border-line px-1 text-[9px] font-normal text-ink-3">proposed</span>}
       </h1>
-      <p className="m-0 font-mono text-[10.5px] leading-4 text-accent-ink">.claude/skills/{skill.name}/SKILL.md</p>
+      <p className="m-0 font-mono text-[10.5px] leading-4 text-accent-ink">*/skills/{skill.name}/SKILL.md</p>
     </header>
 
     <p className="m-0 px-3 py-2.5 text-[12px] leading-5 text-ink-2">{skill.description}</p>

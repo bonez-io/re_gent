@@ -1,6 +1,6 @@
 ---
 description: Create a new re_gent skill from a plain-language description, writing a valid SKILL.md. Use when the user wants a new skill, or to build one that style-factory proposed.
-allowed-tools: Bash(rgt log *), Bash(rgt sessions *), Read, Write
+allowed-tools: Bash(rgt log *), Bash(rgt sessions *), Glob, Read, Write
 argument-hint: "<description of what the skill should do>"
 ---
 
@@ -27,11 +27,10 @@ wrong moment and is worse than no skill.
 
 ## 2. Check it is not already there
 
-```bash
-ls .claude/skills/
-```
+Use `Glob` to list `.claude/skills/*/SKILL.md` (or the active host's matching
+skills directory), then read any neighbour that looks close.
 
-Read any neighbour that looks close. Extending an existing skill beats adding a
+Extending an existing skill beats adding a
 near-duplicate — two skills with overlapping descriptions make the agent pick badly.
 
 ## 3. Write it
