@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/regent-vcs/regent/internal/remote"
 	"github.com/regent-vcs/regent/internal/skills"
 	"github.com/regent-vcs/regent/internal/style"
 	"github.com/spf13/cobra"
@@ -31,14 +32,27 @@ func SkillCmd() *cobra.Command {
 
 func skillListCmd() *cobra.Command {
 	var jsonOut bool
+	var server string
 	cmd := &cobra.Command{
 		Use:          "list",
 		Short:        "List the skills this build can install",
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			all := skills.All()
 			out := cmd.OutOrStdout()
+			all := skills.All()
+			source := "built into this rgt"
+			if cwd, err := os.Getwd(); err == nil {
+				if base := registryURL(remote.OSEnv, cwd, server); base != "" {
+					if entries, err := fetchCatalog(cmd.Context(), base); err == nil {
+						all = all[:0]
+						for _, entry := range entries {
+							all = append(all, skills.Skill{Name: entry.Name, Description: entry.Description, AllowedTools: entry.AllowedTools})
+						}
+						source = base
+					}
+				}
+			}
 			if jsonOut {
 				fmt.Fprintln(out, "[")
 				for i, skill := range all {
@@ -55,19 +69,21 @@ func skillListCmd() *cobra.Command {
 			for _, skill := range all {
 				fmt.Fprintf(out, "  %s\n      %s\n", style.Brand(skill.Name), truncate(skill.Description, 96))
 			}
-			fmt.Fprintf(out, "\n%d skills. Install with: rgt skill install <name>...\n", len(all))
+			fmt.Fprintf(out, "\n%d skills from %s. Install with: rgt skill install <name>...\n", len(all), source)
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	cmd.Flags().StringVar(&server, "server", "", "Registry to read from (defaults to this project's server)")
 	return cmd
 }
 
 func skillInstallCmd() *cobra.Command {
 	var (
-		force bool
-		agent string
-		all   bool
+		force  bool
+		agent  string
+		all    bool
+		server string
 	)
 	cmd := &cobra.Command{
 		Use:   "install <name>...",
@@ -96,6 +112,8 @@ func skillInstallCmd() *cobra.Command {
 				return err
 			}
 
+			base := registryURL(remote.OSEnv, cwd, server)
+
 			out := cmd.OutOrStdout()
 			var installed, skipped, edited int
 			var failures []string
@@ -104,7 +122,13 @@ func skillInstallCmd() *cobra.Command {
 				if reason := skills.Withheld(name); reason != "" {
 					fmt.Fprintf(out, "  %s %s is not shipped by default: %s\n", style.Warning("!"), name, reason)
 				}
-				path, written, err := skills.Install(dir, name, force)
+				content, origin, resolveErr := resolveSkill(cmd.Context(), base, name)
+				if resolveErr != nil {
+					failures = append(failures, fmt.Sprintf("%s: %v", name, resolveErr))
+					fmt.Fprintf(out, "  %s %s: %v\n", style.Warning("!"), name, resolveErr)
+					continue
+				}
+				path, written, err := skills.InstallContent(dir, name, content, force)
 				switch {
 				case skills.IsExists(err):
 					// Their edit outranks our copy. Say so and name the override.
@@ -118,10 +142,12 @@ func skillInstallCmd() *cobra.Command {
 					fmt.Fprintf(out, "  %s %s already current\n", style.DimText("-"), name)
 				default:
 					installed++
-					skill, _ := skills.Get(name)
-					fmt.Fprintf(out, "  %s %s -> %s\n", style.Success(""), name, rel(cwd, path))
-					if skill.AllowedTools != "" {
-						fmt.Fprintf(out, "      may run: %s\n", style.DimText(skill.AllowedTools))
+					fmt.Fprintf(out, "  %s %s -> %s %s\n", style.Success(""), name, rel(cwd, path), style.DimText("("+string(origin)+")"))
+					// The grant is printed for every install, whatever the source.
+					// A skill fetched from a server is exactly the case where the
+					// user most needs to see what it is permitted to run.
+					if grant := frontMatterLine(content, "allowed-tools"); grant != "" {
+						fmt.Fprintf(out, "      may run: %s\n", style.DimText(grant))
 					}
 				}
 			}
@@ -139,6 +165,7 @@ func skillInstallCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&force, "force", false, "Replace a skill file you have edited")
 	cmd.Flags().BoolVar(&all, "all", false, "Install every skill this build ships")
 	cmd.Flags().StringVar(&agent, "agent", "claude", "Which agent's skill directory to write: claude or codex")
+	cmd.Flags().StringVar(&server, "server", "", "Registry to install from (defaults to this project's server)")
 	return cmd
 }
 
@@ -164,4 +191,24 @@ func rel(base, path string) string {
 		return relative
 	}
 	return path
+}
+
+// frontMatterLine reads one key from a SKILL.md's front matter. Fetched skills
+// are plain text, so their grant is read from the bytes about to be written
+// rather than from the embedded copy, which may differ.
+func frontMatterLine(text, key string) string {
+	if !strings.HasPrefix(text, "---") {
+		return ""
+	}
+	rest := text[3:]
+	end := strings.Index(rest, "\n---")
+	if end < 0 {
+		return ""
+	}
+	for _, line := range strings.Split(rest[:end], "\n") {
+		if after, ok := strings.CutPrefix(strings.TrimSpace(line), key+":"); ok {
+			return strings.TrimSpace(after)
+		}
+	}
+	return ""
 }

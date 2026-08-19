@@ -128,12 +128,24 @@ func Install(skillsDir, name string, overwrite bool) (path string, written bool,
 	if err != nil {
 		return "", false, err
 	}
-	dir := filepath.Join(skillsDir, skill.Name)
+	return InstallContent(skillsDir, skill.Name, skill.Content, overwrite)
+}
+
+// InstallContent writes a skill whose text came from somewhere other than the
+// embedded set — a server's registry, say — under the same rules as Install.
+//
+// The write rules belong here rather than at each call site: whether a skill
+// came from this binary or from a server, the user's edited copy outranks it.
+func InstallContent(skillsDir, name, content string, overwrite bool) (path string, written bool, err error) {
+	if !validName(name) {
+		return "", false, fmt.Errorf("invalid skill name %q", name)
+	}
+	dir := filepath.Join(skillsDir, name)
 	target := filepath.Join(dir, "SKILL.md")
 
 	if !overwrite {
 		if existing, statErr := os.ReadFile(target); statErr == nil {
-			if string(existing) == skill.Content {
+			if string(existing) == content {
 				return target, false, nil // already current; nothing to do
 			}
 			return target, false, errExists{target}
@@ -142,7 +154,7 @@ func Install(skillsDir, name string, overwrite bool) (path string, written bool,
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", false, fmt.Errorf("create %s: %w", dir, err)
 	}
-	if err := os.WriteFile(target, []byte(skill.Content), 0o644); err != nil {
+	if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
 		return "", false, fmt.Errorf("write %s: %w", target, err)
 	}
 	return target, true, nil
