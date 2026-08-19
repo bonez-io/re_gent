@@ -23,18 +23,19 @@ func main() {
 	data := flag.String("data", "/data", "directory holding served repositories")
 	max := flag.Int64("max-object-size", server.DefaultMaxObjectBytes, "maximum accepted object size in bytes")
 	binaries := flag.String("binaries-dir", "", "directory of prebuilt rgt binaries served by /install")
+	skillsDir := flag.String("skills-dir", "", "directory of published skills (<name>/SKILL.md) served by /api/skills")
 	flag.Parse()
 	if flag.NArg() != 0 {
 		fmt.Fprintln(os.Stderr, "regent-server takes no arguments")
 		os.Exit(2)
 	}
-	if err := serve(*addr, *data, *max, *binaries); err != nil {
+	if err := serve(*addr, *data, *max, *binaries, *skillsDir); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func serve(addr, data string, max int64, binaries string) error {
+func serve(addr, data string, max int64, binaries, skillsDir string) error {
 	if !filepath.IsAbs(data) {
 		var err error
 		data, err = filepath.Abs(data)
@@ -45,7 +46,10 @@ func serve(addr, data string, max int64, binaries string) error {
 	if binaries == "" {
 		binaries = os.Getenv("REGENT_BINARIES_DIR")
 	}
-	srv, err := server.New(data, server.WithMaxObjectBytes(max), server.WithBinariesDir(binaries))
+	if skillsDir == "" {
+		skillsDir = os.Getenv("REGENT_SKILLS_DIR")
+	}
+	srv, err := server.New(data, server.WithMaxObjectBytes(max), server.WithBinariesDir(binaries), server.WithSkillsDir(skillsDir))
 	if err != nil {
 		return err
 	}

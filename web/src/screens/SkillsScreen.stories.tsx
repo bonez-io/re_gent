@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { expect, userEvent, within } from 'storybook/test'
 import { installCommand, installPrompt, skills } from '../api/skills'
 import { SkillsScreen } from './SkillsScreen'
@@ -7,7 +8,12 @@ const meta = {
   component: SkillsScreen,
   tags: ['ai-generated'],
   parameters: { layout: 'fullscreen' },
-  decorators: [(Story) => <div className="flex h-[640px] bg-page text-ink"><Story /></div>],
+  decorators: [(Story) => {
+    // No registry is reachable in Storybook, so fetchSkills falls back to the
+    // bundled catalog — which is exactly the offline path worth pinning here.
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    return <QueryClientProvider client={client}><div className="flex h-[640px] bg-page text-ink"><Story /></div></QueryClientProvider>
+  }],
 } satisfies Meta<typeof SkillsScreen>
 export default meta
 type Story = StoryObj<typeof meta>

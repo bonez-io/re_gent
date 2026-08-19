@@ -14,6 +14,10 @@ export default defineConfig({
   server: {
     proxy: {
       '^/repos$': { target: process.env.VITE_REGENT_SERVER_URL || 'http://127.0.0.1:7654', changeOrigin: true },
+      // The skills registry is global, not repo-scoped, so it does not match the
+      // '/<repo>/api' rule below. Without this the dev server answers with
+      // index.html and the catalog silently falls back to the bundled list.
+      '^/api/': { target: process.env.VITE_REGENT_SERVER_URL || 'http://127.0.0.1:7654', changeOrigin: true },
       '^/healthz$': { target: process.env.VITE_REGENT_SERVER_URL || 'http://127.0.0.1:7654', changeOrigin: true },
       '^/(?!src(?:/|$)|node_modules(?:/|$)|@|__)[a-z0-9][a-z0-9._-]*/api(?:/|$)': { target: process.env.VITE_REGENT_SERVER_URL || 'http://127.0.0.1:7654', changeOrigin: true },
     },

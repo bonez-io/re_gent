@@ -21,7 +21,7 @@ export type SkillCardProps = Skill & {
  * even while the catalog is bundled, because retrofitting them into a card
  * after the layout is fixed is the expensive path.
  */
-export function SkillCard({ name, title, description, category, sources, installed, regentOnly, selected = false, onClick, checked = false, onCheckedChange }: SkillCardProps) {
+export function SkillCard({ name, title, description, category, sources, installed, regentOnly, origin, withheld, selected = false, onClick, checked = false, onCheckedChange }: SkillCardProps) {
   return <div className={`group relative flex h-full min-h-27 flex-col rounded-[9px] border p-2.5 transition-[background-color,box-shadow] duration-150 ${checked ? 'border-accent/40 bg-accent-tint/25' : selected ? 'border-line bg-hover-2 shadow-hairline' : 'border-line bg-canvas hover:bg-hover'}`}>
     <div className="flex w-full items-start gap-1.5">
       <label className="flex cursor-pointer items-center pt-px" onClick={(event) => event.stopPropagation()}>
@@ -37,7 +37,11 @@ export function SkillCard({ name, title, description, category, sources, install
         <span className="truncate text-[12.5px] font-semibold leading-4 text-ink">{title}</span>
         {regentOnly && <span title="Answers a question Git cannot" className="shrink-0 rounded-[4px] bg-accent-tint px-1 text-[9px] font-medium text-accent-ink">re_gent</span>}
       </button>
-      <span className={`shrink-0 rounded-[4px] px-1 text-[9px] ${installed ? 'bg-field text-ink-3' : 'border border-line text-ink-3'}`}>{installed ? 'installed' : 'proposed'}</span>
+      {withheld
+        ? <span title={withheld} className="shrink-0 rounded-[4px] border border-line px-1 text-[9px] text-ink-3">withheld</span>
+        : origin === 'local'
+          ? <span title="Published to this server" className="shrink-0 rounded-[4px] bg-accent-tint px-1 text-[9px] text-accent-ink">published</span>
+          : <span className={`shrink-0 rounded-[4px] px-1 text-[9px] ${installed ? 'bg-field text-ink-3' : 'border border-line text-ink-3'}`}>{installed ? 'available' : 'proposed'}</span>}
     </div>
 
     <button type="button" onClick={onClick} className="mt-1 flex flex-1 flex-col text-left">

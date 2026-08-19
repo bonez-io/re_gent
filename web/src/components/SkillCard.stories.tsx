@@ -16,11 +16,29 @@ const meta = {
 export default meta
 type Story = StoryObj<typeof meta>
 
-export const Installed: Story = {
+export const Available: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement)
-    await expect(canvas.getByText('installed')).toBeInTheDocument()
+    await expect(canvas.getByText('available')).toBeInTheDocument()
     await expect(canvas.getByText('re_gent')).toBeInTheDocument()
+  },
+}
+
+/** A skill published to this server, rather than shipped with it. */
+export const PublishedToThisServer: Story = {
+  args: { ...bugBlame, origin: 'local' },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    await expect(canvas.getByText('published')).toBeInTheDocument()
+  },
+}
+
+/** Withheld from the default set; the card says so rather than implying it installs cleanly. */
+export const Withheld: Story = {
+  args: { ...bugBlame, withheld: 'describes conversation rewind, which rgt rewind does not do' },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    await expect(canvas.getByText('withheld')).toBeInTheDocument()
   },
 }
 
@@ -35,7 +53,7 @@ export const Proposed: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement)
     await expect(canvas.getByText('proposed')).toBeInTheDocument()
-    await expect(canvas.queryByText('installed')).not.toBeInTheDocument()
+    await expect(canvas.queryByText('available')).not.toBeInTheDocument()
   },
 }
 
