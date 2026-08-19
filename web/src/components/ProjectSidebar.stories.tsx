@@ -14,6 +14,6 @@ export const CssCheck: Story = {
   args: {},
   play: async ({ canvas }) => {
     const sidebar = canvas.getByRole('complementary', { name: 'Project navigation' })
-    await expect(getComputedStyle(sidebar).backgroundColor).toBe('rgb(18, 18, 17)')
+    await expect(getComputedStyle(sidebar).backgroundColor).toBe('rgb(15, 15, 15)')
   },
 }

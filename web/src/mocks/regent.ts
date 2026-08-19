@@ -185,30 +185,35 @@ export const conversations: Conversation[] = [
 ]
 
 export const transcript: TranscriptEntry[] = [
-  { type: 'user', id: 'm1', at: '13:04:12', content: 'The reminder parser keeps moving “tomorrow morning” into UTC before it knows the user timezone. Trace the full path, fix it, and keep the change narrow.' },
-  { type: 'reasoning', id: 'm2', at: '13:04:18', duration: 18, lines: ['Locate the natural-language parser and every timezone conversion call.', 'Confirm whether the stored reminder contract expects UTC or local wall time.', 'Find the smallest seam where timezone context is still available.'] },
-  { type: 'assistant', id: 'm3', at: '13:04:22', content: 'I’ll trace parsing through persistence first, then patch the earliest incorrect conversion and add a regression at that boundary.' },
-  { type: 'tools', id: 'm4', at: '13:04:25', calls: [
-    { id: 't1', tool: 'Read', summary: 'src/reminders/parser.ts', detail: ['Read 184 lines', 'parseNaturalDate converts with system timezone at line 61'] },
-    { id: 't2', tool: 'Search', summary: 'normalizeTimezone(', detail: ['src/reminders/parser.ts:61', 'src/reminders/service.ts:114', 'src/reminders/parser.test.ts:203'] },
+  { type: 'user', id: 'm1', at: '13:04:12', content: 'Make the sessions screen feel closer to the product website, but keep the transcript useful for debugging.' },
+  { type: 'assistant', id: 'm2', at: '13:04:22', content: 'I will make the session transcript read more like a real chat while preserving timestamps, tool provenance, reasoning, file details, and step markers.' },
+  { type: 'tools', id: 'm3', at: '13:04:25', calls: [
+    { id: 't1', tool: 'Read', summary: 'web/src/App.tsx', detail: ['Read sessions layout and selected-session behavior'] },
+    { id: 't2', tool: 'Read', summary: 'web/src/components/ConversationTranscript.tsx', detail: ['Read transcript rendering and entry type handling'] },
   ] },
-  { type: 'assistant', id: 'm5', at: '13:04:39', content: 'The stored contract is UTC, but conversion belongs in the service after the profile timezone is attached. I found one premature conversion in the parser.' },
-  { type: 'tools', id: 'm6', at: '13:04:48', calls: [
-    { id: 't3', tool: 'Edit', summary: 'src/reminders/parser.ts', detail: ['− normalizeTimezone(parsed, systemTimezone)', '+ return { parsed, sourceTimezone: null }'] },
-    { id: 't4', tool: 'Edit', summary: 'src/reminders/service.ts', detail: ['+ normalizeTimezone(parsed, profile.timezone)', '+ retain source phrase for provenance'] },
-    { id: 't5', tool: 'Bash', summary: 'pnpm test parser reminder-service', detail: ['✓ parser: 18 passed', '✓ reminder-service: 24 passed', 'Completed in 1.8s'] },
-  ], files: [{ path: 'src/reminders/parser.ts', additions: 7, deletions: 4 }, { path: 'src/reminders/service.ts', additions: 11, deletions: 3 }, { path: 'src/reminders/parser.test.ts', additions: 29, deletions: 0 }] },
-  { type: 'code', id: 'm7', at: '13:05:02', filename: 'src/reminders/parser.ts', language: 'TypeScript', code: 'export function parseReminder(input: string): ParsedReminder {\n  const parsed = parseNaturalDate(input)\n  return { parsed, sourcePhrase: input }\n}' },
-  { type: 'assistant', id: 'm8', at: '13:05:07', content: 'The parser now preserves local intent. UTC conversion happens once, in the service, with the user profile timezone. The focused suites pass.' },
-  { type: 'step', id: 's1', at: '13:05:09', hash: '7ac3ef1', tree: 'e4b8a20', turn: 'turn-184', tokens: 1842, files: 3 },
-  { type: 'user', id: 'm9', at: '13:08:41', content: 'Good. Add one case for a DST boundary and run the complete reminder suite.' },
-  { type: 'reasoning', id: 'm10', at: '13:08:45', duration: 9, lines: ['Use a timezone with a known spring-forward boundary.', 'Assert the intended wall time rather than an implementation-specific offset.', 'Run the full reminder package after the focused case.'] },
-  { type: 'tools', id: 'm11', at: '13:08:53', calls: [
-    { id: 't6', tool: 'Edit', summary: 'src/reminders/parser.test.ts', detail: ['+ America/New_York spring-forward case', '+ preserves 09:00 local intent'] },
-    { id: 't7', tool: 'Bash', summary: 'pnpm test reminders', detail: ['✓ 67 tests passed', 'Completed in 3.4s'] },
-  ], files: [{ path: 'src/reminders/parser.test.ts', additions: 17, deletions: 0 }] },
-  { type: 'assistant', id: 'm12', at: '13:09:08', content: 'Added the DST regression using America/New_York and verified all 67 reminder tests.' },
-  { type: 'step', id: 's2', at: '13:09:10', hash: 'bd91c42', tree: '7fe206a', turn: 'turn-185', tokens: 724, files: 1 },
+  { type: 'assistant', id: 'm4', at: '13:04:39', content: 'I am replacing the compressed log rows with a clearer feed. User turns stay on the right in compact bubbles, and agent work stays on the left as prose and action checkpoints.' },
+  { type: 'tools', id: 'm5', at: '13:04:48', calls: [
+    { id: 't3', tool: 'Edit', summary: 'web/src/App.tsx', detail: ['Added the Viewing as selector above Sessions', 'Filtered sessions by selected team member'] },
+  ], files: [{ path: 'web/src/App.tsx', additions: 34, deletions: 8 }] },
+  { type: 'assistant', id: 'm6', at: '13:05:07', content: 'The viewer selector is in. Now I am reshaping the conversation itself so action labels sit in the feed instead of reading like table rows.' },
+  { type: 'tools', id: 'm7', at: '13:05:21', calls: [
+    { id: 't4', tool: 'Edit', summary: 'web/src/components/ConversationTranscript.tsx', detail: ['Removed per-action separators', 'Gave transcript entries a spacious feed rhythm'] },
+    { id: 't5', tool: 'Edit', summary: 'web/src/components/ToolCallGroup.tsx', detail: ['Mapped tool groups to labels like Read files and Edited a file', 'Kept tool details visible under each action'] },
+  ], files: [{ path: 'web/src/components/ConversationTranscript.tsx', additions: 18, deletions: 17 }, { path: 'web/src/components/ToolCallGroup.tsx', additions: 42, deletions: 31 }] },
+  { type: 'reasoning', id: 'm8', at: '13:05:30', duration: 7, lines: ['Keep the dark re_gent surface.', 'Borrow the screenshot rhythm: large prose, quiet action labels, no horizontal separators.', 'Keep provenance details visible without turning the transcript back into a grid.'] },
+  { type: 'assistant', id: 'm9', at: '13:05:39', content: 'I caught the last table-like pieces in the action block. The mock data now uses realistic design-iteration turns so the story shows the intended behavior immediately.' },
+  { type: 'tools', id: 'm10', at: '13:05:48', calls: [
+    { id: 't6', tool: 'Edit', summary: 'web/src/mocks/regent.ts', detail: ['Updated transcript mock with feed-style design iteration'] },
+    { id: 't7', tool: 'Edit', summary: 'web/.storybook/msw-handlers.ts', detail: ['Updated Storybook API mock for the sessions story'] },
+  ], files: [{ path: 'web/src/mocks/regent.ts', additions: 29, deletions: 34 }, { path: 'web/.storybook/msw-handlers.ts', additions: 45, deletions: 1 }] },
+  { type: 'assistant', id: 'm11', at: '13:06:04', content: 'Implementation is ready for verification. I am running TypeScript, Vite, lint, and the Storybook build, then I will inspect the live sessions story.' },
+  { type: 'tools', id: 'm12', at: '13:06:18', calls: [
+    { id: 't8', tool: 'Bash', summary: 'node node_modules/typescript/bin/tsc -b', detail: ['TypeScript check passed'] },
+    { id: 't9', tool: 'Bash', summary: 'node node_modules/vite/bin/vite.js build', detail: ['Production build completed'] },
+    { id: 't10', tool: 'Bash', summary: 'node node_modules/oxlint/bin/oxlint', detail: ['No lint warnings'] },
+  ] },
+  { type: 'assistant', id: 'm13', at: '13:06:36', content: 'Core checks pass. Storybook is showing the sessions story with the chat-style transcript and no separating lines between actions.' },
+  { type: 'step', id: 's1', at: '13:06:40', hash: '7ac3ef1', tree: 'e4b8a20', turn: 'turn-184', tokens: 1842, files: 3 },
 ]
 
 export const blameLines = [

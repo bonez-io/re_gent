@@ -25,7 +25,7 @@ function Pending({ label = 'Loading captured work…' }: { label?: string }) {
 function Problem({ error, onRetry }: { error: Error; onRetry?: () => void }) {
   const offline = error instanceof OfflineError
   const missing = error instanceof ApiError && error.status === 404
-  return <div className="m-auto max-w-sm px-6 py-10 text-center"><div className={`mx-auto mb-2 size-2 rounded-full ${offline ? 'bg-red' : 'bg-accent'}`} /><h2 className="m-0 text-[15px] font-semibold">{offline ? 'Server disconnected' : missing ? 'Data is not available yet' : 'Could not load this view'}</h2><p className="mt-1 text-[12px] leading-5 text-ink-3">{offline ? 'Start the local re_gent server on 127.0.0.1:7654, then retry.' : error.message}</p>{onRetry && <button onClick={onRetry} className="mt-3 h-8 rounded-[7px] bg-field px-3 text-[12px] shadow-hairline hover:bg-hover-2">Retry</button>}</div>
+  return <div className="m-auto max-w-sm px-6 py-10 text-center"><div className={`mx-auto mb-2 size-2 rounded-full ${offline ? 'bg-red' : 'bg-accent'}`} /><h2 className="m-0 text-[15px] font-semibold">{offline ? 'Server disconnected' : missing ? 'Data is not available yet' : 'Could not load this view'}</h2><p className="mt-1 text-[12px] leading-5 text-ink-3">{offline ? 'Start the local re_gent server on 127.0.0.1:7654, then retry.' : error.message}</p>{onRetry && <button onClick={onRetry} className="mt-3 h-8 rounded-[4px] bg-field px-3 text-[12px] shadow-hairline hover:bg-hover-2">Retry</button>}</div>
 }
 
 function Empty({ title, detail }: { title: string; detail: string }) {
@@ -51,7 +51,7 @@ function RepoHome() {
   if (repos.data.repos.length === 1) return <Navigate replace to={`/repos/${repos.data.repos[0]}/sessions`} />
   const hasRepos = repos.data.repos.length > 0
   return <main className="flex min-h-screen items-center justify-center bg-page p-4 text-ink">
-    <section className="w-full max-w-md overflow-hidden rounded-[11px] border border-line bg-canvas shadow-raised">
+    <section className="w-full max-w-md overflow-hidden rounded-[8px] border border-line bg-canvas shadow-raised">
       <header className="flex items-center gap-2 border-b border-line px-4 py-2.5">
         <img src="/favicon.svg" alt="" className="size-7" />
         <div>
@@ -59,18 +59,18 @@ function RepoHome() {
           <p className="m-0 text-[11px] leading-4 text-ink-3">{hasRepos ? 'Repositories registered on this server' : 'Run one command from your project directory'}</p>
         </div>
       </header>
-      {hasRepos && <div className="p-2">{repos.data.repos.map((repo) => <button key={repo} onClick={() => navigate(`/repos/${repo}/sessions`)} className="flex h-10 w-full items-center rounded-[7px] px-2.5 text-left text-[12.5px] hover:bg-hover"><span className="size-1.5 rounded-full bg-green" /><span className="ml-2 flex-1 font-medium">{repo}</span><span className="text-ink-3">Open →</span></button>)}</div>}
+      {hasRepos && <div className="p-2">{repos.data.repos.map((repo) => <button key={repo} onClick={() => navigate(`/repos/${repo}/sessions`)} className="flex h-10 w-full items-center rounded-[4px] px-2.5 text-left text-[12.5px] hover:bg-hover"><span className="size-1.5 rounded-full bg-green" /><span className="ml-2 flex-1 font-medium">{repo}</span><span className="text-ink-3">Open →</span></button>)}</div>}
       <div className={`${hasRepos ? 'border-t border-line' : ''} p-4`}>
         {hasRepos && <h2 className="m-0 text-[12px] font-medium">Connect another project</h2>}
         <p className={`${hasRepos ? 'mt-1' : 'mt-0'} mb-2.5 text-[11.5px] leading-5 text-ink-3`}>Open a terminal in the project you want re_gent to track, then run:</p>
         <div className="flex items-center overflow-hidden rounded-[8px] bg-inset shadow-hairline">
           <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap px-3 py-2.5 font-mono text-[11.5px] text-ink-2">{connectCommand}</code>
-          <button type="button" onClick={() => void copyCommand()} aria-label="Copy connect command" className="mr-1.5 flex h-7 shrink-0 items-center gap-1.5 rounded-[6px] bg-field px-2 text-[10.5px] font-medium text-ink-2 shadow-hairline hover:bg-hover-2 hover:text-ink">
+          <button type="button" onClick={() => void copyCommand()} aria-label="Copy connect command" className="mr-1.5 flex h-7 shrink-0 items-center gap-1.5 rounded-[4px] bg-field px-2 text-[10.5px] font-medium text-ink-2 shadow-hairline hover:bg-hover-2 hover:text-ink">
             {copyState === 'copied' ? <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden><path d="m2.5 6.2 2.1 2.1 4.9-5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg> : <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden><rect x="4" y="2" width="5.5" height="6" rx="1" stroke="currentColor" /><path d="M7.5 9v.25c0 .69-.56 1.25-1.25 1.25h-3.5c-.69 0-1.25-.56-1.25-1.25v-4C1.5 4.56 2.06 4 2.75 4H3" stroke="currentColor" /></svg>}
             {copyState === 'copied' ? 'Copied' : copyState === 'failed' ? 'Copy failed' : 'Copy'}
           </button>
         </div>
-        <div role="status" aria-live="polite" className="mt-3 flex items-center gap-2 rounded-[7px] bg-accent-tint px-2.5 py-2 text-[11px] text-accent-ink">
+        <div role="status" aria-live="polite" className="mt-3 flex items-center gap-2 rounded-[4px] bg-accent-tint px-2.5 py-2 text-[11px] text-accent-ink">
           <span className="relative flex size-2" aria-hidden><span className="absolute inline-flex size-full animate-ping rounded-full bg-accent opacity-50" /><span className="relative inline-flex size-2 rounded-full bg-accent" /></span>
           <span>Listening for a connected project…</span>
         </div>
@@ -98,19 +98,31 @@ function LegacySessionRedirect({ repoId }: { repoId: string }) {
 }
 
 function SessionsScreen({ repoId }: { repoId: string }) {
-  const { sessionId: routeSessionId } = useParams(); const navigate = useNavigate(); const [query, setQuery] = useState('')
+  const { sessionId: routeSessionId } = useParams(); const navigate = useNavigate(); const location = useLocation(); const [query, setQuery] = useState('')
+  const [allTranscriptOpen, setAllTranscriptOpen] = useState(false)
   const sessions = useQuery({ queryKey: ['sessions', repoId], queryFn: () => api.sessions(repoId), retry: false })
-  const sessionId = routeSessionId || sessions.data?.sessions[0]?.session_id
-  const rows = useMemo(() => (sessions.data?.sessions ?? []).map(sessionToConversation).filter((item) => `${item.title} ${item.agent} ${item.author}`.toLowerCase().includes(query.toLowerCase())), [sessions.data, query])
+  const memberFor = (session: NonNullable<typeof sessions.data>['sessions'][number]) => session.author?.name || session.author?.email || 'Unknown author'
+  const viewingAs = new URLSearchParams(location.search).get('member') || '__all'
+  const viewerQuery = viewingAs === '__all' ? '' : `?member=${encodeURIComponent(viewingAs)}`
+  const teamMembers = useMemo(() => [...new Set((sessions.data?.sessions ?? []).map(memberFor))].sort((a, b) => a.localeCompare(b)), [sessions.data])
+  const visibleSessions = useMemo(() => (sessions.data?.sessions ?? []).filter((session) => viewingAs === '__all' || memberFor(session) === viewingAs), [sessions.data, viewingAs])
+  const sessionId = routeSessionId && visibleSessions.some((session) => session.session_id === routeSessionId) ? routeSessionId : visibleSessions[0]?.session_id
+  const rows = useMemo(() => visibleSessions.map(sessionToConversation).filter((item) => `${item.title} ${item.agent} ${item.author}`.toLowerCase().includes(query.toLowerCase())), [visibleSessions, query])
+  const changeViewer = (next: string) => {
+    const nextQuery = next === '__all' ? '' : `?member=${encodeURIComponent(next)}`
+    const nextSession = (sessions.data?.sessions ?? []).find((session) => next === '__all' || memberFor(session) === next)
+    navigate(nextSession ? `/repos/${repoId}/sessions/${encodeURIComponent(nextSession.session_id)}${nextQuery}` : `/repos/${repoId}/sessions${nextQuery}`)
+  }
   const transcript = useQuery({ queryKey: ['transcript', repoId, sessionId], queryFn: async () => { try { return { kind: 'transcript' as const, data: await api.transcript(repoId, sessionId!) } } catch (error) { if (error instanceof ApiError && error.status === 404) return { kind: 'log' as const, data: await api.log(repoId, sessionId!) }; throw error } }, enabled: Boolean(sessionId), retry: false, refetchInterval: 7_500 })
   if (sessions.isPending) return <Pending />
   if (sessions.error) return <Problem error={sessions.error} onRetry={() => sessions.refetch()} />
-  if (!sessionId) return <Empty title="No captured sessions yet" detail="Initialize this repository with rgt, enable the agent hooks, and complete one tool-using turn." />
+  if (!sessionId) return <div className="grid min-h-0 flex-1 grid-cols-[290px_minmax(0,1fr)] max-sm:grid-cols-1"><aside className="min-h-0 overflow-auto border-r border-line bg-canvas max-sm:max-h-56 max-sm:border-b max-sm:border-r-0"><div className="sticky top-0 z-10 border-b border-line bg-canvas px-2.5 py-2"><div className="mb-2"><label className="mb-1 block text-[10px] font-medium uppercase tracking-[0.08em] text-ink-3" htmlFor="session-viewer-empty">Viewing as</label><select id="session-viewer-empty" value={viewingAs} onChange={(event) => changeViewer(event.target.value)} className="native-select h-8 w-full"><option value="__all">All team members</option>{teamMembers.map((member) => <option key={member} value={member}>{member}</option>)}</select></div><div className="flex items-center text-[13px] font-semibold leading-4">Sessions<span className="ml-auto text-[10.5px] font-normal tabular-nums text-ink-3">0</span></div></div></aside><section className="flex min-h-0 bg-canvas"><Empty title={sessions.data?.sessions.length ? 'No sessions for this teammate' : 'No captured sessions yet'} detail={sessions.data?.sessions.length ? 'Choose another team member to inspect their captured agent chats.' : 'Initialize this repository with rgt, enable the agent hooks, and complete one tool-using turn.'} /></section></div>
   if (transcript.isPending) return <Pending label="Reconstructing transcript…" />
   if (transcript.error) return <Problem error={transcript.error} onRetry={() => transcript.refetch()} />
   const entries = transcript.data.kind === 'transcript' ? transcriptToEntries(transcript.data.data) : logToTranscript(transcript.data.data)
   const selected = sessions.data?.sessions.find((item) => item.session_id === sessionId)
-  return <div className="grid min-h-0 flex-1 grid-cols-[290px_minmax(0,1fr)] max-sm:grid-cols-1"><aside className="min-h-0 overflow-auto border-r border-line bg-canvas max-sm:max-h-56 max-sm:border-b max-sm:border-r-0"><div className="sticky top-0 z-10 border-b border-line bg-canvas px-2.5 py-2"><div className="flex items-center text-[13px] font-semibold leading-4">Sessions<span className="ml-auto text-[10.5px] font-normal tabular-nums text-ink-3">{sessions.data.total_sessions}</span></div><input value={query} onChange={(event) => setQuery(event.target.value)} className="mt-1.5 h-7 w-full rounded-[7px] bg-field px-2 text-[11.5px] outline-none shadow-hairline focus:shadow-btn" placeholder="Filter sessions…" /></div>{rows.length ? rows.map((row) => <SessionRow key={row.id} {...row} selected={row.id === sessionId} onClick={() => navigate(`/repos/${repoId}/sessions/${encodeURIComponent(row.id)}`)} />) : <div className="px-3 py-5 text-center text-[11.5px] text-ink-3">No matching sessions</div>}</aside><section className="min-h-0 overflow-auto bg-canvas"><div className="sticky top-0 z-10 border-b border-line bg-canvas/95 px-3 py-1.5 backdrop-blur"><h1 className="m-0 truncate text-[14px] font-semibold leading-5">{selected?.title || 'Captured session'}</h1><div className="flex flex-wrap gap-x-2 text-[10.5px] leading-4 text-ink-3"><span className="font-mono text-accent-ink">{sessionId}</span><span>{selected?.agent_id}</span><span>{selected?.step_count ?? entries.filter((item) => item.type === 'step').length} steps</span></div></div>{entries.length ? <ConversationTranscript entries={entries} /> : <div className="flex min-h-[360px]"><Empty title="No transcript content" detail="The session exists, but its recorded steps do not contain readable conversation events." /></div>}</section></div>
+  const hasCollapsibleEntries = entries.some((item) => item.type === 'tools' || item.type === 'reasoning')
+  return <div className="grid min-h-0 flex-1 grid-cols-[290px_minmax(0,1fr)] max-sm:grid-cols-1"><aside className="min-h-0 overflow-auto border-r border-line bg-canvas max-sm:max-h-64 max-sm:border-b max-sm:border-r-0"><div className="sticky top-0 z-10 border-b border-line bg-canvas px-2.5 py-2"><div className="mb-2"><label className="mb-1 block text-[10px] font-medium uppercase tracking-[0.08em] text-ink-3" htmlFor="session-viewer">Viewing as</label><select id="session-viewer" value={viewingAs} onChange={(event) => changeViewer(event.target.value)} className="native-select h-8 w-full"><option value="__all">All team members</option>{teamMembers.map((member) => <option key={member} value={member}>{member}</option>)}</select></div><div className="flex items-center text-[13px] font-semibold leading-4">Sessions<span className="ml-auto text-[10.5px] font-normal tabular-nums text-ink-3">{rows.length}/{visibleSessions.length}</span></div><input value={query} onChange={(event) => setQuery(event.target.value)} className="mt-1.5 h-7 w-full rounded-[4px] bg-field px-2 text-[11.5px] outline-none shadow-hairline focus:shadow-btn" placeholder="Filter sessions…" /></div>{rows.length ? rows.map((row) => <SessionRow key={row.id} {...row} selected={row.id === sessionId} onClick={() => navigate(`/repos/${repoId}/sessions/${encodeURIComponent(row.id)}${viewerQuery}`)} />) : <div className="px-3 py-5 text-center text-[11.5px] text-ink-3">No matching sessions</div>}</aside><section className="min-h-0 overflow-auto bg-canvas"><div className="sticky top-0 z-10 flex min-h-[50px] items-center gap-3 border-b border-line bg-canvas/95 px-3 py-1.5 backdrop-blur"><div className="min-w-0 flex-1"><h1 className="m-0 truncate text-[14px] font-semibold leading-5">{selected?.title || 'Captured session'}</h1><div className="flex flex-wrap gap-x-2 text-[10.5px] leading-4 text-ink-3"><span className="font-mono text-accent-ink">{sessionId}</span><span>{selected?.author ? memberFor(selected) : 'Unknown author'}</span><span>{selected?.agent_id}</span><span>{selected?.step_count ?? entries.filter((item) => item.type === 'step').length} steps</span></div></div>{hasCollapsibleEntries && <button type="button" onClick={() => setAllTranscriptOpen((value) => !value)} className="ml-auto shrink-0 rounded-[4px] border border-line bg-field px-2.5 py-1 font-mono text-[10.5px] text-ink-2 shadow-hairline transition-colors hover:bg-hover hover:text-ink">{allTranscriptOpen ? 'Close all' : 'Open all'}</button>}</div>{entries.length ? <ConversationTranscript entries={entries} allOpen={allTranscriptOpen} /> : <div className="flex min-h-[360px]"><Empty title="No transcript content" detail="The session exists, but its recorded steps do not contain readable conversation events." /></div>}</section></div>
 }
 
 function useLatestLog(repoId: string) {

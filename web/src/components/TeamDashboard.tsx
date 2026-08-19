@@ -273,7 +273,7 @@ function splitMetricValue(value: string) {
 
 function AchievementPill({ achievement }: { achievement: Achievement }) {
   const top = achievement.rank === 1
-  return <span title={achievement.detail} className={`inline-flex h-6 max-w-full items-center rounded-[6px] border px-2 text-[10.5px] font-medium shadow-hairline transition-colors hover:-translate-y-px hover:border-accent/50 ${top ? 'border-accent/35 bg-accent-tint text-accent-ink' : 'border-line bg-field text-ink-2'}`}>
+  return <span title={achievement.detail} className={`inline-flex h-6 max-w-full items-center rounded-[3px] border px-2 text-[10.5px] font-medium shadow-hairline transition-colors hover:border-accent/50 ${top ? 'border-accent/35 bg-accent-tint text-accent-ink' : 'border-line bg-field text-ink-2'}`}>
     <span className="truncate">{achievement.label}</span>
   </span>
 }
@@ -346,7 +346,7 @@ function MemberRow({ member, selectedMetric, allMembers, rangeLabel, canRemove, 
 
   return <article data-testid="team-member-row" className={`relative grid gap-3 rounded-[8px] border px-3 py-2.5 transition-all duration-150 ${topRank ? 'border-accent/25 bg-canvas shadow-card' : 'border-line/70 bg-canvas/70'} hover:border-ink-3/40 md:grid-cols-[48px_minmax(260px,1fr)_minmax(150px,190px)_minmax(360px,1.35fr)_32px] md:items-center md:gap-x-5`}>
     <div className="flex min-w-0 items-center gap-2.5 md:contents">
-      <span title={tied ? `Tied #${displayRank}` : undefined} className={`flex h-7 min-w-8 shrink-0 items-center justify-center rounded-[7px] px-1.5 font-mono text-[11.5px] font-semibold shadow-hairline ${topRank ? 'bg-accent-tint text-accent-ink' : 'bg-field text-ink-2'}`}>{qualified ? `#${displayRank}` : '#–'}</span>
+      <span title={tied ? `Tied #${displayRank}` : undefined} className={`flex h-7 min-w-8 shrink-0 items-center justify-center rounded-[4px] px-1.5 font-mono text-[11.5px] font-semibold shadow-hairline ${topRank ? 'bg-accent-tint text-accent-ink' : 'bg-field text-ink-2'}`}>{qualified ? `#${displayRank}` : '#–'}</span>
       <div className="min-w-0 md:col-start-2">
         <div className="flex min-w-0 items-center gap-1.5">
           <h2 className="m-0 truncate text-[14px] font-semibold leading-5 text-ink">{member.name}</h2>
@@ -381,7 +381,7 @@ function MemberRow({ member, selectedMetric, allMembers, rangeLabel, canRemove, 
     </div>
 
     {canRemove && <div ref={menuRef} className="absolute right-2.5 top-2.5 md:relative md:right-auto md:top-auto md:col-start-5 md:justify-self-end">
-      <button type="button" aria-label={`Team actions for ${member.name}`} onClick={() => setMenuOpen((open) => !open)} className={`flex size-7 items-center justify-center rounded-[7px] border text-[14px] leading-none shadow-hairline transition-colors ${menuOpen ? 'border-accent/35 bg-accent-tint text-accent-ink' : 'border-line/70 bg-canvas text-ink-3 hover:bg-field hover:text-ink'}`}>•••</button>
+      <button type="button" aria-label={`Team actions for ${member.name}`} onClick={() => setMenuOpen((open) => !open)} className={`flex size-7 items-center justify-center rounded-[4px] border text-[14px] leading-none shadow-hairline transition-colors ${menuOpen ? 'border-accent/35 bg-accent-tint text-accent-ink' : 'border-line/70 bg-canvas text-ink-3 hover:bg-field hover:text-ink'}`}>•••</button>
       {menuOpen && <div data-testid="team-actions-menu" className="absolute right-0 top-[calc(100%+6px)] z-20 w-48 overflow-hidden rounded-[8px] border border-line bg-surface shadow-overlay">
         <div className="border-b border-line px-2.5 py-2">
           <div className="truncate text-[11.5px] font-semibold text-ink">{member.name}</div>
@@ -456,7 +456,7 @@ export function TeamDashboard({ repoId }: { repoId: string }) {
   }
 
   if (sessionsQuery.isPending) return <section className="flex flex-1 items-center justify-center bg-page text-[12px] text-ink-3"><span className="mr-2 size-2 animate-pulse rounded-full bg-accent" />Loading team activity…</section>
-  if (sessionsQuery.error) return <section className="m-auto max-w-sm px-6 py-10 text-center"><h2 className="m-0 text-[15px] font-semibold">Could not load team activity</h2><p className="mt-1 text-[12px] leading-5 text-ink-3">{sessionsQuery.error.message}</p><button onClick={() => sessionsQuery.refetch()} className="mt-3 h-8 rounded-[7px] bg-field px-3 text-[12px] shadow-hairline hover:bg-hover-2">Retry</button></section>
+  if (sessionsQuery.error) return <section className="m-auto max-w-sm px-6 py-10 text-center"><h2 className="m-0 text-[15px] font-semibold">Could not load team activity</h2><p className="mt-1 text-[12px] leading-5 text-ink-3">{sessionsQuery.error.message}</p><button onClick={() => sessionsQuery.refetch()} className="mt-3 h-8 rounded-[4px] bg-field px-3 text-[12px] shadow-hairline hover:bg-hover-2">Retry</button></section>
 
   return <section className="min-h-0 flex-1 overflow-auto bg-page">
     <div className="mx-auto max-w-[1180px] px-4 py-5">
@@ -464,15 +464,15 @@ export function TeamDashboard({ repoId }: { repoId: string }) {
         <div className="min-w-0 flex-1">
           <h1 className="m-0 text-[22px] font-semibold leading-7">Team</h1>
         </div>
-        {viewerIsAdmin && <button type="button" onClick={() => setInviteOpen(true)} className="h-8 rounded-[7px] bg-accent-tint px-3 text-[12px] font-semibold text-accent-ink shadow-hairline transition-colors hover:bg-hover-2">Invite teammate</button>}
+        {viewerIsAdmin && <button type="button" onClick={() => setInviteOpen(true)} className="h-8 rounded-[4px] bg-accent-tint px-3 text-[12px] font-semibold text-accent-ink shadow-hairline transition-colors hover:bg-hover-2">Invite teammate</button>}
       </header>
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
         <div className="flex rounded-[8px] bg-canvas p-1 shadow-hairline">
-          {ranges.map((item) => <button key={item.key} type="button" onClick={() => changeRange(item.key)} className={`h-7 rounded-[6px] px-2.5 text-[11px] font-medium transition-colors ${timeRange === item.key ? 'bg-accent-tint text-accent-ink shadow-hairline' : 'text-ink-3 hover:bg-field hover:text-ink-2'}`}>{item.label}</button>)}
+          {ranges.map((item) => <button key={item.key} type="button" onClick={() => changeRange(item.key)} className={`h-7 rounded-[4px] px-2.5 text-[11px] font-medium transition-colors ${timeRange === item.key ? 'bg-accent-tint text-accent-ink shadow-hairline' : 'text-ink-3 hover:bg-field hover:text-ink-2'}`}>{item.label}</button>)}
         </div>
         <span className="text-[11px] text-ink-3">{range.suffix}</span>
-        {canSearch && <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search teammates" className="ml-auto h-8 min-w-[220px] rounded-[7px] bg-field px-2.5 text-[12px] outline-none shadow-hairline focus:shadow-btn" />}
+        {canSearch && <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search teammates" className="ml-auto h-8 min-w-[220px] rounded-[4px] bg-field px-2.5 text-[12px] outline-none shadow-hairline focus:shadow-btn" />}
       </div>
 
       <div className="mt-2.5 grid gap-y-2 rounded-[8px] border border-line/70 bg-canvas px-2 py-3.5 shadow-card sm:grid-cols-5">
@@ -490,7 +490,7 @@ export function TeamDashboard({ repoId }: { repoId: string }) {
           <span className="text-[11px] font-medium text-ink-3">{range.suffix}</span>
         </div>
         <div className="mt-2.5 flex gap-2 overflow-x-auto pb-1">
-        {(Object.keys(metricCatalog) as RankMetric[]).map((metric) => <button key={metric} type="button" title={metricCatalog[metric].description} onClick={() => changeMetric(metric)} className={`h-8 shrink-0 rounded-full border px-3 text-[11.5px] font-medium transition-all ${selectedMetric === metric ? 'border-accent/35 bg-accent-tint text-accent-ink shadow-hairline' : 'border-line bg-canvas text-ink-3 hover:border-ink-3/50 hover:text-ink-2'}`}>{metricCatalog[metric].label}</button>)}
+        {(Object.keys(metricCatalog) as RankMetric[]).map((metric) => <button key={metric} type="button" title={metricCatalog[metric].description} onClick={() => changeMetric(metric)} className={`h-8 shrink-0 rounded-[3px] border px-3 text-[11.5px] font-medium transition-all ${selectedMetric === metric ? 'border-accent/35 bg-accent-tint text-accent-ink shadow-hairline' : 'border-line bg-canvas text-ink-3 hover:border-ink-3/50 hover:text-ink-2'}`}>{metricCatalog[metric].label}</button>)}
         </div>
 
         <div className="mt-4 space-y-2">
@@ -506,13 +506,13 @@ export function TeamDashboard({ repoId }: { repoId: string }) {
             <h2 id="team-invite-title" className="m-0 text-[14px] font-semibold">Invite teammate</h2>
             <p className="m-0 mt-0.5 text-[11px] leading-4 text-ink-3">Send access to this repository’s re_gent history.</p>
           </div>
-          <button type="button" onClick={() => setInviteOpen(false)} aria-label="Close invite dialog" className="flex size-7 items-center justify-center rounded-[7px] text-ink-3 hover:bg-field hover:text-ink">×</button>
+          <button type="button" onClick={() => setInviteOpen(false)} aria-label="Close invite dialog" className="flex size-7 items-center justify-center rounded-[4px] text-ink-3 hover:bg-field hover:text-ink">×</button>
         </div>
         <div className="mt-3 flex gap-2">
-          <input aria-label="Email" type="email" required autoFocus value={email} onChange={(event) => setEmail(event.target.value)} placeholder="dev@company.com" className="h-9 min-w-0 flex-1 rounded-[7px] bg-field px-2.5 text-[12px] outline-none shadow-hairline focus:shadow-btn" />
-          <button className="h-9 rounded-[7px] bg-accent-tint px-3 text-[12px] font-semibold text-accent-ink shadow-hairline hover:bg-hover-2">Invite</button>
+          <input aria-label="Email" type="email" required autoFocus value={email} onChange={(event) => setEmail(event.target.value)} placeholder="dev@company.com" className="h-9 min-w-0 flex-1 rounded-[4px] bg-field px-2.5 text-[12px] outline-none shadow-hairline focus:shadow-btn" />
+          <button className="h-9 rounded-[4px] bg-accent-tint px-3 text-[12px] font-semibold text-accent-ink shadow-hairline hover:bg-hover-2">Invite</button>
         </div>
-        {sentInvites.length > 0 && <div className="mt-3 flex flex-wrap gap-1.5 border-t border-line pt-2">{sentInvites.map((inviteEmail) => <span key={inviteEmail} className="inline-flex h-6 max-w-full items-center gap-1.5 rounded-[6px] bg-field px-2 text-[10.5px] text-ink-2 shadow-hairline"><span className="size-1.5 shrink-0 rounded-full bg-accent" /><span className="min-w-0 truncate">{inviteEmail}</span><span className="text-ink-3">sent</span></span>)}</div>}
+        {sentInvites.length > 0 && <div className="mt-3 flex flex-wrap gap-1.5 border-t border-line pt-2">{sentInvites.map((inviteEmail) => <span key={inviteEmail} className="inline-flex h-6 max-w-full items-center gap-1.5 rounded-[4px] bg-field px-2 text-[10.5px] text-ink-2 shadow-hairline"><span className="size-1.5 shrink-0 rounded-full bg-accent" /><span className="min-w-0 truncate">{inviteEmail}</span><span className="text-ink-3">sent</span></span>)}</div>}
       </form>
     </div>}
   </section>
