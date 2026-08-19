@@ -53,6 +53,11 @@ var notShipped = map[string]string{
 	"rewind": "describes conversation rewind, which rgt rewind does not do",
 }
 
+// Bootstrap is the skill that teaches an agent to find and install the others.
+// `rgt init` writes it unconditionally: it is the entry point to the catalog,
+// and an entry point behind a flag is one nobody finds.
+const Bootstrap = "regent-skills"
+
 // Withheld returns the reason a skill is not shipped by default, or "" if it is.
 func Withheld(name string) string { return notShipped[name] }
 
