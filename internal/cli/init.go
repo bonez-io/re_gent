@@ -149,6 +149,18 @@ func InitCmd() *cobra.Command {
 				}
 			}
 
+			// The bootstrap skill is installed unconditionally, while the rest
+			// stay opt-in. It is the only one that makes the others findable: a
+			// project without it has a catalog nothing inside the agent knows to
+			// look at, so gating discovery behind a flag hides the feature from
+			// everyone who does not already know it exists. It grants two
+			// read-mostly rgt commands and nothing else.
+			if !skipSkills {
+				if err := installBootstrapSkill(cwd, outcome.installed); err != nil {
+					fmt.Printf("  %s Could not install the skills helper: %v\n", style.Warning(""), err)
+				}
+			}
+
 			if withSkills && !skipSkills {
 				if err := offerSkillInstall(cwd, outcome.installed, input); err != nil {
 					flow.Warning("Optional agent skills were not installed")
@@ -787,6 +799,45 @@ func createRegentGitignore(projectRoot string) error {
 `
 
 	return os.WriteFile(gitignorePath, []byte(content), 0o644)
+}
+
+// installBootstrapSkill writes the one skill that teaches an agent how to find
+// and install the others, into whichever hosts were actually wired.
+//
+// Reporting only what was written, and only when something was, follows the
+// rule the hook installer already keeps: a run that installed nothing must not
+// print a line saying it did.
+func installBootstrapSkill(projectRoot string, targets []agentTarget) error {
+	var wrote []string
+	for _, dir := range skillDirsFor(projectRoot, targets) {
+		if _, _, err := skills.Install(dir, skills.Bootstrap, true); err != nil {
+			return err
+		}
+		wrote = append(wrote, dir)
+	}
+	if len(wrote) == 0 {
+		return nil
+	}
+	fmt.Printf("  %s Skills helper installed - ask the agent \"what re_gent skills are available?\"\n", style.Success(""))
+	return nil
+}
+
+// skillDirsFor maps wired hosts to the directories they load skills from.
+func skillDirsFor(projectRoot string, targets []agentTarget) []string {
+	var dirs []string
+	for _, target := range targets {
+		switch target {
+		case agentClaude:
+			dirs = append(dirs, filepath.Join(projectRoot, ".claude", "skills"))
+		case agentCodex:
+			dirs = append(dirs, filepath.Join(projectRoot, ".agents", "skills"))
+		case agentOpenCode:
+			dirs = append(dirs, filepath.Join(projectRoot, ".opencode", "skills"))
+		case agentPi:
+			dirs = append(dirs, filepath.Join(projectRoot, ".pi", "skills"))
+		}
+	}
+	return dirs
 }
 
 func offerSkillInstall(projectRoot string, targets []agentTarget, input *bufio.Reader) error {
