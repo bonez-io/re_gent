@@ -1,12 +1,13 @@
 import { useState } from 'react'
 
-export type RegentView = 'sessions' | 'team' | 'steps' | 'files' | 'sync'
+export type RegentView = 'sessions' | 'team' | 'steps' | 'files' | 'skills' | 'sync'
 
 const items: { key: RegentView; label: string; shortcut?: string }[] = [
   { key: 'sessions', label: 'Sessions', shortcut: '7' },
   { key: 'team', label: 'Team' },
   { key: 'steps', label: 'Steps' },
   { key: 'files', label: 'Files & blame' },
+  { key: 'skills', label: 'Skills' },
   { key: 'sync', label: 'Sync status' },
 ]
 
@@ -16,6 +17,7 @@ function NavIcon({ kind }: { kind: RegentView }) {
     team: <><circle cx="9" cy="8" r="3" /><path d="M3.5 19a5.5 5.5 0 0 1 11 0" /><circle cx="17" cy="9" r="2.2" /><path d="M15.5 14.5A4.5 4.5 0 0 1 21 19" /></>,
     steps: <><circle cx="6" cy="6" r="2" /><circle cx="18" cy="18" r="2" /><path d="M8 6h3a3 3 0 0 1 3 3v6a3 3 0 0 0 3 3M6 8v10h3" /></>,
     files: <><path d="M4 6h6l2-2h8v16H4zM4 9h16" /></>,
+    skills: <><path d="M12 3.5 14.2 9l5.8.3-4.5 3.7 1.5 5.6L12 15.5 6.9 18.6l1.5-5.6L4 9.3 9.8 9z" /></>,
     sync: <><path d="M19 7a8 8 0 0 0-13.7-1L3 8M5 17a8 8 0 0 0 13.7 1l2.3-2" /><path d="M3 4v4h4M21 20v-4h-4" /></>,
   }
   return <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">{paths[kind]}</svg>

@@ -52,6 +52,8 @@ curl -fsS -X POST -H 'Content-Type: application/json' \
   | jq -e '.repo_id == "smoke" and .created == true' >/dev/null
 curl -fsS "$base_url/repos" | jq -e '.repos == ["smoke"]' >/dev/null
 curl -fsS "$base_url/smoke/api/sessions" | jq -e '.total_sessions == 0' >/dev/null
+curl -fsS "$base_url/api/skills" | jq -e '.total > 0 and (.skills | any(.name == "blame"))' >/dev/null
+curl -fsSI "$base_url/api/skills/blame" | grep -qi '^content-type: text/markdown'
 curl -fsS "$base_url/repos/smoke/conversations" | grep -q '<div id="root"></div>'
 
 echo "production image smoke test passed"

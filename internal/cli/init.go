@@ -15,6 +15,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 	"github.com/regent-vcs/regent/internal/index"
 	"github.com/regent-vcs/regent/internal/remote"
+	"github.com/regent-vcs/regent/internal/skills"
 	"github.com/regent-vcs/regent/internal/store"
 	"github.com/regent-vcs/regent/internal/style"
 	"github.com/spf13/cobra"
@@ -145,6 +146,18 @@ func InitCmd() *cobra.Command {
 				Verbosef(out, "  %v\n", hookErr)
 				if Verbose() {
 					printManualInstructions(targets)
+				}
+			}
+
+			// The bootstrap skill is installed unconditionally, while the rest
+			// stay opt-in. It is the only one that makes the others findable: a
+			// project without it has a catalog nothing inside the agent knows to
+			// look at, so gating discovery behind a flag hides the feature from
+			// everyone who does not already know it exists. It grants two
+			// read-mostly rgt commands and nothing else.
+			if !skipSkills {
+				if err := installBootstrapSkill(cwd, outcome.installed); err != nil {
+					fmt.Printf("  %s Could not install the skills helper: %v\n", style.Warning(""), err)
 				}
 			}
 
@@ -788,6 +801,53 @@ func createRegentGitignore(projectRoot string) error {
 	return os.WriteFile(gitignorePath, []byte(content), 0o644)
 }
 
+// installBootstrapSkill writes the one skill that teaches an agent how to find
+// and install the others, into whichever hosts were actually wired.
+//
+// Reporting only what was written, and only when something was, follows the
+// rule the hook installer already keeps: a run that installed nothing must not
+// print a line saying it did.
+func installBootstrapSkill(projectRoot string, targets []agentTarget) error {
+	var wrote []string
+	for _, dir := range skillDirsFor(projectRoot, targets) {
+		_, written, err := skills.Install(dir, skills.Bootstrap, false)
+		if skills.IsExists(err) {
+			// A project-local edit outranks the bundled helper. Re-running init
+			// must never silently replace agent instructions the team changed.
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if written {
+			wrote = append(wrote, dir)
+		}
+	}
+	if len(wrote) == 0 {
+		return nil
+	}
+	fmt.Printf("  %s Skills helper installed - ask the agent \"what re_gent skills are available?\"\n", style.Success(""))
+	return nil
+}
+
+// skillDirsFor maps wired hosts to the directories they load skills from.
+func skillDirsFor(projectRoot string, targets []agentTarget) []string {
+	var dirs []string
+	for _, target := range targets {
+		switch target {
+		case agentClaude:
+			dirs = append(dirs, filepath.Join(projectRoot, ".claude", "skills"))
+		case agentCodex:
+			dirs = append(dirs, filepath.Join(projectRoot, ".agents", "skills"))
+		case agentOpenCode:
+			dirs = append(dirs, filepath.Join(projectRoot, ".opencode", "skills"))
+		case agentPi:
+			dirs = append(dirs, filepath.Join(projectRoot, ".pi", "skills"))
+		}
+	}
+	return dirs
+}
+
 func offerSkillInstall(projectRoot string, targets []agentTarget, input *bufio.Reader) error {
 	fmt.Printf("Agent skills expose common %s commands inside the agent UI.\n", style.Brand("re_gent"))
 	fmt.Println()
@@ -836,66 +896,23 @@ func offerSkillInstall(projectRoot string, targets []agentTarget, input *bufio.R
 	return nil
 }
 
+// installSkills writes every shipped skill into skillsDir.
+//
+// The definitions come from internal/skills, which embeds the real SKILL.md
+// files. They used to be Go string literals here, and that is how the shipped
+// set drifted to three skills while the repository carried nine: two copies,
+// one of them invisible to anyone reading .claude/skills.
 func installSkills(skillsDir string) error {
-	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
-		return fmt.Errorf("create skills directory: %w", err)
-	}
-
-	for skillName, content := range skillContents() {
-		skillDir := filepath.Join(skillsDir, skillName)
-		if err := os.MkdirAll(skillDir, 0o755); err != nil {
-			return fmt.Errorf("create skill directory %s: %w", skillName, err)
+	for _, name := range skills.DefaultNames() {
+		_, _, err := skills.Install(skillsDir, name, false)
+		if skills.IsExists(err) {
+			continue
 		}
-
-		skillPath := filepath.Join(skillDir, "SKILL.md")
-		if err := os.WriteFile(skillPath, []byte(content), 0o644); err != nil {
-			return fmt.Errorf("write skill %s: %w", skillName, err)
+		if err != nil {
+			return err
 		}
 	}
-
 	return nil
-}
-
-func skillContents() map[string]string {
-	return map[string]string{
-		"log": `---
-description: View the re_gent activity log for the default or selected session. The default view shows the conversation timeline and tool calls; file summaries are available with file flags.
-allowed-tools: Bash(rgt log *)
-argument-hint: "[session-id] [flags]"
----
-
-Display the re_gent activity log.
-
-By default, ` + "`rgt log`" + ` shows the conversation timeline for the most recent session with captured steps. Use ` + "`--files-only`" + ` for file-change summaries.
-
-Run:
-` + "```bash\nrgt log $ARGUMENTS\n```" + `
-
-Common usage:
-` + "```bash\nrgt log\nrgt log --conversation-only\nrgt log --files-only\nrgt log --graph\nrgt log --limit 50\n```",
-
-		"blame": `---
-description: Show which re_gent step last modified each line of a file. Use when investigating file provenance or debugging.
-allowed-tools: Bash(rgt blame *)
-argument-hint: "<path>[:<line>]"
----
-
-Display per-line provenance.
-
-Run:
-` + "```bash\nrgt blame $ARGUMENTS\n```",
-
-		"show": `---
-description: Show detailed context for a re_gent step, including tool calls, tool results, and conversation.
-allowed-tools: Bash(rgt show *)
-argument-hint: "<step-hash>"
----
-
-Display full details for a step.
-
-Run:
-` + "```bash\nrgt show $ARGUMENTS\n```",
-	}
 }
 
 func resolveAgentTargets(projectRoot string, target agentTarget) ([]agentTarget, error) {

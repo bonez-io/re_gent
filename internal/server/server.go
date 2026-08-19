@@ -83,6 +83,7 @@ type Server struct {
 	dataDir        string
 	maxObjectBytes int64
 	binariesDir    string
+	skillsDir      string
 	logger         *log.Logger
 
 	mu    sync.Mutex
@@ -91,6 +92,13 @@ type Server struct {
 
 // Option configures a Server.
 type Option func(*Server)
+
+// WithSkillsDir points the skills registry at a directory of published skills,
+// laid out as <name>/SKILL.md. Skills found there override the built-in ones of
+// the same name, which is how a team publishes a skill without a release.
+func WithSkillsDir(dir string) Option {
+	return func(s *Server) { s.skillsDir = dir }
+}
 
 // WithMaxObjectBytes overrides the per-object upload limit.
 func WithMaxObjectBytes(n int64) Option {
@@ -267,6 +275,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if segs[0] == "repos" && len(segs) == 1 {
 		s.handleRepos(w, r)
+		return
+	}
+
+	// The skills registry is global, not repo-scoped: a skill describes how to
+	// interrogate re_gent, not one project's history. Matched before the repo
+	// id is validated, so "api" is never mistaken for a repository.
+	if segs[0] == "api" && len(segs) >= 2 && segs[1] == "skills" {
+		s.handleSkills(w, r, segs)
 		return
 	}
 
