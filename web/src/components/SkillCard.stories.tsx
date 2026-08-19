@@ -1,0 +1,48 @@
+import type { Meta, StoryObj } from '@storybook/react-vite'
+import { expect, within } from 'storybook/test'
+import { skills } from '../api/skills'
+import { SkillCard } from './SkillCard'
+
+const bugBlame = skills.find((skill) => skill.name === 'bug-blame')!
+const fileCoupling = skills.find((skill) => skill.name === 'file-coupling')!
+const proposed = skills.find((skill) => !skill.installed)!
+
+const meta = {
+  component: SkillCard,
+  tags: ['ai-generated'],
+  args: bugBlame,
+  decorators: [(Story) => <div className="w-[240px] max-w-full"><Story /></div>],
+} satisfies Meta<typeof SkillCard>
+export default meta
+type Story = StoryObj<typeof meta>
+
+export const Installed: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    await expect(canvas.getByText('installed')).toBeInTheDocument()
+    await expect(canvas.getByText('re_gent')).toBeInTheDocument()
+  },
+}
+
+export const Selected: Story = { args: { selected: true } }
+
+/** No `re_gent` mark: coupling is derivable from any per-turn file list. */
+export const WithoutRegentOnlyMark: Story = { args: fileCoupling }
+
+/** Proposed skills have no file on disk yet; the card must not imply otherwise. */
+export const Proposed: Story = {
+  args: proposed,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    await expect(canvas.getByText('proposed')).toBeInTheDocument()
+    await expect(canvas.queryByText('installed')).not.toBeInTheDocument()
+  },
+}
+
+export const LongDescription: Story = {
+  args: {
+    ...bugBlame,
+    title: 'Regression hunter with an unusually long name',
+    description: 'Trace a bug or incident back through captured history to the change that caused it, the prompt behind that change, the reasoning the agent recorded at the time, and every file that moved in the same turn.',
+  },
+}

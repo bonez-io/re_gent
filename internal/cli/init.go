@@ -14,6 +14,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 	"github.com/regent-vcs/regent/internal/index"
 	"github.com/regent-vcs/regent/internal/remote"
+	"github.com/regent-vcs/regent/internal/skills"
 	"github.com/regent-vcs/regent/internal/store"
 	"github.com/regent-vcs/regent/internal/style"
 	"github.com/spf13/cobra"
@@ -821,66 +822,19 @@ func offerSkillInstall(projectRoot string, targets []agentTarget, input *bufio.R
 	return nil
 }
 
+// installSkills writes every shipped skill into skillsDir.
+//
+// The definitions come from internal/skills, which embeds the real SKILL.md
+// files. They used to be Go string literals here, and that is how the shipped
+// set drifted to three skills while the repository carried nine: two copies,
+// one of them invisible to anyone reading .claude/skills.
 func installSkills(skillsDir string) error {
-	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
-		return fmt.Errorf("create skills directory: %w", err)
-	}
-
-	for skillName, content := range skillContents() {
-		skillDir := filepath.Join(skillsDir, skillName)
-		if err := os.MkdirAll(skillDir, 0o755); err != nil {
-			return fmt.Errorf("create skill directory %s: %w", skillName, err)
-		}
-
-		skillPath := filepath.Join(skillDir, "SKILL.md")
-		if err := os.WriteFile(skillPath, []byte(content), 0o644); err != nil {
-			return fmt.Errorf("write skill %s: %w", skillName, err)
+	for _, name := range skills.DefaultNames() {
+		if _, _, err := skills.Install(skillsDir, name, true); err != nil {
+			return err
 		}
 	}
-
 	return nil
-}
-
-func skillContents() map[string]string {
-	return map[string]string{
-		"log": `---
-description: View the re_gent activity log for the default or selected session. The default view shows the conversation timeline and tool calls; file summaries are available with file flags.
-allowed-tools: Bash(rgt log *)
-argument-hint: "[session-id] [flags]"
----
-
-Display the re_gent activity log.
-
-By default, ` + "`rgt log`" + ` shows the conversation timeline for the most recent session with captured steps. Use ` + "`--files-only`" + ` for file-change summaries.
-
-Run:
-` + "```bash\nrgt log $ARGUMENTS\n```" + `
-
-Common usage:
-` + "```bash\nrgt log\nrgt log --conversation-only\nrgt log --files-only\nrgt log --graph\nrgt log --limit 50\n```",
-
-		"blame": `---
-description: Show which re_gent step last modified each line of a file. Use when investigating file provenance or debugging.
-allowed-tools: Bash(rgt blame *)
-argument-hint: "<path>[:<line>]"
----
-
-Display per-line provenance.
-
-Run:
-` + "```bash\nrgt blame $ARGUMENTS\n```",
-
-		"show": `---
-description: Show detailed context for a re_gent step, including tool calls, tool results, and conversation.
-allowed-tools: Bash(rgt show *)
-argument-hint: "<step-hash>"
----
-
-Display full details for a step.
-
-Run:
-` + "```bash\nrgt show $ARGUMENTS\n```",
-	}
 }
 
 func resolveAgentTargets(projectRoot string, target agentTarget) ([]agentTarget, error) {
