@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
-import { expect } from 'storybook/test'
+import { expect, waitFor } from 'storybook/test'
 import { ToolCallGroup } from './ToolCallGroup'
 
 const calls = [
@@ -14,9 +14,11 @@ type Story = StoryObj<typeof meta>
 
 export const Default: Story = {
   play: async ({ canvas, userEvent }) => {
-    const edit = canvas.getByRole('button', { name: /Edit.*parser\.ts/i })
-    await userEvent.click(edit)
-    await expect(edit).toHaveAttribute('aria-expanded', 'true')
+    const group = canvas.getByRole('button', { name: 'Used tools' })
+    await expect(group).toHaveAttribute('aria-expanded', 'false')
+    await userEvent.click(group)
+    await expect(group).toHaveAttribute('aria-expanded', 'true')
+    await waitFor(() => expect(canvas.getByText('+ preserve timezone metadata')).toBeVisible())
   },
 }
 export const Collapsed: Story = { args: { defaultOpen: false } }
