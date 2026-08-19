@@ -45,14 +45,14 @@ function Branch({ node, depth, selectedPath, onSelect }: { node: TreeNode; depth
   const selectedInside = selectedPath?.startsWith(`${node.path}/`) ?? false
   const [open, setOpen] = useState(depth === 0 || selectedInside)
   if (directory) return <div>
-    <button type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)} className="flex h-7 w-full items-center gap-1.5 rounded-[5px] pr-2 text-left text-[11.5px] text-ink-2 transition-colors hover:bg-hover" style={{ paddingLeft: `${8 + depth * 14}px` }}>
+    <button type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)} className="flex h-7 w-full items-center gap-1.5 rounded-[3px] pr-2 text-left text-[11.5px] text-ink-2 transition-colors hover:bg-hover" style={{ paddingLeft: `${8 + depth * 14}px` }}>
       <svg width="10" height="10" viewBox="0 0 12 12" fill="none" className="shrink-0 text-ink-3 transition-transform duration-150" style={{ transform: open ? 'rotate(0deg)' : 'rotate(-90deg)' }} aria-hidden><path d="m3 4.5 3 3 3-3" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" /></svg>
       <span className="shrink-0 text-ink-3"><FolderIcon open={open} /></span>
       <span className="truncate">{node.name}</span>
     </button>
     <div className={open ? 'block' : 'hidden'}>{node.children.map((child) => <Branch key={child.path} node={child} depth={depth + 1} selectedPath={selectedPath} onSelect={onSelect} />)}</div>
   </div>
-  return <button type="button" onClick={() => onSelect(node.path)} aria-current={selectedPath === node.path ? 'page' : undefined} className={`flex h-7 w-full items-center gap-1.5 rounded-[5px] pr-2 text-left font-mono text-[11px] transition-colors ${selectedPath === node.path ? 'bg-hover-2 text-ink' : 'text-ink-3 hover:bg-hover hover:text-ink-2'}`} style={{ paddingLeft: `${28 + depth * 14}px` }}>
+  return <button type="button" onClick={() => onSelect(node.path)} aria-current={selectedPath === node.path ? 'page' : undefined} className={`flex h-7 w-full items-center gap-1.5 rounded-[3px] border pr-2 text-left font-mono text-[11px] transition-colors ${selectedPath === node.path ? 'border-line bg-hover-2 text-ink shadow-hairline' : 'border-transparent text-ink-3 hover:border-line hover:bg-hover hover:text-ink-2'}`} style={{ paddingLeft: `${28 + depth * 14}px` }}>
     <span className="shrink-0"><FileIcon /></span>
     <span className="min-w-0 flex-1 truncate">{node.name}</span>
     {node.file?.size != null && <span className="shrink-0 text-[9.5px] tabular-nums text-ink-3">{node.file.size}</span>}

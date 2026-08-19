@@ -1,11 +1,14 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import styles from './ThinkingReasoning.module.css'
 
-export interface ThinkingReasoningProps { lines: string[]; durationSeconds?: number; defaultOpen?: boolean; thinking?: boolean }
+export interface ThinkingReasoningProps { lines: string[]; durationSeconds?: number; defaultOpen?: boolean; thinking?: boolean; allOpen?: boolean }
 
 /** Adapted from AI CSS's free Thinking + Reasoning React component. */
-export function ThinkingReasoning({ lines, durationSeconds = 12, defaultOpen = false, thinking = false }: ThinkingReasoningProps) {
+export function ThinkingReasoning({ lines, durationSeconds = 12, defaultOpen = false, thinking = false, allOpen }: ThinkingReasoningProps) {
   const [open, setOpen] = useState(defaultOpen || thinking)
+  useEffect(() => {
+    if (allOpen !== undefined) setOpen(allOpen)
+  }, [allOpen])
   const expanded = thinking || open
   return <div className={styles.root}>
     <button type="button" className={styles.header} aria-expanded={expanded} aria-label="Toggle reasoning" onClick={() => !thinking && setOpen((value) => !value)}>

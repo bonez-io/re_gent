@@ -50,7 +50,7 @@ function causeToCall(cause: LogCause, index: number) {
   const args = cause.args && typeof cause.args === 'object' ? cause.args as Record<string, unknown> : undefined
   const raw = String(args?.file_path ?? args?.path ?? args?.command ?? args?.query ?? args?.pattern ?? cause.tool)
   const summary = raw.startsWith('/') ? raw.split('/').filter(Boolean).slice(-3).join('/') : raw
-  return { id: cause.tool_use_id || `${cause.tool}-${index}`, tool: cause.tool || 'Tool', summary, detail: [...display(cause.args), ...display(cause.result)] }
+  return { id: cause.tool_use_id || `${cause.tool}-${index}`, tool: cause.tool || 'Tool', summary, detail: display(cause.result) }
 }
 
 /** The server returns newest-first steps; the transcript is rendered oldest-first. */

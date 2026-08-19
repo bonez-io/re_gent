@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 @theme inline {
-  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-sans: "Geist", "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   --color-page: var(--page); --color-canvas: var(--canvas); --color-surface: var(--surface);
   --color-inset: var(--inset); --color-hover: var(--hover); --color-hover-2: var(--hover-2);
@@ -10,45 +10,84 @@
   --color-accent-ink: var(--accent-ink); --color-accent-tint: var(--accent-tint);
   --color-green: var(--green); --color-green-tint: var(--green-tint);
   --color-red: var(--red); --color-red-tint: var(--red-tint);
-  --radius-control: 7px; --radius-chip: 7px; --radius-card: 11px; --radius-window: 14px;
+  --color-yellow: var(--yellow); --color-yellow-tint: var(--yellow-tint);
+  --color-terminal: var(--terminal); --color-terminal-ink: var(--terminal-ink); --color-terminal-muted: var(--terminal-muted);
+  --radius-control: 4px; --radius-chip: 4px; --radius-card: 8px; --radius-window: 8px;
   --shadow-hairline: var(--shadow-hairline); --shadow-btn: var(--shadow-btn);
   --shadow-card: var(--shadow-card); --shadow-raised: var(--shadow-raised); --shadow-overlay: var(--shadow-overlay);
 }
 
 :root {
   color-scheme: dark;
-  --page: #0e0e0d; --canvas: #121211; --surface: #171716; --inset: #111110;
-  --hover: #20201e; --hover-2: #272724; --field: #222220; --line: #2b2b28;
-  --ink: #f1f1ed; --ink-2: #bdbdb6; --ink-3: #92928c;
-  --accent: #8b7cf6; --accent-ink: #b0a7ff; --accent-tint: #26223d;
-  --green: #62c79d; --green-tint: #173128; --red: #ee8383; --red-tint: #3b1e1e;
-  --shadow-hairline: 0 0 0 1px rgba(255, 255, 255, 0.08);
-  --shadow-btn: 0 0 0 1px rgba(255, 255, 255, 0.09), 0 1px 2px rgba(0, 0, 0, 0.22);
-  --shadow-card: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 2px 8px rgba(0, 0, 0, 0.2);
-  --shadow-raised: 0 0 0 1px rgba(255, 255, 255, 0.09), 0 8px 24px rgba(0, 0, 0, 0.3);
-  --shadow-overlay: 0 0 0 1px rgba(255, 255, 255, 0.1), 0 18px 52px rgba(0, 0, 0, 0.55);
+  --page: #080808; --canvas: #0f0f0f; --surface: #141414; --inset: #101010;
+  --hover: #171717; --hover-2: #1d1d1d; --field: #111111; --line: #303030;
+  --ink: #f4f4f4; --ink-2: #c6c6c6; --ink-3: #8f8f8f;
+  --accent: #f4f4f4; --accent-ink: #f4f4f4; --accent-tint: #1b1b1b;
+  --green: #6ee18f; --green-tint: #102416; --red: #ff8383; --red-tint: #2a1515;
+  --yellow: #ffe100; --yellow-tint: #2d2809;
+  --terminal: #090909; --terminal-ink: #f2f2ea; --terminal-muted: #969696;
+  --shadow-hairline: 0 0 0 1px rgba(255, 255, 255, 0.11);
+  --shadow-btn: 0 0 0 1px rgba(255, 255, 255, 0.14), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+  --shadow-card: 0 0 0 1px rgba(255, 255, 255, 0.1);
+  --shadow-raised: 0 0 0 1px rgba(255, 255, 255, 0.12), 0 10px 28px rgba(0, 0, 0, 0.32);
+  --shadow-overlay: 0 0 0 1px rgba(255, 255, 255, 0.14), 0 18px 52px rgba(0, 0, 0, 0.6);
   font-family: var(--font-sans); color: var(--ink); background: var(--page);
   font-synthesis: none; text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased;
 }
 
 .light {
   color-scheme: light;
-  --page: #f6f6f5; --canvas: #f1f1ef; --surface: #ffffff; --inset: #f8f8f7;
-  --hover: #f1f1ef; --hover-2: #ececea; --field: #f4f4f2; --line: #e5e5e2;
-  --ink: #20201f; --ink-2: #555552; --ink-3: #686865;
-  --accent: #6c5ce7; --accent-ink: #5545c7; --accent-tint: #efedff;
-  --green: #1d7555; --green-tint: #edf8f3; --red: #b83d3d; --red-tint: #fff0f0;
+  --page: #fafafa; --canvas: #ffffff; --surface: #fbfbfa; --inset: #f4f4f1;
+  --hover: #f1f1ee; --hover-2: #e9e9e4; --field: #ffffff; --line: #dcdcd6;
+  --ink: #0a0a0a; --ink-2: #3f3f3b; --ink-3: #73736b;
+  --accent: #0a0a0a; --accent-ink: #0a0a0a; --accent-tint: #ecece7;
+  --green: #168456; --green-tint: #eef8f1; --red: #b83d3d; --red-tint: #fff0ee;
+  --yellow: #d3b524; --yellow-tint: #fff7c7;
+  --terminal: #10100f; --terminal-ink: #f2f2ea; --terminal-muted: #a9a99f;
+  --shadow-hairline: 0 0 0 1px rgba(10, 10, 10, 0.1);
+  --shadow-btn: 0 0 0 1px rgba(10, 10, 10, 0.13), 0 1px 0 rgba(255, 255, 255, 0.8) inset;
+  --shadow-card: 0 0 0 1px rgba(10, 10, 10, 0.1);
+  --shadow-raised: 0 0 0 1px rgba(10, 10, 10, 0.12), 0 8px 24px rgba(10, 10, 10, 0.06);
+  --shadow-overlay: 0 0 0 1px rgba(10, 10, 10, 0.14), 0 18px 52px rgba(10, 10, 10, 0.16);
 }
 
 * { box-sizing: border-box; }
-body { margin: 0; min-width: 320px; min-height: 100vh; background: var(--page); }
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background:
+    repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.035) 0 1px, transparent 1px 8px),
+    var(--page);
+}
 button, input { font-family: inherit; }
-button { color: inherit; }
 
 @keyframes regent-fade-up { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes regent-shimmer { 0%, 18% { background-position: 100% 0; } 82%, 100% { background-position: 0 0; } }
 
 .regent-view { animation: regent-fade-up 160ms cubic-bezier(0.22, 1, 0.36, 1); }
+.regent-hairline-panel { border: 1px solid var(--line); background: var(--canvas); box-shadow: var(--shadow-card); }
+.regent-terminal {
+  border: 1px solid color-mix(in srgb, var(--terminal) 88%, white);
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.04) 50%, transparent 50%) 0 0 / 100% 6px,
+    var(--terminal);
+  color: var(--terminal-ink);
+}
+.regent-kicker {
+  display: inline-flex;
+  min-height: 22px;
+  align-items: center;
+  border: 1px solid var(--ink);
+  background: var(--ink);
+  padding: 0 6px;
+  color: var(--page);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  text-transform: uppercase;
+}
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
