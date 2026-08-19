@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { categoryLabels, fetchSkills, installCommand, installPrompt, listSkills, type Skill, type SkillCategory } from '../api/skills'
+import { categoryLabels, fetchSkills, installCommand, listSkills, serverBaseUrl, type Skill, type SkillCategory } from '../api/skills'
 import { SkillCard } from '../components/SkillCard'
 import { SkillDetail } from '../components/SkillDetail'
 
@@ -19,16 +19,16 @@ async function copy(text: string): Promise<boolean> {
 }
 
 /**
- * The skills catalog.
+ * The skills marketplace.
  *
  * Reads the server's registry, falling back to the bundled catalog when no
  * registry answers. A skill published to the server appears here without
  * rebuilding this app — that is what makes the page a marketplace rather than
  * a list.
  *
- * Installation never happens here: the user ticks skills and copies
- * `rgt skill install <names>`. The UI produces text, the CLI does the writing,
- * so this view stays read-only and the flow works in any harness.
+ * Installing is one line: tick skills, copy `rgt skill install <names>`, paste
+ * it in a terminal. The UI produces text and the CLI does the writing, so this
+ * view stays read-only and the flow works in any harness.
  */
 export function SkillsScreen() {
   const registry = useQuery({ queryKey: ['skills'], queryFn: fetchSkills, staleTime: 30_000 })
@@ -39,7 +39,6 @@ export function SkillsScreen() {
   const [selectedName, setSelectedName] = useState<string>(all[0]?.name ?? '')
   const [checked, setChecked] = useState<ReadonlySet<string>>(() => new Set())
   const [copied, setCopied] = useState<'idle' | 'ok' | 'failed'>('idle')
-  const [showPrompt, setShowPrompt] = useState(false)
 
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -53,8 +52,10 @@ export function SkillsScreen() {
   const selected = all.find((skill) => skill.name === selectedName) ?? visible[0]
   const localCount = all.filter((skill) => skill.origin === 'local').length
   const chosen: Skill[] = useMemo(() => all.filter((skill) => checked.has(skill.name)), [all, checked])
-  const prompt = useMemo(() => installPrompt(chosen), [chosen])
-  const command = useMemo(() => installCommand(chosen), [chosen])
+  // Name the registry when the catalog came from one, so the copied command
+  // installs the bytes this page showed rather than whatever the user's own
+  // project happens to be bound to.
+  const command = useMemo(() => installCommand(chosen, offline ? undefined : serverBaseUrl()), [chosen, offline])
 
   const toggle = (name: string, on: boolean) => {
     setCopied('idle')
@@ -66,29 +67,26 @@ export function SkillsScreen() {
     })
   }
 
-  const clear = () => { setChecked(new Set()); setCopied('idle'); setShowPrompt(false) }
-  const checkAllVisible = () => { setCopied('idle'); setChecked(new Set(visible.map((skill) => skill.name))) }
-
   return <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_340px] max-lg:grid-cols-1">
-    <section className="flex min-h-0 flex-col overflow-hidden bg-inset">
+    <section className="relative flex min-h-0 flex-col overflow-hidden bg-inset">
       <div className="shrink-0 border-b border-line bg-canvas px-3 py-2">
         <div className="flex items-center gap-2">
           <h1 className="m-0 text-[13px] font-semibold leading-4">Skills</h1>
           <span className="text-[10.5px] tabular-nums text-ink-3">{all.length} available{localCount > 0 ? ` · ${localCount} published here` : ''}</span>
-          {offline && <span title="The server has no skills registry; showing the catalog bundled with this build" className="rounded-[4px] border border-line px-1 text-[9px] text-ink-3">bundled</span>}
+          {offline && <span title="The server has no skills registry; showing the catalog bundled with this build" className="rounded-[4px] border border-line px-1 text-[9px] text-ink-2">bundled</span>}
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter skills…" className="ml-auto h-7 w-44 rounded-[7px] bg-field px-2 text-[11.5px] outline-none shadow-hairline focus:shadow-btn" />
         </div>
         <div className="mt-1.5 flex flex-wrap items-center gap-1">
           {filters.map((item) => <button key={item} type="button" onClick={() => setFilter(item)} aria-pressed={filter === item} className={`h-6 rounded-[6px] px-1.5 text-[10.5px] transition-colors duration-150 ${filter === item ? 'bg-accent-tint text-accent-ink' : 'bg-field text-ink-3 hover:text-ink'}`}>
             {item === 'all' ? 'All' : categoryLabels[item]}
           </button>)}
-          <button type="button" onClick={checkAllVisible} className="ml-auto h-6 rounded-[6px] bg-field px-1.5 text-[10.5px] text-ink-2 transition-colors hover:text-ink">Select all shown</button>
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto">
+      {/* Bottom padding clears the floating bar, so the last row is never hidden behind it. */}
+      <div className="min-h-0 flex-1 overflow-auto p-3 pb-16">
         {visible.length
-          ? <div className="grid grid-cols-[repeat(auto-fill,minmax(210px,1fr))] gap-2 p-3">
+          ? <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-2">
               {visible.map((skill) => <SkillCard
                 key={skill.name}
                 {...skill}
@@ -98,36 +96,19 @@ export function SkillsScreen() {
                 onCheckedChange={(on) => toggle(skill.name, on)}
               />)}
             </div>
-          : <div className="px-3 py-10 text-center text-[11.5px] text-ink-3">No skills match that filter.</div>}
-
-        <p className="m-0 border-t border-line px-3 py-2.5 text-[10.5px] leading-4 text-ink-3">
-          Skills live at <code className="font-mono text-ink-2">.claude/skills/&lt;name&gt;/SKILL.md</code> and load when an agent starts.
-          A skill is a prompt plus a tool grant — the analysis is the agent's, the history is re_gent's.
-        </p>
+          : <div className="py-10 text-center text-[11.5px] text-ink-3">No skills match that filter.</div>}
       </div>
 
-      {chosen.length > 0 && <div className="shrink-0 border-t border-line bg-canvas">
-        <div className="flex flex-wrap items-center gap-2 px-3 py-2">
+      {chosen.length > 0 && <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center px-3">
+        <div className="pointer-events-auto flex items-center gap-2 rounded-[10px] border border-line bg-canvas px-2.5 py-1.5 shadow-raised">
           <span className="text-[11.5px] font-medium tabular-nums">{chosen.length} selected</span>
-          <span className="min-w-0 truncate text-[10.5px] text-ink-3">{chosen.map((skill) => skill.name).join(', ')}</span>
-          <button type="button" onClick={() => setShowPrompt((open) => !open)} className="ml-auto h-7 rounded-[7px] bg-field px-2 text-[11px] text-ink-2 shadow-hairline hover:bg-hover-2">{showPrompt ? 'Hide prompt' : 'Show prompt'}</button>
-          <button type="button" onClick={clear} className="h-7 rounded-[7px] px-2 text-[11px] text-ink-2 hover:text-ink">Clear</button>
-          <button
-            type="button"
-            onClick={async () => setCopied(await copy(prompt) ? 'ok' : 'failed')}
-            className="h-7 rounded-[7px] bg-field px-2.5 text-[11px] text-ink-2 shadow-hairline hover:bg-hover-2"
-          >Copy prompt</button>
           <button
             type="button"
             onClick={async () => setCopied(await copy(command) ? 'ok' : 'failed')}
             className="h-7 rounded-[7px] bg-accent-tint px-2.5 text-[11px] font-medium text-accent-ink shadow-hairline"
-          >{copied === 'ok' ? 'Copied ✓' : copied === 'failed' ? 'Copy failed — select below' : 'Copy command'}</button>
+          >{copied === 'ok' ? 'Copied ✓' : copied === 'failed' ? 'Copy failed' : 'Copy command'}</button>
+          <button type="button" onClick={() => { setChecked(new Set()); setCopied('idle') }} aria-label="Clear selection" className="flex size-7 items-center justify-center rounded-[7px] text-[13px] leading-none text-ink-2 hover:bg-hover hover:text-ink">×</button>
         </div>
-        <div className="border-t border-line bg-inset px-3 py-2">
-          <code className="block select-all break-all font-mono text-[11px] leading-4 text-accent-ink">{command}</code>
-        </div>
-        {/* tabIndex: the block scrolls, so a keyboard user must be able to focus and scroll it too. */}
-        {(showPrompt || copied === 'failed') && <pre tabIndex={0} aria-label="Install prompt" className="m-0 max-h-40 select-all overflow-auto border-t border-line bg-inset px-3 py-2 font-mono text-[10.5px] leading-4 text-ink-2 focus:outline-none focus:shadow-btn">{prompt}</pre>}
       </div>}
     </section>
 

@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { expect, userEvent, within } from 'storybook/test'
-import { installCommand, installPrompt, skills } from '../api/skills'
+import { installCommand, skills } from '../api/skills'
 import { SkillsScreen } from './SkillsScreen'
 
 const meta = {
@@ -59,42 +59,36 @@ export const SelectingACardShowsItsDetail: Story = {
 export const CheckingDoesNotChangeDetail: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement)
-    const before = canvas.getByText(`.claude/skills/${skills[0].name}/SKILL.md`)
-    await expect(before).toBeInTheDocument()
+    await expect(canvas.getByText(`.claude/skills/${skills[0].name}/SKILL.md`)).toBeInTheDocument()
     await userEvent.click(canvas.getByLabelText('Select File coupling for install'))
     await expect(canvas.getByText(`.claude/skills/${skills[0].name}/SKILL.md`)).toBeInTheDocument()
   },
 }
 
-/** The selection bar appears only once something is ticked, and names what was chosen. */
-export const MultiSelectShowsInstallBar: Story = {
+/** The floating bar appears only once something is ticked. */
+export const FloatingBarAppearsOnSelection: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement)
-    await expect(canvas.queryByRole('button', { name: /Copy command/ })).not.toBeInTheDocument()
+    await expect(canvas.queryByRole('button', { name: 'Copy command' })).not.toBeInTheDocument()
 
     await userEvent.click(canvas.getByLabelText('Select Bug blame for install'))
     await userEvent.click(canvas.getByLabelText('Select File coupling for install'))
 
     await expect(canvas.getByText('2 selected')).toBeInTheDocument()
     await expect(canvas.getByRole('button', { name: 'Copy command' })).toBeInTheDocument()
-    // The one-liner is visible without opening anything.
-    await expect(canvas.getByText('rgt skill install bug-blame file-coupling')).toBeInTheDocument()
   },
 }
 
-/** The generated prompt names every chosen skill and surfaces the tool grant. */
-export const GeneratedPromptIsVisible: Story = {
+/** The bar carries one action. No prompt preview, no second copy button. */
+export const BarOffersOnlyTheCommand: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement)
     await userEvent.click(canvas.getByLabelText('Select Bug blame for install'))
-    await userEvent.click(canvas.getByLabelText('Select Context primer for install'))
-    await userEvent.click(canvas.getByRole('button', { name: 'Show prompt' }))
 
-    const text = canvas.getByText(/Run this to install 2 re_gent skills/)
-    await expect(text).toBeInTheDocument()
-    await expect(text.textContent).toContain('rgt skill install bug-blame context-primer')
-    // The fallback for a machine without rgt is still spelled out.
-    await expect(text.textContent).toContain('/api/skills/<name>')
+    await expect(canvas.getByRole('button', { name: 'Copy command' })).toBeInTheDocument()
+    await expect(canvas.queryByRole('button', { name: /Copy prompt/ })).not.toBeInTheDocument()
+    await expect(canvas.queryByRole('button', { name: /Show prompt/ })).not.toBeInTheDocument()
+    await expect(canvas.queryByText(/Fetch its definition/)).not.toBeInTheDocument()
   },
 }
 
@@ -103,17 +97,8 @@ export const ClearingEmptiesTheSelection: Story = {
     const canvas = within(canvasElement)
     await userEvent.click(canvas.getByLabelText('Select Bug blame for install'))
     await expect(canvas.getByText('1 selected')).toBeInTheDocument()
-    await userEvent.click(canvas.getByRole('button', { name: 'Clear' }))
+    await userEvent.click(canvas.getByRole('button', { name: 'Clear selection' }))
     await expect(canvas.queryByText('1 selected')).not.toBeInTheDocument()
-  },
-}
-
-export const SelectAllShown: Story = {
-  play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement)
-    await userEvent.click(canvas.getByRole('button', { name: 'Meta', pressed: false }))
-    await userEvent.click(canvas.getByRole('button', { name: 'Select all shown' }))
-    await expect(canvas.getByText(`${metaSkills.length} selected`)).toBeInTheDocument()
   },
 }
 
@@ -125,16 +110,16 @@ export const NoMatches: Story = {
   },
 }
 
-/** The pure generator, pinned independently of the UI. */
-export const PromptShapeIsStable: Story = {
+/** The command is what the button copies, so pin its exact shape. */
+export const CommandShapeIsStable: Story = {
   play: async () => {
-    const one = installPrompt([skills[0]], 'http://example.test')
-    await expect(one).toContain('Run this to install 1 re_gent skill')
-    await expect(one).toContain(`http://example.test/api/skills/<name>`)
-    await expect(installPrompt([], 'http://example.test')).toBe('')
-
-    // The command is the thing most users paste, so pin its exact shape.
     await expect(installCommand([skills[0], skills[1]])).toBe(`rgt skill install ${skills[0].name} ${skills[1].name}`)
+    await expect(installCommand([skills[0]])).toBe(`rgt skill install ${skills[0].name}`)
     await expect(installCommand([])).toBe('')
+
+    // A registry-backed catalog names the registry, so the command fetches the
+    // bytes the page showed rather than whatever the user's project is bound to.
+    await expect(installCommand([skills[0]], 'http://srv.test')).toBe(`rgt skill install ${skills[0].name} --server http://srv.test`)
+    await expect(installCommand([], 'http://srv.test')).toBe('')
   },
 }
