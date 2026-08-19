@@ -284,6 +284,16 @@ resource "google_service_account_iam_member" "github_deploy_identity" {
   member             = local.github_repo_principal
 }
 
+# Compute checks iam.serviceAccounts.actAs on an instance's attached service
+# account before opening SSH, even when OS Login and IAP are already authorized.
+# Keep this environment-matched so a dev deploy identity cannot act as main.
+resource "google_service_account_iam_member" "github_deploy_act_as_vm" {
+  for_each           = local.environments
+  service_account_id = google_service_account.vm[each.key].name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.github_deploy[each.key].email}"
+}
+
 resource "google_project_iam_member" "deploy_viewer" {
   for_each = local.environments
   project  = var.project_id
