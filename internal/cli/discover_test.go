@@ -38,7 +38,7 @@ func TestConnectingAnAlreadyConnectedProjectStaysConnected(t *testing.T) {
 	hooks := filepath.Join(project, ".claude", "settings.json")
 
 	var out bytes.Buffer
-	if err := connectHere(srv.URL, project, "", false, &out, false); err != nil {
+	if err := connectHere(srv.URL, project, "", false, agentAuto, &out, false); err != nil {
 		t.Fatalf("first connect: %v", err)
 	}
 	if !isConnected(project) {
@@ -49,7 +49,7 @@ func TestConnectingAnAlreadyConnectedProjectStaysConnected(t *testing.T) {
 	}
 
 	out.Reset()
-	if err := connectHere(srv.URL, project, "", false, &out, false); err != nil {
+	if err := connectHere(srv.URL, project, "", false, agentAuto, &out, false); err != nil {
 		t.Fatalf("second connect: %v", err)
 	}
 
@@ -78,7 +78,7 @@ func TestConnectInsideAProjectWiresOnlyThatProject(t *testing.T) {
 	var out bytes.Buffer
 	// canPrompt=false: no terminal, so no share question — the path an
 	// installer, a devcontainer or CI actually takes.
-	if err := connectHere(srv.URL, here, "", false, &out, false); err != nil {
+	if err := connectHere(srv.URL, here, "", false, agentAuto, &out, false); err != nil {
 		t.Fatalf("connectHere: %v", err)
 	}
 
@@ -109,7 +109,7 @@ func TestConnectVerboseShowsSetupDiagnostics(t *testing.T) {
 	srv := newTestServer(t, http.StatusCreated, "verbose-repo")
 	project := mkProject(t, t.TempDir(), "verbose")
 	var out bytes.Buffer
-	if err := connectHere(srv.URL, project, "", false, &out, false); err != nil {
+	if err := connectHere(srv.URL, project, "", false, agentAuto, &out, false); err != nil {
 		t.Fatalf("connectHere: %v", err)
 	}
 	for _, want := range []string{"initialized .regent", "registered repo_id", "wrote remote config", "No history recorded"} {

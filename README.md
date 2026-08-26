@@ -293,6 +293,7 @@ explicitly with `NO_COLOR=1`.
 | `rgt --verbose <command>` | Show setup diagnostics hidden by the compact default experience. `REGENT_VERBOSE=1` is the script-friendly equivalent. |
 | `rgt connect [server-url-or-ssh-target]` | Bind to an existing `http(s)` server, or give an SSH target to provision it first. A project is written only after its public `/healthz` answers. |
 | `rgt connect --as <name>` | Register this project under a name you choose instead of one derived from its git remote. Recorded in the project binding, so it is said once. |
+| `rgt connect --agent <target>` | Wire a specific host integration (`claude`, `codex`, `opencode`, `pi`, `both`, or `all`) instead of auto-detecting installed agents. |
 | `rgt init` | Initialize `.regent/` in current directory |
 | `rgt connect --no-git-hook` / `rgt init --no-git-hook` | Wire agent hooks but not the Git `pre-push` hook, so `git push` does not deliver queued capture. |
 | `rgt log` | Show step history (supports `--session`, `-n`, `--json`, `--graph`) |

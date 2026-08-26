@@ -33,6 +33,8 @@ type connectParams struct {
 	// noGitHook leaves the Git pre-push hook alone (--no-git-hook). Agent hooks
 	// are unaffected: this opts out of sync-on-push, not of capture.
 	noGitHook bool
+	// agent selects which host integrations to wire. Empty retains auto-detection.
+	agent agentTarget
 	// out receives diagnostic and exceptional state. Normal onboarding output
 	// is rendered by connectHere after the operation succeeds.
 	out io.Writer
@@ -123,8 +125,12 @@ connect replaces setup, which did the same job with different answers.`,
 			}
 
 			noGitHook, _ := cmd.Flags().GetBool("no-git-hook")
+			agent, _ := cmd.Flags().GetString("agent")
+			if _, err := resolveAgentTargets(cwd, agentTarget(agent)); err != nil {
+				return err
+			}
 
-			return connectHere(serverURL, cwd, explicitID, noGitHook, cmd.OutOrStdout(), isTerminal(os.Stdin))
+			return connectHere(serverURL, cwd, explicitID, noGitHook, agentTarget(agent), cmd.OutOrStdout(), isTerminal(os.Stdin))
 		},
 	}
 	// Derivation is a guess and it will be wrong for someone: a fork's remote,
@@ -137,6 +143,7 @@ connect replaces setup, which did the same job with different answers.`,
 	// remembering `rgt sync`. This is the per-run exit; REGENT_GIT_SYNC_ON_PUSH=0
 	// is the per-machine one, and `git push --no-verify` is Git's own.
 	cmd.Flags().Bool("no-git-hook", false, "do not install the Git pre-push hook that syncs queued history on git push")
+	cmd.Flags().String("agent", string(agentAuto), "Agent hooks to configure: auto, claude, codex, opencode, pi, both, all")
 	cmd.Flags().String("url", "", "public http(s) URL to prove and bind when provisioning an SSH target")
 	cmd.Flags().Bool("yes", false, "provision an SSH target without asking for confirmation")
 	return cmd
@@ -154,7 +161,7 @@ connect replaces setup, which did the same job with different answers.`,
 // canPrompt is false wherever there is no person to answer — under
 // `curl | sh`, in CI, in a devcontainer — and the share question is simply not
 // asked there.
-func connectHere(serverURL, dir, repoID string, noGitHook bool, out io.Writer, canPrompt bool) error {
+func connectHere(serverURL, dir, repoID string, noGitHook bool, agent agentTarget, out io.Writer, canPrompt bool) error {
 	if out == nil {
 		out = io.Discard
 	}
@@ -162,7 +169,7 @@ func connectHere(serverURL, dir, repoID string, noGitHook bool, out io.Writer, c
 	flow.Header("connect", filepath.Base(dir))
 	var setupOutput bytes.Buffer
 	err := flow.Wait("Installing project integration", func() error {
-		return runConnect(connectParams{serverURL: serverURL, projectRoot: dir, repoID: repoID, noGitHook: noGitHook, out: &setupOutput})
+		return runConnect(connectParams{serverURL: serverURL, projectRoot: dir, repoID: repoID, noGitHook: noGitHook, agent: agent, out: &setupOutput})
 	})
 	if setupOutput.Len() > 0 {
 		_, _ = io.Copy(out, &setupOutput)
@@ -250,7 +257,7 @@ func runConnect(p connectParams) error {
 		if serverKnowsRepo(p.serverURL, repoCfg.Remote.RepoID, p.httpClient, token) {
 			Verbosef(p.writer(), "  already connected to %s (repo_id: %s)\n", p.serverURL, repoCfg.Remote.RepoID)
 			fmt.Fprintf(p.writer(), "  %s Already connected to this server\n", style.Success(""))
-			return connectWireHooksTo(p.projectRoot, p.noGitHook, p.writer())
+			return connectWireHooksForTargetTo(p.projectRoot, p.noGitHook, p.agent, p.writer())
 		}
 		fmt.Fprintf(p.writer(), "  %s %s has no record of project %s; registering it again.\n", style.Warning(""),
 			p.serverURL, repoCfg.Remote.RepoID)
@@ -292,7 +299,7 @@ func runConnect(p connectParams) error {
 	}
 
 	// 7. Wire Claude hooks (merge/dedupe).
-	return connectWireHooksTo(p.projectRoot, p.noGitHook, p.writer())
+	return connectWireHooksForTargetTo(p.projectRoot, p.noGitHook, p.agent, p.writer())
 }
 
 // connectWireHooks wires every agent detected in the project, not just Claude.
@@ -308,7 +315,11 @@ func connectWireHooks(projectRoot string, noGitHook bool) error {
 }
 
 func connectWireHooksTo(projectRoot string, noGitHook bool, out io.Writer) error {
-	targets, err := resolveAgentTargets(projectRoot, agentAuto)
+	return connectWireHooksForTargetTo(projectRoot, noGitHook, agentAuto, out)
+}
+
+func connectWireHooksForTargetTo(projectRoot string, noGitHook bool, target agentTarget, out io.Writer) error {
+	targets, err := resolveAgentTargets(projectRoot, target)
 	if err != nil {
 		return err
 	}

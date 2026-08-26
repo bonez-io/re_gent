@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -213,6 +214,27 @@ func TestConnectWiresEveryDetectedAgentNotJustClaude(t *testing.T) {
 				t.Errorf("doctor would fail the install: %s — %s", f.Name, f.Detail)
 			}
 		}
+	}
+}
+
+func TestConnectWireHooksHonorsExplicitAgentSelection(t *testing.T) {
+	root := t.TempDir()
+	mustMkdir(t, filepath.Join(root, ".opencode"))
+
+	var out bytes.Buffer
+	if err := connectWireHooksForTargetTo(root, true, agentBoth, &out); err != nil {
+		t.Fatalf("connectWireHooksForTargetTo: %v", err)
+	}
+	for _, rel := range []string{
+		filepath.Join(".claude", "settings.json"),
+		filepath.Join(".codex", "config.toml"),
+	} {
+		if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
+			t.Fatalf("%s not written: %v", rel, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, ".opencode", "package.json")); !os.IsNotExist(err) {
+		t.Fatalf("OpenCode package touched despite --agent both: %v", err)
 	}
 }
 
