@@ -219,6 +219,8 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request, repoID string
 		s.handleAPIFiles(w, r, repoID, st)
 	case len(segs) == 3 && segs[2] == "blame":
 		s.handleAPIBlame(w, r, repoID, st)
+	case len(segs) == 3 && segs[2] == "diff":
+		s.handleAPIDiff(w, r, repoID, st)
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 	}

@@ -43,7 +43,9 @@ function FileIcon() {
 function Branch({ node, depth, selectedPath, onSelect }: { node: TreeNode; depth: number; selectedPath?: string; onSelect: (path: string) => void }) {
   const directory = node.children.length > 0 && !node.file
   const selectedInside = selectedPath?.startsWith(`${node.path}/`) ?? false
-  const [open, setOpen] = useState(depth === 0 || selectedInside)
+  // Collapsed by default: `depth === 0` used to expand every root folder on open, which
+  // buried the tree. Only the branch holding the shown file starts open.
+  const [open, setOpen] = useState(selectedInside)
   if (directory) return <div>
     <button type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)} className="flex h-7 w-full items-center gap-1.5 rounded-[3px] pr-2 text-left text-[11.5px] text-ink-2 transition-colors hover:bg-hover" style={{ paddingLeft: `${8 + depth * 14}px` }}>
       <svg width="10" height="10" viewBox="0 0 12 12" fill="none" className="shrink-0 text-ink-3 transition-transform duration-150" style={{ transform: open ? 'rotate(0deg)' : 'rotate(-90deg)' }} aria-hidden><path d="m3 4.5 3 3 3-3" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" /></svg>

@@ -1,4 +1,4 @@
-import type { BlameResponse, CreateRepoResponse, FilesResponse, LogResponse, LogStep, RepoListResponse, SessionsResponse, StatusResponse, TranscriptResponse } from './types'
+import type { BlameResponse, StepDiffResponse, CreateRepoResponse, FilesResponse, LogResponse, LogStep, RepoListResponse, SessionsResponse, StatusResponse, TranscriptResponse } from './types'
 import {
   demoRepoId,
   mockBlameResponse,
@@ -43,7 +43,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 const repoPath = (repoId: string) => `/${encodeURIComponent(repoId)}/api`
 const demoOnly = (repoId: string) => repoId === demoRepoId
-const showLocalDemoRepo = import.meta.env.DEV && !import.meta.env.STORYBOOK
+// The demo workspace is a design fixture, not captured history, so it is opt-in
+// (VITE_REGENT_DEMO=1). Injecting it into every dev build made the repo list
+// claim a project the server does not host, and the picker could never reach
+// the real ones.
+const showLocalDemoRepo = import.meta.env.VITE_REGENT_DEMO === '1' && !import.meta.env.STORYBOOK
 
 export const api = {
   listRepos: async () => {
@@ -56,6 +60,9 @@ export const api = {
   transcript: (repoId: string, sessionId: string) => demoOnly(repoId) ? Promise.resolve({ ...mockTranscriptResponse, session: mockSessionsResponse.sessions.find((session) => session.session_id === sessionId) || mockTranscriptResponse.session }) : request<TranscriptResponse>(`${repoPath(repoId)}/transcript?session=${encodeURIComponent(sessionId)}`),
   status: (repoId: string) => demoOnly(repoId) ? Promise.resolve(mockStatusResponse) : request<StatusResponse>(`${repoPath(repoId)}/status`),
   step: (repoId: string, hash: string) => request<LogStep>(`${repoPath(repoId)}/steps/${encodeURIComponent(hash)}`),
+  // Fetched only when a diff is actually shown: a first step has no parent, so its diff is
+  // the whole tree as additions and can run to hundreds of kilobytes.
+  diff: (repoId: string, step: string) => request<StepDiffResponse>(`${repoPath(repoId)}/diff?step=${encodeURIComponent(step)}`),
   files: (repoId: string, scope: { step?: string; session?: string } = {}) => {
     if (demoOnly(repoId)) return Promise.resolve(mockFilesResponse)
     const query = new URLSearchParams()

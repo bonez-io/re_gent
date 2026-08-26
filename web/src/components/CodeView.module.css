@@ -1,0 +1,8 @@
+.root { font-family: var(--font-mono); font-size: 11px; line-height: 1.35; }
+.notice { margin: 0; padding: 10px 12px; color: var(--ink-3); font-size: 11px; }
+.pre { margin: 0; overflow: auto; white-space: pre; }
+.row { display: flex; min-height: 16px; }
+.gutter { width: 36px; flex-shrink: 0; user-select: none; text-align: right; padding-right: 8px; color: var(--ink-3); }
+.line { white-space: pre; color: var(--ink-2); }
+.token { color: var(--shiki-dark); }
+:global(.light) .token { color: var(--shiki-light); }

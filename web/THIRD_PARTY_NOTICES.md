@@ -22,3 +22,12 @@ adaptations of these components.
 
 The component is listed by AI CSS as free. Keep this attribution with the
 adaptation and re-check its published terms before distribution.
+
+## @lobehub/icons-static-svg
+
+- Source: <https://github.com/lobehub/lobe-icons>
+- Components adapted: vendor agent marks (Claude Code, Codex, OpenCode, Pi)
+- License: MIT
+
+The MIT copyright and permission notice must remain with substantial copies or
+adaptations of these components.

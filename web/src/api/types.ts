@@ -1,4 +1,5 @@
 import type { FileChange, ToolCall } from '../components/ToolCallGroup'
+import type { FileDiff } from '../components/FileDiffView'
 
 export type RepoListResponse = { repos: string[] }
 export type CreateRepoResponse = { repo_id: string; created: boolean }
@@ -28,6 +29,12 @@ export type LogStep = {
   args: unknown
   result: unknown
   messages: LogMessage[]
+  session_id?: string
+  tree?: string
+  events?: TranscriptEvent[]
+  author?: { name?: string; email?: string }
+  usage?: { input_tokens?: number; output_tokens?: number; cache_read_tokens?: number }
+  effects?: unknown[]
 }
 export type LogResponse = { session_id: string; steps: LogStep[] }
 
@@ -47,6 +54,8 @@ export type TranscriptStep = {
 export type TranscriptResponse = { session: SessionSummary; steps: TranscriptStep[] }
 
 export type StepListResponse = { steps: LogStep[] }
+/** GET /<repo>/api/diff?step=<hash> — the per-file diff a step introduced over its parent. */
+export type StepDiffResponse = { step_hash: string; parent_hash: string; total_files: number; files: FileDiff[] }
 export type FileSummary = { path: string; mode?: number; size?: number; blob_hash: string; blame_hash?: string }
 export type FilesResponse = { step_hash: string; tree_hash: string; total_files: number; files: FileSummary[] }
 export type BlameResponse = {
@@ -74,6 +83,6 @@ export type TranscriptEntry =
   | { type: 'user'; id: string; at: string; content: string }
   | { type: 'assistant'; id: string; at: string; content: string }
   | { type: 'reasoning'; id: string; at: string; duration: number; lines: string[] }
-  | { type: 'tools'; id: string; at: string; calls: ToolCall[]; files?: FileChange[] }
+  | { type: 'tools'; id: string; at: string; calls: ToolCall[]; files?: FileChange[]; stepHash?: string }
   | { type: 'code'; id: string; at: string; filename: string; language: string; code: string }
   | { type: 'step'; id: string; at: string; hash: string; tree: string; turn: string; tokens: number; files: number }

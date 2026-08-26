@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { CodeBlock } from './CodeBlock'
 import { SessionRow } from './SessionRow'
 import { StepMarker } from './StepMarker'
@@ -89,7 +90,8 @@ function DesignMethod() {
   </main>
 }
 
-const meta = { component: DesignMethod, title: 'Design/Regent Method', parameters: { layout: 'fullscreen' }, tags: ['ai-generated'] } satisfies Meta<typeof DesignMethod>
+// This page renders a live ToolCallGroup, which now fetches step diffs lazily.
+const meta = { component: DesignMethod, title: 'Design/Regent Method', parameters: { layout: 'fullscreen' }, tags: ['ai-generated'], decorators: [(StoryFn) => <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><StoryFn /></QueryClientProvider>] } satisfies Meta<typeof DesignMethod>
 export default meta
 type Story = StoryObj<typeof meta>
 

@@ -1,19 +1,49 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
-import { expect } from 'storybook/test'
+import { expect, userEvent, waitFor } from 'storybook/test'
 import { ProjectSidebar } from './ProjectSidebar'
 
-const meta = { component: ProjectSidebar, tags: ['ai-generated'], parameters: { layout: 'fullscreen' } } satisfies Meta<typeof ProjectSidebar>
+const meta = { component: ProjectSidebar, tags: ['ai-generated'], parameters: { layout: 'fullscreen' }, args: { project: 'github.com-regent-vcs-re_gent_headless', userName: 'Shay', userDetail: 'Local workspace' } } satisfies Meta<typeof ProjectSidebar>
 export default meta
 type Story = StoryObj<typeof meta>
 
-export const Default: Story = { args: {} }
-export const LongProjectName: Story = { args: { project: 'customer-support-agent-monorepo' } }
-export const Managed: Story = { args: { deployment: 're_gent hosted' } }
+export const Default: Story = {}
+export const LongProjectName: Story = { args: { project: 'customer-support-agent-monorepo-with-a-long-name' } }
 export const FilesActive: Story = { args: { active: 'files' } }
-export const CssCheck: Story = {
-  args: {},
+
+export const SettingsOpen: Story = {
+  args: { active: 'settings', settingsSection: 'status' },
   play: async ({ canvas }) => {
-    const sidebar = canvas.getByRole('complementary', { name: 'Project navigation' })
-    await expect(getComputedStyle(sidebar).backgroundColor).toBe('rgb(15, 15, 15)')
+    await expect(canvas.getByRole('button', { name: 'Settings' })).toHaveAttribute('aria-expanded', 'true')
+    await expect(canvas.getByRole('button', { name: 'Status' })).toHaveAttribute('aria-current', 'page')
+  },
+}
+
+/** Icon rail: labels collapse out of view but every control keeps an accessible name. */
+export const Collapsed: Story = {
+  args: { collapsed: true },
+  play: async ({ canvas }) => {
+    for (const label of ['Sessions', 'Team', 'Browse', 'Skills', 'Settings']) await expect(canvas.getByRole('button', { name: label })).toBeInTheDocument()
+    await expect(canvas.getByRole('button', { name: 'User: Shay' })).toBeInTheDocument()
+    await expect(canvas.getByRole('button', { name: 'Expand sidebar' })).toBeInTheDocument()
+  },
+}
+
+export const ToggleInteraction: Story = {
+  play: async ({ canvas }) => {
+    await userEvent.click(canvas.getByRole('button', { name: 'Collapse sidebar' }))
+    await expect(canvas.getByRole('button', { name: 'Expand sidebar' })).toBeInTheDocument()
+    await userEvent.click(canvas.getByRole('button', { name: 'Expand sidebar' }))
+    await expect(canvas.getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument()
+  },
+}
+
+export const KeyboardReveal: Story = {
+  args: { collapsed: true },
+  play: async ({ canvas }) => {
+    canvas.getByRole('link', { name: 'Visit re_gent' }).focus()
+    await userEvent.tab()
+    const toggle = canvas.getByRole('button', { name: 'Expand sidebar' })
+    await waitFor(() => expect(toggle).toHaveFocus())
+    await waitFor(() => expect(getComputedStyle(toggle).opacity).toBe('1'))
   },
 }

@@ -21,10 +21,12 @@
     "@tanstack/react-query": "^5.101.4",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "react-router-dom": "^7.18.2"
+    "react-router-dom": "^7.18.2",
+    "shiki": "^4.4.3"
   },
   "devDependencies": {
     "@chromatic-com/storybook": "latest",
+    "@lobehub/icons-static-svg": "^1.94.0",
     "@storybook/addon-a11y": "^10.5.9",
     "@storybook/addon-docs": "^10.5.9",
     "@storybook/addon-mcp": "latest",
