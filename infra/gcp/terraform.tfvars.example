@@ -2,5 +2,5 @@ project_id = "your-dedicated-regent-project"
 region     = "europe-west4"
 zone       = "europe-west4-a"
 
-# github_repository = "regent-vcs/re_gent_headless"
+# github_repository = "bonez-io/re_gent"
 # production_deletion_protection = true

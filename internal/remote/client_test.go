@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/regent-vcs/regent/internal/remotetest"
-	"github.com/regent-vcs/regent/internal/store"
+	"github.com/bonez-io/re_gent/internal/remotetest"
+	"github.com/bonez-io/re_gent/internal/store"
 )
 
 func newTestClient(t *testing.T, srv *remotetest.Server) *HTTPClient {

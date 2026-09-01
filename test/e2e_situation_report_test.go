@@ -11,7 +11,7 @@ import (
 	// shell out to a freshly built rgt, so without an import of the package under
 	// test Go's cache would replay a stale pass against a binary that no longer
 	// exists.
-	_ "github.com/regent-vcs/regent/internal/cli"
+	_ "github.com/bonez-io/re_gent/internal/cli"
 )
 
 // These tests pin one promise: a command must describe the situation the user is

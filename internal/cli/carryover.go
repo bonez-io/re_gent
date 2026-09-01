@@ -11,8 +11,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/regent-vcs/regent/internal/remote"
-	"github.com/regent-vcs/regent/internal/store"
+	"github.com/bonez-io/re_gent/internal/remote"
+	"github.com/bonez-io/re_gent/internal/store"
 )
 
 // Binding a project to a server moves every read to a machine-local cache keyed

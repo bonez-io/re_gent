@@ -82,7 +82,7 @@ The public product repository owns everything necessary to run a complete
 self-hosted system:
 
 ```text
-re_gent_headless/
+re_gent/
 ├── api/
 │   └── openapi.yaml       # versioned public data-plane contract
 ├── cmd/

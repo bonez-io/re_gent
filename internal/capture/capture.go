@@ -12,11 +12,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/regent-vcs/regent/internal/ignore"
-	"github.com/regent-vcs/regent/internal/index"
-	"github.com/regent-vcs/regent/internal/snapshot"
-	"github.com/regent-vcs/regent/internal/store"
-	"github.com/regent-vcs/regent/internal/usage"
+	"github.com/bonez-io/re_gent/internal/ignore"
+	"github.com/bonez-io/re_gent/internal/index"
+	"github.com/bonez-io/re_gent/internal/snapshot"
+	"github.com/bonez-io/re_gent/internal/store"
+	"github.com/bonez-io/re_gent/internal/usage"
 )
 
 const (

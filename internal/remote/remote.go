@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/regent-vcs/regent/internal/store"
+	"github.com/bonez-io/re_gent/internal/store"
 )
 
 // Remote is the interface for a rgt remote (push/pull target).

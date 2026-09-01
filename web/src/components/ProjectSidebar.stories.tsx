@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from '@storybook/react-vite'
 import { expect, userEvent, waitFor } from 'storybook/test'
 import { ProjectSidebar } from './ProjectSidebar'
 
-const meta = { component: ProjectSidebar, tags: ['ai-generated'], parameters: { layout: 'fullscreen' }, args: { project: 'github.com-regent-vcs-re_gent_headless', userName: 'Shay', userDetail: 'Local workspace' } } satisfies Meta<typeof ProjectSidebar>
+const meta = { component: ProjectSidebar, tags: ['ai-generated'], parameters: { layout: 'fullscreen' }, args: { project: 'github.com-bonez-io-re_gent', userName: 'Shay', userDetail: 'Local workspace' } } satisfies Meta<typeof ProjectSidebar>
 export default meta
 type Story = StoryObj<typeof meta>
 

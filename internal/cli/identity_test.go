@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/regent-vcs/regent/internal/remote"
+	"github.com/bonez-io/re_gent/internal/remote"
 )
 
 // A project is identified by the repository it belongs to. Today it is
@@ -26,11 +26,11 @@ import (
 // teammates on https and ssh become two projects.
 func TestIdentityIsTheSameHoweverTheRepositoryWasCloned(t *testing.T) {
 	same := []string{
-		"https://github.com/regent-vcs/re_gent_headless.git",
-		"https://github.com/regent-vcs/re_gent_headless",
-		"git@github.com:regent-vcs/re_gent_headless.git",
-		"ssh://git@github.com/regent-vcs/re_gent_headless.git",
-		"https://GitHub.com/regent-vcs/re_gent_headless.git/",
+		"https://github.com/bonez-io/re_gent.git",
+		"https://github.com/bonez-io/re_gent",
+		"git@github.com:bonez-io/re_gent.git",
+		"ssh://git@github.com/bonez-io/re_gent.git",
+		"https://GitHub.com/bonez-io/re_gent.git/",
 	}
 
 	want := identityFromRemote(same[0])
@@ -51,8 +51,8 @@ func TestIdentityFromRemote(t *testing.T) {
 	}{
 		{
 			name:   "host owner and repo",
-			remote: "https://github.com/regent-vcs/re_gent_headless.git",
-			want:   "github.com-regent-vcs-re_gent_headless",
+			remote: "https://github.com/bonez-io/re_gent.git",
+			want:   "github.com-bonez-io-re_gent",
 			why:    "the host is part of the identity: github.com/acme/api and gitlab.com/acme/api are different projects",
 		},
 		{
@@ -94,7 +94,7 @@ func TestIdentityFromRemote(t *testing.T) {
 // fails with a 400 that names none of this.
 func TestDerivedIdentityIsAlwaysServerLegal(t *testing.T) {
 	remotes := []string{
-		"https://github.com/regent-vcs/re_gent_headless.git",
+		"https://github.com/bonez-io/re_gent.git",
 		"https://gitlab.example.com/a-very-long-group-name/another-long-subgroup/and-a-repository-name-that-runs-well-past-the-limit.git",
 		"git@github.com:_leading/underscore.git",
 		"https://github.com/acme/repos.git",

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/regent-vcs/regent/internal/store"
+	"github.com/bonez-io/re_gent/internal/store"
 )
 
 // TestAPIDiffAddedModifiedDeleted builds a parent/child step pair touching

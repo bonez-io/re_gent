@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/regent-vcs/regent/internal/index"
-	"github.com/regent-vcs/regent/internal/store"
-	"github.com/regent-vcs/regent/internal/treediff"
+	"github.com/bonez-io/re_gent/internal/index"
+	"github.com/bonez-io/re_gent/internal/store"
+	"github.com/bonez-io/re_gent/internal/treediff"
 )
 
 // enrichSteps adds files, args, results, duration, and optionally graph rendering to each step

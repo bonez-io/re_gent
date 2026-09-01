@@ -1,6 +1,6 @@
 package capture
 
-import "github.com/regent-vcs/regent/internal/store"
+import "github.com/bonez-io/re_gent/internal/store"
 
 // markLooseObject gives a command-edge delivery integration a chance to queue
 // an object that no step references (today an archived host transcript).

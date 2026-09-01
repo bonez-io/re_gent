@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/regent-vcs/regent/internal/server"
+	"github.com/bonez-io/re_gent/internal/server"
 )
 
 // This file is the seam that ticket #6 exists to build.

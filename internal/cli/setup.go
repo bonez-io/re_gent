@@ -9,10 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/bonez-io/re_gent/internal/config"
+	"github.com/bonez-io/re_gent/internal/store"
+	"github.com/bonez-io/re_gent/internal/style"
 	"github.com/pelletier/go-toml/v2"
-	"github.com/regent-vcs/regent/internal/config"
-	"github.com/regent-vcs/regent/internal/store"
-	"github.com/regent-vcs/regent/internal/style"
 )
 
 // This file is what is left of `rgt setup`: the server binding a machine

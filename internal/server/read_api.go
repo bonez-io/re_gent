@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/regent-vcs/regent/internal/store"
+	"github.com/bonez-io/re_gent/internal/store"
 )
 
 // defaultLogLimit bounds a /api/log walk when the caller does not specify one.

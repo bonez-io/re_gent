@@ -5,7 +5,7 @@ command -v gh >/dev/null
 command -v terraform >/dev/null
 command -v jq >/dev/null
 
-repo=${GITHUB_REPOSITORY:-regent-vcs/re_gent_headless}
+repo=${GITHUB_REPOSITORY:-bonez-io/re_gent}
 infra_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 output=$(terraform -chdir="$infra_dir" output -json github)
 

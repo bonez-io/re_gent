@@ -8,7 +8,7 @@ import (
 
 	// See e2e_onboarding_test.go: this package builds rgt via `go build`, so
 	// without a compile-time edge to the CLI the test cache serves stale passes.
-	_ "github.com/regent-vcs/regent/internal/cli"
+	_ "github.com/bonez-io/re_gent/internal/cli"
 )
 
 // "Connected" is currently decided by whether .regent/config.toml exists. But

@@ -361,7 +361,7 @@ The docs are explicit that this gap is by design: *"When the hook succeeds, Clau
 |---|---|
 | Interactive multi-select + `Install skills? [Y/n]` present since v1.0.0 | `git show e489d5c:internal/cli/init.go`; `CHANGELOG.md` 1.0.0: *"OpenCode integration with interactive agent selection during `rgt init`"* |
 | `huh` added 2026-05-14 | commit `7f30a80` *"feat: add OpenCode integration with interactive agent selection"* |
-| Live in v1.1.0 (2026-06-01) | commit `226de39`; `gh release list --repo regent-vcs/re_gent` |
+| Live in v1.1.0 (2026-06-01) | commit `226de39`; `gh release list --repo bonez-io/re_gent` |
 | Options never pre-selected | `init.go:185-206` has no `.Selected(`; `huh@v1.0.0/option.go:25-27` returns `Option{Key, Value}` |
 | No non-interactive hook path | `offerHookInstall` (line 181) is the sole caller of `installClaudeHook` in `init.go`; flags are only `--skip-hook`, `--skip-skills`, `--agent` |
 | Non-TTY: exit 0, no hooks, success banner | reproduced in temp dir with the committed `rgt` binary |
@@ -372,7 +372,7 @@ The docs are explicit that this gap is by design: *"When the hook succeeds, Clau
 | Restart warning exists only in `connect` | `connect.go:148-152` |
 | TTY detection already in repo | `discover.go:104-113`, `setup.go:104-118` |
 | Hook-writing funcs tested; interactive layer untested | `init_test.go` — 7 tests, all on `installClaudeHook`/`installCodexHook`/`installSkills`; none on `offerHookInstall` |
-| Issue #45 | [regent-vcs/re_gent#45](https://github.com/regent-vcs/re_gent/issues/45), opened 2026-05-19, still open |
+| Issue #45 | [bonez-io/re_gent#45](https://github.com/bonez-io/re_gent/issues/45), opened 2026-05-19, still open |
 | No telemetry | `docs/FAQ.md` |
 
 ### 6.2 Storybook

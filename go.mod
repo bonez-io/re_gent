@@ -1,4 +1,4 @@
-module github.com/regent-vcs/regent
+module github.com/bonez-io/re_gent
 
 go 1.23.0
 

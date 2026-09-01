@@ -3,9 +3,9 @@ package cli
 import (
 	"strings"
 
-	"github.com/regent-vcs/regent/internal/index"
-	"github.com/regent-vcs/regent/internal/store"
-	"github.com/regent-vcs/regent/internal/style"
+	"github.com/bonez-io/re_gent/internal/index"
+	"github.com/bonez-io/re_gent/internal/store"
+	"github.com/bonez-io/re_gent/internal/style"
 )
 
 // GraphNode represents a step in the graph with its relationships

@@ -14,17 +14,17 @@ if [ -z "$VERSION" ]; then
 fi
 
 # Validate version format
-if [[ ! $VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-z]+)?$ ]]; then
-    echo "Error: Version must be in format vX.Y.Z or vX.Y.Z-suffix (e.g., v0.2.0 or v0.2.0-beta)"
+if [[ ! $VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+    echo "Error: Version must be SemVer with an optional prerelease (e.g., v1.2.0-beta.3)"
     exit 1
 fi
 
 echo "🔍 Pre-flight checks..."
 
-# Check if on main or develop branch
+# Check if on the release or integration branch
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
-if [[ "$BRANCH" != "main" && "$BRANCH" != "develop" ]]; then
-    echo "⚠️  Warning: You're on branch '$BRANCH', not 'main' or 'develop'"
+if [[ "$BRANCH" != "main" && "$BRANCH" != "dev" ]]; then
+    echo "⚠️  Warning: You're on branch '$BRANCH', not 'main' or 'dev'"
     read -p "Continue anyway? (y/N) " -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
@@ -105,7 +105,7 @@ echo "  3. Upload artifacts"
 echo "  4. Update Homebrew tap (if configured)"
 echo ""
 echo "Monitor progress at:"
-echo "  https://github.com/regent-vcs/re_gent/actions"
+echo "  https://github.com/bonez-io/re_gent/actions"
 echo ""
 echo "Release will be available at:"
-echo "  https://github.com/regent-vcs/re_gent/releases/tag/$VERSION"
+echo "  https://github.com/bonez-io/re_gent/releases/tag/$VERSION"

@@ -7,7 +7,7 @@ re_gent supports shell completion for bash, zsh, and fish. This enables tab-comp
 If you installed via Homebrew, shell completion is **automatically set up** for you:
 
 ```bash
-brew tap regent-vcs/tap
+brew tap bonez-io/tap
 brew install regent
 ```
 

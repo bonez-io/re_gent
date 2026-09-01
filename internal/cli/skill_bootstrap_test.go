@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/regent-vcs/regent/internal/skills"
+	"github.com/bonez-io/re_gent/internal/skills"
 )
 
 // The bootstrap skill is the entry point to the catalog. If it were opt-in like

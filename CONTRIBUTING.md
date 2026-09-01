@@ -33,7 +33,7 @@ Thanks for your interest in contributing to re_gent! This document outlines the 
 ### Clone and Build
 
 ```bash
-git clone https://github.com/regent-vcs/regent
+git clone https://github.com/bonez-io/re_gent
 cd regent
 go mod download
 go build -o rgt ./cmd/rgt
@@ -224,7 +224,7 @@ re_gent is being built in phases per [POC.md](POC.md):
 - **Phase 5**: Rewind
 - **Phase 6**: Concurrency hardening
 
-Check the [GitHub Projects board](https://github.com/regent-vcs/regent/projects) for current priorities.
+Check the [GitHub Projects board](https://github.com/bonez-io/re_gent/projects) for current priorities.
 
 ---
 

@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/regent-vcs/regent/internal/index"
-	"github.com/regent-vcs/regent/internal/jsonl"
-	"github.com/regent-vcs/regent/internal/store"
+	"github.com/bonez-io/re_gent/internal/index"
+	"github.com/bonez-io/re_gent/internal/jsonl"
+	"github.com/bonez-io/re_gent/internal/store"
 )
 
 // assistantLine builds a Claude Code transcript record carrying one thinking

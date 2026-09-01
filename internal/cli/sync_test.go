@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/regent-vcs/regent/internal/remote"
-	"github.com/regent-vcs/regent/internal/remotetest"
-	"github.com/regent-vcs/regent/internal/store"
+	"github.com/bonez-io/re_gent/internal/remote"
+	"github.com/bonez-io/re_gent/internal/remotetest"
+	"github.com/bonez-io/re_gent/internal/store"
 )
 
 const syncTestRef = "sessions/claude_code--sess-1"

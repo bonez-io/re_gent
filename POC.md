@@ -887,7 +887,7 @@ Rough effort estimates assume one focused engineer working in Go.
 ## 12. Dependencies (go.mod)
 
 ```
-module github.com/regent-vcs/regent
+module github.com/bonez-io/re_gent
 
 go 1.22
 
@@ -921,7 +921,7 @@ All of these compile without CGO, so `rgt` ships as a single static binary.
 ## 14. The first concrete next step
 
 1. `mkdir -p cmd/rgt internal/store internal/snapshot internal/hook internal/index`
-2. `go mod init github.com/regent-vcs/regent`
+2. `go mod init github.com/bonez-io/re_gent`
 3. Implement `internal/store/blob.go` (write_blob + atomic write + read_blob) — it's ~80 lines and unblocks everything else.
 4. Write a test that writes 1000 random blobs and verifies dedupe + integrity.
 5. Move on to `tree.go`.

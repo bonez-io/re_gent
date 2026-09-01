@@ -10,8 +10,8 @@ import (
 )
 
 var forbiddenStorePolicyImports = map[string]bool{
-	"github.com/regent-vcs/regent/internal/remote": true,
-	"github.com/regent-vcs/regent/internal/server": true,
+	"github.com/bonez-io/re_gent/internal/remote": true,
+	"github.com/bonez-io/re_gent/internal/server": true,
 }
 
 // TestStoreChoiceStaysAtTheCommandEdge prevents the historical regression
@@ -34,10 +34,10 @@ func TestStoreChoiceStaysAtTheCommandEdge(t *testing.T) {
 // convention: the exact forbidden mutation reported in the issue is rejected.
 func TestForbiddenStorePolicyImportIsRejected(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "reader.go")
-	if err := os.WriteFile(file, []byte("package reader\nimport \"github.com/regent-vcs/regent/internal/remote\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(file, []byte("package reader\nimport \"github.com/bonez-io/re_gent/internal/remote\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := forbiddenImports(file); len(got) != 1 || got[0] != "github.com/regent-vcs/regent/internal/remote" {
+	if got := forbiddenImports(file); len(got) != 1 || got[0] != "github.com/bonez-io/re_gent/internal/remote" {
 		t.Fatalf("forbidden import = %v, want remote rejected", got)
 	}
 }
