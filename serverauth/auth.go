@@ -34,6 +34,13 @@ const (
 	ActionHistoryWrite     Action = "history:write"
 	ActionSkillList        Action = "skill:list"
 	ActionSkillRead        Action = "skill:read"
+	ActionIdentityRead     Action = "identity:read"
+	ActionTokenRead        Action = "token:read"
+	ActionTokenWrite       Action = "token:write"
+	ActionUserList         Action = "user:list"
+	ActionUserCreate       Action = "user:create"
+	ActionMemberRead       Action = "member:read"
+	ActionMemberWrite      Action = "member:write"
 )
 
 // Resource identifies the object a permission applies to. RepositoryID is

@@ -19,7 +19,7 @@ import (
 )
 
 // ErrNotSignedIn is returned when no auth token is found in the global config.
-var ErrNotSignedIn = fmt.Errorf("the server refused this request as unauthenticated,\nand rgt has no sign-in command to fix that with.\n\nThis server is configured to require credentials; ask whoever runs it.")
+var ErrNotSignedIn = fmt.Errorf("the server refused this request as unauthenticated\n\nSign in, then retry:\n\n  rgt auth login <server-url>")
 
 // connectParams bundles everything runConnect needs; injectable for testing.
 type connectParams struct {
@@ -212,10 +212,13 @@ func runConnect(p connectParams) error {
 	}
 	// A token is OPTIONAL: the default server is open, and requiring sign-in
 	// here broke the advertised onboarding ("install rgt, then rgt connect
-	// <server>") on every machine that had never run `rgt login`. Send a stored
+	// <server>") on every machine that had never run `rgt auth login`. Send a stored
 	// token when there is one and let a server that genuinely requires auth
 	// answer 401 — registerRepo turns that into ErrNotSignedIn.
-	token := userCfg.Auth.Token
+	token := config.TokenForServer(userCfg, p.serverURL)
+	if err := remote.ValidateCredentialTransport(p.serverURL, token); err != nil {
+		return err
+	}
 
 	// 2. Initialise .regent/ if it doesn't exist.
 	regentDir := filepath.Join(p.projectRoot, ".regent")

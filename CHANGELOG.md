@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Secure self-hosted serving with one-time first-owner bootstrap, persistent
+  local users, `owner`/`admin`/`writer`/`reader` project roles, hashed and
+  expiring PATs, revocation, hardened browser sessions, CSRF protection,
+  rate-limited login/bootstrap routes, transactional audit events, and an
+  operator owner-recovery flow.
+- First-owner credentials are delivered through a mode-`0600` file that is
+  deleted after setup, rather than persisted in container logs. Secure data
+  directories are tightened to mode `0700`.
+- `rgt auth login`, `rgt auth status`, and `rgt auth logout`. Credentials are
+  keyed by server in the machine-only mode-`0600` config and are never accepted
+  as process arguments or written into repository configuration.
+- CLI login, connect, capture, pull, and sync refuse to send bearer credentials
+  over non-loopback plaintext HTTP; loopback development and tokenless open
+  servers remain supported.
+- Authenticated first-owner, sign-in, membership, user, role, and PAT flows in
+  the web UI, including browser sign-out and confirmation for destructive
+  access changes, plus a TLS-terminating production Compose profile and
+  self-hosted backup/restore/rollback guide.
 - `git push` now delivers whatever capture this machine still owes the server.
   Agent turns already drain the whole queue, so an outage heals itself on the
   next turn — but not in the window where the outage ends, you push, and no

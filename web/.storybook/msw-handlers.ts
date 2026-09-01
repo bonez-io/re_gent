@@ -10,6 +10,9 @@ const minutesAgo = (minutes: number) => new Date(now - minutes * 60_000).toISOSt
 const padded = (value: string) => value.padEnd(64, '0')
 
 export const mswHandlers = [
+  // Storybook models the legacy loopback profile unless a story opts into the
+  // authenticated self-hosted capability document explicitly.
+  http.get('/api/v1/capabilities', () => new HttpResponse(null, { status: 404 })),
   http.get('/repos', () => HttpResponse.json({ repos: ['girlfriend-assistant'] })),
   http.post('/repos', async ({ request }) => {
     const body = await request.json() as { repo_id: string }

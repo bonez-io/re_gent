@@ -34,7 +34,7 @@ editing shared state):
 |---|---|---|
 | `REGENT_SERVER_URL` | Base URL of the server. Scheme must be `http` or `https`. | — (required) |
 | `REGENT_REPO_ID` | Repository name registered with the server. Letters, digits, `.`, `_`, `-`; max 64; must start with a letter or digit. | — (required) |
-| `REGENT_TOKEN` | Reserved for future authenticated remote deployments; the current local server is open. | empty |
+| `REGENT_TOKEN` | Explicit process-scoped bearer token override. Prefer `rgt auth login` for a user machine. | empty |
 | `REGENT_SERVER_TIMEOUT` | Network budget for one hook invocation. Clamped to 60s. | `5s` |
 | `REGENT_CACHE_DIR` | Overrides the machine-local cache location. | `<user cache>/regent` |
 | `REGENT_GIT_SYNC_ON_PUSH` | Set to `0` to stop `git push` delivering queued capture. Only the literal `0` disables it, so a typo leaves syncing on. | on |
@@ -47,6 +47,12 @@ url     = "https://regent.example.com"
 repo_id = "my-project"
 timeout = "5s"
 ```
+
+`rgt auth login <server-url>` writes a server-keyed credential to the
+mode-`0600` user config. A token associated with one URL is never sent to a
+different server. Repository-local configuration contains no token. See the
+[`secure self-hosted guide`](./self-hosted.md) for bootstrap, roles, browser
+sessions, recovery, and operations.
 
 Setting `REGENT_SERVER_URL=""` (empty, not unset) disables server mode regardless of the file. That
 is the documented kill switch, and it is what the test suites use to stay hermetic.

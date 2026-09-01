@@ -94,4 +94,9 @@ func TestNormalizeServiceURLDistinguishesSSHIntent(t *testing.T) {
 	if !isServiceURL("https://regent.example") {
 		t.Fatal("https URL was not a service")
 	}
+	for _, raw := range []string{"https://user:pass@regent.example", "https://regent.example?redirect=other", "https://regent.example#fragment"} {
+		if isServiceURL(raw) {
+			t.Fatalf("unsafe service URL was accepted: %s", raw)
+		}
+	}
 }

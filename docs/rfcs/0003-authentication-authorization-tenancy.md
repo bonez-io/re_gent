@@ -21,8 +21,10 @@ composition concerns. A server without an access controller is legacy local
 mode and may not listen on a non-loopback address without the explicit
 `--insecure-no-auth` override.
 
-This RFC establishes the contract. It does not claim that the self-hosted or
-managed identity stores are implemented yet.
+This RFC establishes the contract. The first self-hosted implementation now
+exists on the release branch, pending review and the remaining conformance
+evidence. The managed identity store and tenant composition remain private
+follow-up work and are not implemented by this RFC.
 
 ## Goals
 
@@ -69,16 +71,17 @@ depth. None replaces application authorization.
 | Actor | Credential | Intended use |
 |---|---|---|
 | Browser user | Secure, HTTP-only, SameSite session cookie plus CSRF token | Managed and self-hosted web UI |
-| CLI user | Short-lived access token established by browser/device login | Interactive `rgt` use |
-| Automation | Scoped, revocable service token | CI and approved agents |
+| CLI user | Self-hosted PAT; managed short-lived access token established by browser/device login | Interactive `rgt` use |
+| Automation | Self-hosted PAT today; scoped, revocable service token in managed mode | CI and approved agents |
 | Self-hosted administrator | Bootstrap credential used once, then a normal session or PAT | Initial local server setup |
 | Operator | Separate operator identity with audited elevation | Managed support and incident response |
 
-Managed browser identity uses GitHub OAuth. CLI login uses a browser/device flow
-and exposes `rgt auth login`, `rgt auth status`, and `rgt auth logout`. Tokens
-are stored in the OS keychain where available, with a permission-restricted
-user-config fallback. Repository `.regent/config.toml` stores only the server
-URL and immutable project binding, never a bearer token.
+Managed browser identity uses GitHub OAuth. Its CLI login will use a
+browser/device flow. Self-hosted mode exposes `rgt auth login`, `rgt auth
+status`, and `rgt auth logout` for PATs. Current machine credentials are keyed
+by server in a mode-`0600` user config; OS-keychain integration remains planned.
+Repository `.regent/config.toml` stores only the server URL and immutable
+project binding, never a bearer token.
 
 Service tokens have a displayed prefix, a hashed-at-rest secret, explicit
 tenant/project scopes, creation metadata, last-used metadata, and an expiry.
@@ -161,6 +164,10 @@ conformance tests in the same change as the route.
 | `/{project}/refs/*` | `ref:read` | `ref:write` | project + ref |
 | `/{project}/api/*` | `history:read` | `history:write` | project + API suffix |
 | `/api/skills/*` | `skill:list`, `skill:read` | none in beta | global curated catalog |
+| `/api/v1/auth/me` | `identity:read` | none | authenticated subject |
+| `/api/v1/auth/tokens/*` | `token:read` | `token:write` | authenticated subject |
+| `/api/v1/users` | `user:list` | `user:create` | self-hosted instance |
+| `/{project}/api/v1/access/members/*` | `member:read` | `member:write` | project + member |
 | settings/search/export routes | explicit action required | explicit action required | tenant/project |
 | admin routes | none for normal members | explicit operator action | operator control plane |
 
@@ -185,21 +192,25 @@ routes. Managed and secure self-hosted policies must not grant it broadly.
 
 ## Self-hosted secure mode
 
-First start creates a one-time bootstrap flow on loopback or emits a one-time
-credential to the operator terminal. The operator creates the first owner and
-the bootstrap credential is invalidated. Passwords, if supported, use a modern
-memory-hard hash; personal access tokens are preferred for CLI access.
+First start creates a one-time bootstrap credential. The standalone server
+writes it to a mode-`0600` file in the protected data directory instead of a
+container log. Restarting before setup rotates it; creating the first owner
+invalidates it and deletes the delivery file. Passwords, if supported later,
+must use a modern memory-hard hash; personal access tokens are the current CLI
+credential.
 
 Binding an unauthenticated server to anything other than loopback fails closed.
-`--insecure-no-auth` is reserved for the local Docker profile and the current
-IAP-protected staging topology while authenticated serving is implemented. Its
-presence must be visible in startup logs and deployment configuration.
+`--insecure-no-auth` is reserved for the local Docker profile and explicitly
+approved access-proxy deployments. Its presence is visible in startup logs and
+deployment configuration; the production Compose profile uses self-hosted auth.
 
 ## Protocol negotiation and compatibility
 
-The authenticated API will expose `/api/v1/capabilities` with server version,
-protocol version, enabled auth methods, supported features, and size limits.
-Clients fail with an actionable message when a required capability is absent.
+The authenticated API exposes a public `/api/v1/capabilities` bootstrap
+document with deployment, API version, enabled auth methods, setup state, and
+supported features. Server build version and negotiated size limits remain to
+be added. Clients fail with an actionable message when a required capability is
+absent.
 
 The beta supports one explicitly documented legacy protocol window. Legacy open
 servers remain connectable only when the user chooses a loopback/insecure local

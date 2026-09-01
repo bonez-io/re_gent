@@ -120,6 +120,9 @@ func normalizeServiceURL(raw string) (string, error) {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return "", fmt.Errorf("%q is not an http(s) server URL", raw)
 	}
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("%q must not contain credentials, a query, or a fragment", raw)
+	}
 	return strings.TrimRight(u.String(), "/"), nil
 }
 

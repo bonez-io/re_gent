@@ -1,4 +1,4 @@
-import type { BlameResponse, StepDiffResponse, CreateRepoResponse, FilesResponse, LogResponse, LogStep, RepoListResponse, SessionsResponse, StatusResponse, TranscriptResponse } from './types'
+import type { AuthMeResponse, AuthSessionResponse, BlameResponse, BootstrapResponse, CapabilitiesResponse, CreateRepoResponse, CreateTokenResponse, CreateUserResponse, FilesResponse, LogResponse, LogStep, MembersResponse, ProjectRole, RepoListResponse, SessionsResponse, StatusResponse, StepDiffResponse, TokensResponse, TranscriptResponse, UsersResponse } from './types'
 import {
   demoRepoId,
   mockBlameResponse,
@@ -19,14 +19,15 @@ export class OfflineError extends Error {
   constructor(message = 'Cannot reach the re_gent server') { super(message) }
 }
 
-const token = import.meta.env.VITE_REGENT_TOKEN as string | undefined
+let csrfToken = ''
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response
   try {
     response = await fetch(path, {
       ...init,
-      headers: { Accept: 'application/json', ...(init?.body ? { 'Content-Type': 'application/json' } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}), ...init?.headers },
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json', ...(init?.body ? { 'Content-Type': 'application/json' } : {}), ...(init?.method && !['GET', 'HEAD', 'OPTIONS'].includes(init.method) && csrfToken ? { 'X-Regent-CSRF': csrfToken } : {}), ...init?.headers },
     })
   } catch {
     throw new OfflineError()
@@ -41,6 +42,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T
 }
 
+const rememberCSRF = <T extends { csrf_token?: string }>(response: T) => {
+  if (response.csrf_token) csrfToken = response.csrf_token
+  return response
+}
+
 const repoPath = (repoId: string) => `/${encodeURIComponent(repoId)}/api`
 const demoOnly = (repoId: string) => repoId === demoRepoId
 // The demo workspace is a design fixture, not captured history, so it is opt-in
@@ -50,6 +56,19 @@ const demoOnly = (repoId: string) => repoId === demoRepoId
 const showLocalDemoRepo = import.meta.env.VITE_REGENT_DEMO === '1' && !import.meta.env.STORYBOOK
 
 export const api = {
+  capabilities: () => request<CapabilitiesResponse>('/api/v1/capabilities'),
+  me: async () => rememberCSRF(await request<AuthMeResponse>('/api/v1/auth/me')),
+  login: async (token: string) => rememberCSRF(await request<AuthSessionResponse>('/api/v1/auth/session', { method: 'POST', headers: { Authorization: `Bearer ${token}` } })),
+  bootstrap: async (bootstrapToken: string, username: string, displayName: string) => rememberCSRF(await request<BootstrapResponse>('/api/v1/auth/bootstrap', { method: 'POST', headers: { Authorization: `Bootstrap ${bootstrapToken}` }, body: JSON.stringify({ username, display_name: displayName }) })),
+  logout: async () => { await request<undefined>('/api/v1/auth/session', { method: 'DELETE' }); csrfToken = '' },
+  tokens: () => request<TokensResponse>('/api/v1/auth/tokens'),
+  createToken: (name: string, expiresInDays: number) => request<CreateTokenResponse>('/api/v1/auth/tokens', { method: 'POST', body: JSON.stringify({ name, expires_in_days: expiresInDays }) }),
+  revokeToken: (tokenId: string) => request<undefined>(`/api/v1/auth/tokens/${encodeURIComponent(tokenId)}`, { method: 'DELETE' }),
+  users: () => request<UsersResponse>('/api/v1/users'),
+  createUser: (username: string, displayName: string, repoId?: string, role?: ProjectRole) => request<CreateUserResponse>('/api/v1/users', { method: 'POST', body: JSON.stringify({ username, display_name: displayName, ...(repoId && role ? { repo_id: repoId, role } : {}) }) }),
+  members: (repoId: string) => request<MembersResponse>(`/${encodeURIComponent(repoId)}/api/v1/access/members`),
+  putMember: (repoId: string, userId: string, role: ProjectRole) => request<undefined>(`/${encodeURIComponent(repoId)}/api/v1/access/members`, { method: 'PUT', body: JSON.stringify({ user_id: userId, role }) }),
+  deleteMember: (repoId: string, userId: string) => request<undefined>(`/${encodeURIComponent(repoId)}/api/v1/access/members/${encodeURIComponent(userId)}`, { method: 'DELETE' }),
   listRepos: async () => {
     const repos = await request<RepoListResponse>('/repos')
     return { repos: showLocalDemoRepo ? [demoRepoId, ...repos.repos.filter((repo) => repo !== demoRepoId)] : repos.repos }
