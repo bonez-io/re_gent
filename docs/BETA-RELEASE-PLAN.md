@@ -47,10 +47,12 @@ In progress on `codex/beta-release-foundation`:
 
 Current operator blockers:
 
-- GCP Workload Identity Federation still trusts the previous GitHub repository
+- [GCP Workload Identity Federation](https://github.com/bonez-io/re_gent/issues/97)
+  still trusts the previous GitHub repository
   claim. Applying the Terraform migration requires an interactive `gcloud`
   reauthentication, then a reviewed plan and `infra/gcp/configure-github.sh`.
-- The old official repository has `HOMEBREW_TAP_TOKEN`, but GitHub does not expose
+- The [Homebrew release credential](https://github.com/bonez-io/re_gent/issues/98)
+  exists only in the old official repository; GitHub does not expose
   secret values and the successor repository has no copy. A new fine-grained
   token or GitHub App credential must be configured before a release can update
   the transferred tap.
