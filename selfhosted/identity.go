@@ -404,7 +404,7 @@ func (s *identityStore) Authorize(_ context.Context, principal serverauth.Princi
 	if err != nil {
 		return err
 	}
-	minimum := RoleReader
+	var minimum Role
 	switch permission.Action {
 	case serverauth.ActionObjectWrite, serverauth.ActionRefWrite, serverauth.ActionHistoryWrite:
 		minimum = RoleWriter
