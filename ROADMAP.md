@@ -1,5 +1,10 @@
 # re_gent Roadmap to v1.0.0-beta
 
+> The current release source of truth is
+> [`docs/BETA-RELEASE-PLAN.md`](docs/BETA-RELEASE-PLAN.md). This older phase
+> roadmap remains useful historical context, but its repository links, status,
+> and beta definition have not yet been reconciled with the current codebase.
+
 > **Current Status**: Phase 3 (Advanced Features) — Core functionality complete, building toward production stability
 
 This roadmap outlines the path from our current state to a production-ready v1.0.0-beta release. All phases are tracked via [GitHub milestones](https://github.com/regent-vcs/regent/milestones) and issues are labeled by phase for easy filtering.
