@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-if [[ $# -lt 1 || $# -gt 3 ]]; then
-  echo "usage: $0 <gcp-project-id> [region] [zone]" >&2
+if [[ $# -lt 1 || $# -gt 4 ]]; then
+  echo "usage: $0 <gcp-project-id> [region] [zone] [public-source-cidr]" >&2
   exit 2
 fi
 
 project_id=$1
 region=${2:-europe-west4}
 zone=${3:-europe-west4-a}
+public_source_cidr=${4:-}
 
 if [[ ! $project_id =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]]; then
   echo "invalid GCP project id: $project_id" >&2
@@ -16,6 +17,10 @@ if [[ ! $project_id =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]]; then
 fi
 if [[ ! $region =~ ^[a-z]+-[a-z]+[0-9]+$ || ! $zone =~ ^${region}-[a-z]$ ]]; then
   echo "invalid region/zone pair: $region / $zone" >&2
+  exit 2
+fi
+if [[ -n $public_source_cidr && ! $public_source_cidr =~ ^[0-9a-fA-F:.]+/[0-9]{1,3}$ ]]; then
+  echo "invalid public source CIDR: $public_source_cidr" >&2
   exit 2
 fi
 
@@ -46,10 +51,16 @@ gcloud storage buckets update "gs://${state_bucket}" --versioning
 terraform -chdir="$infra_dir" init -reconfigure \
   -backend-config="bucket=${state_bucket}" \
   -backend-config="prefix=platform"
-terraform -chdir="$infra_dir" apply \
-  -var="project_id=${project_id}" \
-  -var="region=${region}" \
+apply_args=(
+  -var="project_id=${project_id}"
+  -var="region=${region}"
   -var="zone=${zone}"
+)
+if [[ -n $public_source_cidr ]]; then
+  public_access=$(jq -cn --arg cidr "$public_source_cidr" '{dev:[$cidr],main:[$cidr]}')
+  apply_args+=("-var=public_access_source_ranges=${public_access}")
+fi
+terraform -chdir="$infra_dir" apply "${apply_args[@]}"
 
 "$infra_dir/configure-github.sh"
 

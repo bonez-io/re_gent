@@ -12,6 +12,11 @@ locals {
     }
   }
 
+  public_access_environments = {
+    for environment, config in local.environments : environment => config
+    if length(lookup(var.public_access_source_ranges, environment, [])) > 0
+  }
+
   required_services = toset([
     "artifactregistry.googleapis.com",
     "compute.googleapis.com",
@@ -77,6 +82,33 @@ resource "google_compute_firewall" "iap" {
     protocol = "tcp"
     ports    = ["22", "8080"]
   }
+}
+
+# The application has no authentication yet, so a reserved address does not
+# imply internet-wide ingress. Only explicitly approved source CIDRs can reach
+# the combined UI/API port. SSH and CI deployment continue to use IAP.
+resource "google_compute_firewall" "public_ui_api" {
+  for_each      = local.public_access_environments
+  name          = "regent-${each.key}-allow-public-ui-api"
+  network       = google_compute_network.regent.name
+  direction     = "INGRESS"
+  source_ranges = var.public_access_source_ranges[each.key]
+  target_tags   = ["regent-public-${each.key}"]
+
+  allow {
+    protocol = "tcp"
+    ports    = ["8080"]
+  }
+}
+
+resource "google_compute_address" "public" {
+  for_each     = local.environments
+  name         = "regent-${each.key}-public"
+  region       = var.region
+  address_type = "EXTERNAL"
+  network_tier = "PREMIUM"
+
+  depends_on = [google_project_service.required]
 }
 
 resource "google_artifact_registry_repository" "regent" {
@@ -169,7 +201,7 @@ resource "google_compute_instance" "regent" {
   machine_type              = each.value.machine_type
   allow_stopping_for_update = true
   deletion_protection       = each.key == "main" && var.production_deletion_protection
-  tags                      = ["regent-iap"]
+  tags                      = ["regent-iap", "regent-public-${each.key}"]
   labels                    = { app = "regent", environment = each.key }
 
   boot_disk {
@@ -188,7 +220,11 @@ resource "google_compute_instance" "regent" {
 
   network_interface {
     subnetwork = google_compute_subnetwork.regent.id
-    # No access_config: the VM has no external IP.
+
+    access_config {
+      nat_ip       = google_compute_address.public[each.key].address
+      network_tier = google_compute_address.public[each.key].network_tier
+    }
   }
 
   metadata = {

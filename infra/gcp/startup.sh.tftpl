@@ -30,6 +30,7 @@ mountpoint -q /var/lib/regent || mount /var/lib/regent
 install -d -o 10001 -g 10001 -m 0750 /var/lib/regent/data
 install -d -m 0750 /var/lib/regent-deploy
 
-# The application port is reachable only through the IAP-source firewall rule.
+# The application port is published by Docker. VPC firewall rules restrict
+# direct access to explicitly approved source CIDRs; operator SSH stays on IAP.
 # A release is installed by CI after this bootstrap completes.
 echo "re_gent ${environment} host ready" >/var/lib/regent-deploy/bootstrap-status
