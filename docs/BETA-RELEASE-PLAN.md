@@ -1,6 +1,6 @@
 # re_gent v1.2 beta release plan
 
-> Status: proposed release source of truth
+> Status: active release source of truth
 >
 > Last reviewed: 2026-09-01
 >
@@ -18,6 +18,42 @@ Real users must be able to trust its authentication, authorization, durability,
 backup, restore, and migration behavior. The beta may remain single-region and
 carry no uptime SLA, but it may not expose an open data server or rely on an
 untested recovery story.
+
+## Execution status
+
+Completed on 2026-09-01:
+
+- Transferred and renamed the successor repository to `bonez-io/re_gent` while
+  preserving repository identity, branches, tags, issues, the open pull request,
+  environments, and Actions variables.
+- Imported the old stable tags with their original object IDs and preserved both
+  existing beta tags without moving them.
+- Transferred the Homebrew tap to `bonez-io/homebrew-tap`.
+- Created private `bonez-io/re_gent-cloud` with an explicit public/private
+  boundary, CODEOWNERS, passing baseline CI, protected `main`, vulnerability
+  alerts, secret scanning, and push protection.
+- Created the `v1.2 beta` milestone and enabled Discussions, vulnerability
+  reporting, secret scanning, push protection, and release-oriented repository
+  settings on the public repository.
+- Reconciled the existing issue epics into the milestone and created the
+  [`v1.2.0-beta.3` release tracker](https://github.com/bonez-io/re_gent/issues/96).
+
+In progress on `codex/beta-release-foundation`:
+
+- canonical Go module, release, documentation, and infrastructure namespace;
+- public server embedding and authorization contracts;
+- route-level access conformance tests and secure non-loopback startup;
+- RFC 0003 for authentication, authorization, and tenancy.
+
+Current operator blockers:
+
+- GCP Workload Identity Federation still trusts the previous GitHub repository
+  claim. Applying the Terraform migration requires an interactive `gcloud`
+  reauthentication, then a reviewed plan and `infra/gcp/configure-github.sh`.
+- The old official repository has `HOMEBREW_TAP_TOKEN`, but GitHub does not expose
+  secret values and the successor repository has no copy. A new fine-grained
+  token or GitHub App credential must be configured before a release can update
+  the transferred tap.
 
 ## 1. Audited baseline
 
