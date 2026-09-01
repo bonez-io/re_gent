@@ -50,7 +50,7 @@ run_release() {
     --restart unless-stopped \
     --log-opt max-size=10m --log-opt max-file=3 \
     --mount type=bind,src=/var/lib/regent/data,dst=/data \
-    "$next_server" >/dev/null
+    "$next_server" --insecure-no-auth >/dev/null
   docker run -d \
     --name regent-web \
     --network regent \

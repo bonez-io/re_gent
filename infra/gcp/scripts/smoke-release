@@ -26,7 +26,7 @@ docker volume create "$volume" >/dev/null
 docker run -d \
   --name "$server" --network "$network" --network-alias regent-server \
   --mount type=volume,src="$volume",dst=/data \
-  "$server_image" >/dev/null
+  "$server_image" --insecure-no-auth >/dev/null
 docker run -d \
   --name "$web" --network "$network" -p 127.0.0.1::8080 \
   "$web_image" >/dev/null

@@ -3,13 +3,14 @@
 #   docker compose up -d --build
 #   # or: make server
 #
-# Local development only. The server is open and bound to loopback; remote
-# deployment, authentication, TLS, and Terraform are intentionally deferred.
+# Local development only. The server uses the explicit insecure override inside
+# the container, while Docker publishes it to host loopback only.
 services:
   server:
     build: .
     image: regent-server:latest
     container_name: regent-server
+    command: ["--addr", "0.0.0.0:7654", "--data", "/data", "--insecure-no-auth"]
     ports:
       # Host port is overridable (REGENT_PORT) to avoid colliding with a
       # locally-running `rgt serve`; container always listens on 7654.

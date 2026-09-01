@@ -44,8 +44,9 @@ VOLUME /data
 EXPOSE 7654
 USER regent
 
-# The current server is open. docker-compose.yml binds it to loopback for local
-# development; remote authentication/TLS are separate deployment work.
+# Open mode is refused on this non-loopback listener unless the caller supplies
+# --insecure-no-auth explicitly. docker-compose.yml does so while publishing to
+# host loopback only; production compositions must install authentication.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD wget -qO- http://127.0.0.1:7654/healthz || exit 1
 

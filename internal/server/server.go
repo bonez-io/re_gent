@@ -39,7 +39,8 @@ import (
 
 	"lukechampine.com/blake3"
 
-	"github.com/regent-vcs/regent/internal/store"
+	"github.com/bonez-io/re_gent/internal/store"
+	"github.com/bonez-io/re_gent/serverauth"
 )
 
 // DefaultMaxObjectBytes bounds a single uploaded object. Untrusted input must
@@ -85,6 +86,7 @@ type Server struct {
 	binariesDir    string
 	skillsDir      string
 	logger         *log.Logger
+	access         serverauth.Controller
 
 	mu    sync.Mutex
 	repos map[string]*store.Store
@@ -92,6 +94,13 @@ type Server struct {
 
 // Option configures a Server.
 type Option func(*Server)
+
+// WithAccessController installs the authentication and authorization boundary.
+// A nil controller retains the legacy open behavior for loopback-only local
+// development. Production entrypoints must reject non-loopback open mode.
+func WithAccessController(controller serverauth.Controller) Option {
+	return func(s *Server) { s.access = controller }
+}
 
 // WithSkillsDir points the skills registry at a directory of published skills,
 // laid out as <name>/SKILL.md. Skills found there override the built-in ones of
@@ -263,10 +272,32 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var principal serverauth.Principal
+	if s.access != nil {
+		var err error
+		principal, err = s.access.Authenticate(r)
+		if err != nil {
+			s.writeAccessError(w, err)
+			return
+		}
+		if principal.Subject == "" {
+			s.logf("access controller returned an empty subject")
+			httpError(w, http.StatusInternalServerError, "authorization failed")
+			return
+		}
+		r = r.WithContext(serverauth.WithPrincipal(r.Context(), principal))
+	}
+
 	segs, err := pathSegments(r.URL.EscapedPath())
 	if err != nil {
 		httpError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if s.access != nil {
+		if err := s.access.Authorize(r.Context(), principal, permissionForRequest(r, segs)); err != nil {
+			s.writeAccessError(w, err)
+			return
+		}
 	}
 	if len(segs) == 0 {
 		httpError(w, http.StatusBadRequest, "missing repo id")
@@ -304,6 +335,90 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		httpError(w, http.StatusNotFound, "not found")
 	}
+}
+
+func (s *Server) writeAccessError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, serverauth.ErrUnauthenticated):
+		w.Header().Set("WWW-Authenticate", `Bearer realm="re_gent"`)
+		httpError(w, http.StatusUnauthorized, "authentication required")
+	case errors.Is(err, serverauth.ErrForbidden):
+		httpError(w, http.StatusForbidden, "forbidden")
+	case errors.Is(err, serverauth.ErrNotFound):
+		httpError(w, http.StatusNotFound, "not found")
+	default:
+		s.logf("authorize request: %v", err)
+		httpError(w, http.StatusInternalServerError, "authorization failed")
+	}
+}
+
+func permissionForRequest(r *http.Request, segs []string) serverauth.Permission {
+	permission := serverauth.Permission{
+		Action: serverauth.ActionRequest,
+		Resource: serverauth.Resource{
+			Kind: "route",
+			Name: strings.Join(segs, "/"),
+		},
+	}
+	if len(segs) == 0 {
+		return permission
+	}
+	if segs[0] == "repos" && len(segs) == 1 {
+		permission.Resource.Kind = "repositories"
+		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			permission.Action = serverauth.ActionRepositoriesList
+		} else if r.Method == http.MethodPost {
+			permission.Action = serverauth.ActionRepositoryCreate
+		}
+		return permission
+	}
+	if segs[0] == "api" && len(segs) >= 2 && segs[1] == "skills" {
+		permission.Resource.Kind = "skill"
+		if len(segs) == 2 {
+			permission.Action = serverauth.ActionSkillList
+			permission.Resource.Name = ""
+		} else {
+			permission.Action = serverauth.ActionSkillRead
+			permission.Resource.Name = segs[2]
+		}
+		return permission
+	}
+
+	permission.Resource.RepositoryID = segs[0]
+	if len(segs) < 2 {
+		return permission
+	}
+	switch segs[1] {
+	case "objects":
+		permission.Resource.Kind = "object"
+		if len(segs) >= 3 {
+			permission.Resource.Name = segs[2]
+		}
+		if r.Method == http.MethodPut {
+			permission.Action = serverauth.ActionObjectWrite
+		} else {
+			permission.Action = serverauth.ActionObjectRead
+		}
+	case "refs":
+		permission.Resource.Kind = "ref"
+		if len(segs) >= 3 {
+			permission.Resource.Name = strings.Join(segs[2:], "/")
+		}
+		if r.Method == http.MethodPost {
+			permission.Action = serverauth.ActionRefWrite
+		} else {
+			permission.Action = serverauth.ActionRefRead
+		}
+	case "api":
+		permission.Resource.Kind = "history"
+		permission.Resource.Name = strings.Join(segs[2:], "/")
+		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			permission.Action = serverauth.ActionHistoryRead
+		} else {
+			permission.Action = serverauth.ActionHistoryWrite
+		}
+	}
+	return permission
 }
 
 // pathSegments splits an escaped URL path into decoded, validated segments.
@@ -346,6 +461,11 @@ func (s *Server) handleRepos(w http.ResponseWriter, r *http.Request) {
 			httpError(w, http.StatusInternalServerError, "list repos failed")
 			return
 		}
+		ids, err = s.filterReadableRepos(r, ids)
+		if err != nil {
+			s.writeAccessError(w, err)
+			return
+		}
 		if ids == nil {
 			ids = []string{}
 		}
@@ -383,6 +503,35 @@ func (s *Server) handleRepos(w http.ResponseWriter, r *http.Request) {
 	default:
 		methodNotAllowed(w, http.MethodGet, http.MethodPost)
 	}
+}
+
+func (s *Server) filterReadableRepos(r *http.Request, ids []string) ([]string, error) {
+	if s.access == nil {
+		return ids, nil
+	}
+	principal, ok := serverauth.PrincipalFromContext(r.Context())
+	if !ok {
+		return nil, errors.New("authenticated request is missing a principal")
+	}
+	allowed := make([]string, 0, len(ids))
+	for _, repoID := range ids {
+		err := s.access.Authorize(r.Context(), principal, serverauth.Permission{
+			Action: serverauth.ActionRepositoryRead,
+			Resource: serverauth.Resource{
+				Kind:         "repository",
+				RepositoryID: repoID,
+			},
+		})
+		switch {
+		case err == nil:
+			allowed = append(allowed, repoID)
+		case errors.Is(err, serverauth.ErrForbidden), errors.Is(err, serverauth.ErrNotFound):
+			continue
+		default:
+			return nil, err
+		}
+	}
+	return allowed, nil
 }
 
 // handleObject serves HEAD/GET/PUT for one object inside one repo.
