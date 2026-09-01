@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/regent-vcs/regent/internal/diff"
+	"github.com/bonez-io/re_gent/internal/diff"
 )
 
 // BlameMap tracks per-line provenance for a file

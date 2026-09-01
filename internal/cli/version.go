@@ -3,7 +3,7 @@ package cli
 import (
 	"fmt"
 
-	"github.com/regent-vcs/regent/internal/style"
+	"github.com/bonez-io/re_gent/internal/style"
 	"github.com/spf13/cobra"
 )
 

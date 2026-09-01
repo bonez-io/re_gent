@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/regent-vcs/regent/internal/index"
-	"github.com/regent-vcs/regent/internal/store"
+	"github.com/bonez-io/re_gent/internal/index"
+	"github.com/bonez-io/re_gent/internal/store"
 )
 
 // captureStdout is defined in blame_test.go (same package)

@@ -115,7 +115,7 @@ GETTING STARTED
 
 How do I install it?
 
-  brew install regent-vcs/tap/rgt
+  brew install bonez-io/tap/rgt
   Then: rgt init in your project.
 
 
@@ -192,7 +192,7 @@ COMMUNITY
 
 How do I contribute?
 
-  github.com/regent-vcs/regent — see CONTRIBUTING.md
+  github.com/bonez-io/re_gent — see CONTRIBUTING.md
 
 
 Where can I get help?
@@ -202,4 +202,4 @@ Where can I get help?
 
 How do I report bugs?
 
-  github.com/regent-vcs/regent/issues
+  github.com/bonez-io/re_gent/issues

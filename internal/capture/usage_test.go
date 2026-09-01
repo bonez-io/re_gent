@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/regent-vcs/regent/internal/store"
+	"github.com/bonez-io/re_gent/internal/store"
 )
 
 // usageLine builds a transcript line shaped like the ones Claude Code writes.

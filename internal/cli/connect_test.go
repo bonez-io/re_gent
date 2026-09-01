@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/regent-vcs/regent/internal/config"
-	"github.com/regent-vcs/regent/internal/store"
+	"github.com/bonez-io/re_gent/internal/config"
+	"github.com/bonez-io/re_gent/internal/store"
 )
 
 // newTestServer returns an httptest.Server that handles POST /repos.

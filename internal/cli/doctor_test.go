@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/regent-vcs/regent/internal/hook"
-	"github.com/regent-vcs/regent/internal/store"
+	"github.com/bonez-io/re_gent/internal/hook"
+	"github.com/bonez-io/re_gent/internal/store"
 )
 
 // rgt doctor is the verification step. It exists because setup can succeed

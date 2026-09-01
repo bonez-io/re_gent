@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/regent-vcs/regent/internal/remote"
-	"github.com/regent-vcs/regent/internal/store"
+	"github.com/bonez-io/re_gent/internal/remote"
+	"github.com/bonez-io/re_gent/internal/store"
 	"github.com/spf13/cobra"
 )
 

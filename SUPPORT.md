@@ -14,7 +14,7 @@ Thanks for using re_gent! Here's how to get help.
 
 ### Questions & Discussions
 
-Have a question? Want to discuss a feature? Use [GitHub Discussions](https://github.com/regent-vcs/regent/discussions).
+Have a question? Want to discuss a feature? Use [GitHub Discussions](https://github.com/bonez-io/re_gent/discussions).
 
 **Discussion categories:**
 - **Q&A** - Ask questions, get answers from the community
@@ -24,16 +24,16 @@ Have a question? Want to discuss a feature? Use [GitHub Discussions](https://git
 
 ### Bug Reports
 
-Found a bug? [Open an issue](https://github.com/regent-vcs/regent/issues/new?template=bug_report.yml).
+Found a bug? [Open an issue](https://github.com/bonez-io/re_gent/issues/new?template=bug_report.yml).
 
 **Before opening:**
-1. Check [existing issues](https://github.com/regent-vcs/regent/issues)
+1. Check [existing issues](https://github.com/bonez-io/re_gent/issues)
 2. Verify you're using the latest version (`rgt version`)
 3. Include reproduction steps and environment details
 
 ### Feature Requests
 
-Want a new feature? [Open a feature request](https://github.com/regent-vcs/regent/issues/new?template=feature_request.yml).
+Want a new feature? [Open a feature request](https://github.com/bonez-io/re_gent/issues/new?template=feature_request.yml).
 
 **Include:**
 - Use case: What are you trying to accomplish?
@@ -51,8 +51,8 @@ See [SECURITY.md](SECURITY.md) for responsible disclosure process.
 Want to contribute code, docs, or examples? See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Quick links:
-- [Good First Issues](https://github.com/regent-vcs/regent/labels/good-first-issue)
-- [Roadmap](https://github.com/regent-vcs/regent/projects)
+- [Good First Issues](https://github.com/bonez-io/re_gent/labels/good-first-issue)
+- [Roadmap](https://github.com/bonez-io/re_gent/projects)
 - [Code of Conduct](CODE_OF_CONDUCT.md)
 
 ## Response Times
@@ -68,4 +68,4 @@ Quick links:
 
 - **Maintainer**: @shayliv
 - **Email**: 120107727+shayliv@users.noreply.github.com (Code of Conduct issues only)
-- **Security**: Use [GitHub Security Advisories](https://github.com/regent-vcs/regent/security/advisories)
+- **Security**: Use [GitHub Security Advisories](https://github.com/bonez-io/re_gent/security/advisories)

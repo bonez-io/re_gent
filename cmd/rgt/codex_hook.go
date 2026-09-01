@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/regent-vcs/regent/internal/capture"
+	"github.com/bonez-io/re_gent/internal/capture"
 	"github.com/spf13/cobra"
 )
 

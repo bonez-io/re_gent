@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/regent-vcs/regent/internal/index"
-	"github.com/regent-vcs/regent/internal/jsonl"
+	"github.com/bonez-io/re_gent/internal/index"
+	"github.com/bonez-io/re_gent/internal/jsonl"
 	"lukechampine.com/blake3"
 )
 

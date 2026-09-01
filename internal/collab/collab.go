@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/regent-vcs/regent/internal/store"
+	"github.com/bonez-io/re_gent/internal/store"
 )
 
 // Conflict records a file that was modified by both sides of a merge.

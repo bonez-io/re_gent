@@ -104,7 +104,7 @@ address, and the script:
    `chmod +x` and verifies it runs. This is dependency-free for teammates on the
    **same OS/arch as the server** (a Linux server + Linux devcontainers, or a
    macOS team + macOS host — the common case).
-2. **Falls back** to `go install github.com/regent-vcs/regent/cmd/rgt@latest`
+2. **Falls back** to `go install github.com/bonez-io/re_gent/cmd/rgt@latest`
    only if that binary can't exec here (OS/arch mismatch) and Go is present;
    otherwise it prints a clear manual instruction.
 3. Detects whether **this server** is open or token-protected and prints the

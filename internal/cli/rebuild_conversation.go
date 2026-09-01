@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/regent-vcs/regent/internal/index"
-	"github.com/regent-vcs/regent/internal/store"
+	"github.com/bonez-io/re_gent/internal/index"
+	"github.com/bonez-io/re_gent/internal/store"
 )
 
 // storedConversationEntry is the portable normalized conversation shape

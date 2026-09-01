@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/regent-vcs/regent/internal/store"
+	"github.com/bonez-io/re_gent/internal/store"
 )
 
 // wireProject makes a project that looks connected: a store with a remote and

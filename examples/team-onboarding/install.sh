@@ -29,7 +29,7 @@
 # Idempotent and safe to re-run.
 set -eu
 
-RGT_MODULE="github.com/regent-vcs/regent/cmd/rgt@latest"
+RGT_MODULE="github.com/bonez-io/re_gent/cmd/rgt@latest"
 
 info() { printf '  %s\n' "$*"; }
 warn() { printf '  ! %s\n' "$*" >&2; }

@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	. "github.com/regent-vcs/regent/internal/capture"
-	"github.com/regent-vcs/regent/internal/remote"
-	"github.com/regent-vcs/regent/internal/remote/remotecapture"
-	"github.com/regent-vcs/regent/internal/remotetest"
-	"github.com/regent-vcs/regent/internal/store"
+	. "github.com/bonez-io/re_gent/internal/capture"
+	"github.com/bonez-io/re_gent/internal/remote"
+	"github.com/bonez-io/re_gent/internal/remote/remotecapture"
+	"github.com/bonez-io/re_gent/internal/remotetest"
+	"github.com/bonez-io/re_gent/internal/store"
 )
 
 const testSessionRef = "sessions/claude_code--sess-1"

@@ -5,8 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/regent-vcs/regent/internal/ignore"
-	"github.com/regent-vcs/regent/internal/store"
+	"github.com/bonez-io/re_gent/internal/ignore"
+	"github.com/bonez-io/re_gent/internal/store"
 )
 
 // MaxFileSize is the maximum file size to snapshot (10 MB by default)

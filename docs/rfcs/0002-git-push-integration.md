@@ -2,9 +2,9 @@
 
 - Status: Draft
 - Date: 2026-08-17
-- Implementation: Proposed in [#71](https://github.com/regent-vcs/re_gent_headless/pull/71), pending acceptance of this RFC
+- Implementation: Proposed in [#71](https://github.com/bonez-io/re_gent/pull/71), pending acceptance of this RFC
 - Owners: @Amirshrim
-- Issue: [#31](https://github.com/regent-vcs/re_gent_headless/issues/31)
+- Issue: [#31](https://github.com/bonez-io/re_gent/issues/31)
 
 ## Summary
 
@@ -15,7 +15,7 @@ This RFC specifies how: hook wiring gains one more target, a chain-preserving Gi
 `pre-push` hook that runs the existing sync path with the existing hook budget and
 **never fails the push**.
 
-It answers the four questions [#31](https://github.com/regent-vcs/re_gent_headless/issues/31)
+It answers the four questions [#31](https://github.com/bonez-io/re_gent/issues/31)
 was held in `status: needs design` for — offline behavior, hook portability,
 failure visibility, and opt-in/opt-out — inside the boundary
 [RFC 0001](0001-remote-repository-lifecycle.md) already fixed: Regent may
@@ -231,7 +231,7 @@ From RFC 0001 and the workflow contract, the implementation must hold:
 
 ## Acceptance contract
 
-Implemented in [#71](https://github.com/regent-vcs/re_gent_headless/pull/71). The test names below
+Implemented in [#71](https://github.com/bonez-io/re_gent/pull/71). The test names below
 are the ones that exist, not the ones this RFC first guessed at: a contract naming tests nobody
 wrote is worse than a shorter one.
 

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/regent-vcs/regent/internal/style"
+	"github.com/bonez-io/re_gent/internal/style"
 )
 
 // ClaudeCodeMessage represents the envelope format from Claude Code JSONL

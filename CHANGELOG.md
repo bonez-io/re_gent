@@ -161,7 +161,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.2] - 2026-05-04
 
 ### Added
-- Homebrew installation support (`brew tap regent-vcs/tap && brew install regent`)
+- Homebrew installation support (`brew tap bonez-io/tap && brew install regent`)
 
 ### Fixed
 - GoReleaser action upgraded to v6 for config v2 support
@@ -184,7 +184,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Links
 
-- [1.0.0](https://github.com/regent-vcs/regent/compare/v0.2.0...v1.0.0)
-- [0.2.0](https://github.com/regent-vcs/regent/compare/v0.1.2...v0.2.0)
-- [0.1.2](https://github.com/regent-vcs/regent/compare/v0.1.1-beta...v0.1.2)
-- [0.1.1-beta](https://github.com/regent-vcs/regent/releases/tag/v0.1.1-beta)
+- [1.0.0](https://github.com/bonez-io/re_gent/compare/v0.2.0...v1.0.0)
+- [0.2.0](https://github.com/bonez-io/re_gent/compare/v0.1.2...v0.2.0)
+- [0.1.2](https://github.com/bonez-io/re_gent/compare/v0.1.1-beta...v0.1.2)
+- [0.1.1-beta](https://github.com/bonez-io/re_gent/releases/tag/v0.1.1-beta)

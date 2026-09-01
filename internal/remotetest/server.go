@@ -18,7 +18,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/regent-vcs/regent/internal/store"
+	"github.com/bonez-io/re_gent/internal/store"
 )
 
 // maxObjectSize mirrors the production server's limit.

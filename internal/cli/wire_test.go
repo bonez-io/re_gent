@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/regent-vcs/regent/internal/capture"
+	"github.com/bonez-io/re_gent/internal/capture"
 )
 
 // wireAgents is the single non-interactive entry point for installing agent

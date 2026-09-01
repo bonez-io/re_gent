@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/regent-vcs/regent/internal/store"
+	"github.com/bonez-io/re_gent/internal/store"
 )
 
 // BlameRepairReport counts what one repair run looked at and what it changed.

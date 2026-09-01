@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/regent-vcs/regent/internal/remote"
-	"github.com/regent-vcs/regent/internal/skills"
+	"github.com/bonez-io/re_gent/internal/remote"
+	"github.com/bonez-io/re_gent/internal/skills"
 )
 
 // registryTimeout bounds one registry request. The user is waiting on a command

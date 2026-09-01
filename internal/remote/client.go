@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/regent-vcs/regent/internal/store"
+	"github.com/bonez-io/re_gent/internal/store"
 )
 
 // MaxObjectSize mirrors the server's per-object limit. Objects larger than this

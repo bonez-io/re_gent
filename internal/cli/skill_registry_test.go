@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/regent-vcs/regent/internal/skills"
+	"github.com/bonez-io/re_gent/internal/skills"
 )
 
 const publishedSkill = "---\ndescription: A skill only the server has.\nallowed-tools: Bash(rgt log *)\n---\n\nbody\n"
