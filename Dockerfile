@@ -46,7 +46,7 @@ USER regent
 
 # Open mode is refused on this non-loopback listener unless the caller supplies
 # --insecure-no-auth explicitly. docker-compose.yml does so while publishing to
-# host loopback only; production compositions must install authentication.
+# host loopback only; docker-compose.production.yml uses self-hosted auth.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD wget -qO- http://127.0.0.1:7654/healthz || exit 1
 

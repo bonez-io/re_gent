@@ -154,8 +154,7 @@ func TestRemovedCommandsNameTheirReplacement(t *testing.T) {
 		why     string
 	}{
 		{"setup", "connect", "setup was folded into connect; connect does everything it did"},
-		{"login", "no authentication", "the server authenticates nobody, so there is nothing to sign in to"},
-		{"whoami", "git", "identity comes from git config, not from a sign-in"},
+		{"whoami", "auth status", "server identity now lives under the auth command group"},
 		{"serve", "regent-server", "the server has a dedicated operator binary"},
 	}
 

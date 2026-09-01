@@ -30,3 +30,40 @@ func TestValidateUnauthenticatedBind(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveAuthMode(t *testing.T) {
+	tests := []struct {
+		name     string
+		mode     string
+		insecure bool
+		want     string
+		wantErr  bool
+	}{
+		{name: "secure by default", mode: "auto", want: "self-hosted"},
+		{name: "legacy override selects open", mode: "auto", insecure: true, want: "open"},
+		{name: "explicit loopback open", mode: "open", want: "open"},
+		{name: "explicit secure", mode: "self-hosted", want: "self-hosted"},
+		{name: "conflicting flags", mode: "self-hosted", insecure: true, wantErr: true},
+		{name: "unknown", mode: "magic", wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := resolveAuthMode(test.mode, test.insecure)
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf("resolveAuthMode(%q, %v) = %q, want error", test.mode, test.insecure, got)
+				}
+				return
+			}
+			if err != nil || got != test.want {
+				t.Fatalf("resolveAuthMode(%q, %v) = %q, %v; want %q, nil", test.mode, test.insecure, got, err, test.want)
+			}
+		})
+	}
+}
+
+func TestRecoverOwnerRefusesAnUninitializedDirectory(t *testing.T) {
+	if err := recoverOwner(t.TempDir()); err == nil {
+		t.Fatal("recoverOwner succeeded without an identity database")
+	}
+}

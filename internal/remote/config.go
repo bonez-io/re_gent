@@ -11,6 +11,7 @@ package remote
 import (
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -66,7 +67,35 @@ func (c Config) Validate() error {
 	if u.Host == "" {
 		return fmt.Errorf("invalid server url %q: missing host", c.ServerURL)
 	}
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("invalid server url %q: credentials, query, and fragment are not allowed", c.ServerURL)
+	}
+	if err := ValidateCredentialTransport(c.ServerURL, c.Token); err != nil {
+		return err
+	}
 	return ValidateRepoID(c.RepoID)
+}
+
+// ValidateCredentialTransport prevents bearer credentials from crossing a
+// plaintext network. HTTP remains supported for an explicit loopback-only
+// development server and for open servers where no token is present.
+func ValidateCredentialTransport(serverURL, token string) error {
+	if strings.TrimSpace(token) == "" {
+		return nil
+	}
+	u, err := url.Parse(serverURL)
+	if err != nil {
+		return fmt.Errorf("invalid server url: %w", err)
+	}
+	if u.Scheme == "https" {
+		return nil
+	}
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	ip := net.ParseIP(host)
+	if u.Scheme == "http" && (host == "localhost" || (ip != nil && ip.IsLoopback())) {
+		return nil
+	}
+	return fmt.Errorf("refusing to send a bearer token to %q over plaintext HTTP; use HTTPS", u.Host)
 }
 
 // ValidateRepoID mirrors the server's repo-name rules so that an unusable id is
@@ -98,7 +127,8 @@ func ValidateRepoID(repo string) error {
 //   - [server]: the operator escape hatch and historical shape.
 //   - [remote]: the per-repo binding written by `rgt connect` into the repo's
 //     own .regent/config.toml (url + repo_id, which is inherently per-repo).
-//   - [auth]:   the per-user credentials written by `rgt login` into
+//   - [auth]:   the legacy per-user credential shape written by old releases.
+//   - [[credentials]]: server-keyed credentials written by `rgt auth login` into
 //     ~/.regent/config.toml (server_url + token).
 type fileConfig struct {
 	Server struct {
@@ -115,6 +145,10 @@ type fileConfig struct {
 		ServerURL string `toml:"server_url"`
 		Token     string `toml:"token"`
 	} `toml:"auth"`
+	Credentials []struct {
+		ServerURL string `toml:"server_url"`
+		Token     string `toml:"token"`
+	} `toml:"credentials"`
 }
 
 // Env is a lookup function with the shape of os.LookupEnv. Tests inject a map
@@ -151,7 +185,7 @@ func LoadConfig(env Env, configPath string) (Config, error) {
 //  1. the repo-local .regent/config.toml at or above cwd  ([remote] url+repo_id,
 //     written by `rgt connect`)
 //  2. the per-user ~/.regent/config.toml                  ([auth] token from
-//     `rgt login`; [server] operator overrides)
+//     `rgt auth login`; [server] operator overrides)
 //  3. environment variables
 //
 // This is what wires `rgt connect` (which writes a repo-local [remote] binding)
@@ -210,7 +244,14 @@ func applyEnv(env Env, cfg *Config) error {
 		env = OSEnv
 	}
 	if v, ok := env("REGENT_SERVER_URL"); ok {
-		cfg.ServerURL = strings.TrimSpace(v)
+		nextURL := strings.TrimSpace(v)
+		if strings.TrimRight(nextURL, "/") != strings.TrimRight(cfg.ServerURL, "/") {
+			// A file credential is scoped to the file's server. Redirecting the
+			// request through the environment must not carry that credential to
+			// another host; REGENT_TOKEN is the explicit override for that case.
+			cfg.Token = ""
+		}
+		cfg.ServerURL = nextURL
 	}
 	if v, ok := env("REGENT_REPO_ID"); ok {
 		cfg.RepoID = strings.TrimSpace(v)
@@ -255,7 +296,26 @@ func mergeFile(path string, cfg *Config) error {
 
 	setIfEmpty(&cfg.ServerURL, fc.Server.URL, fc.Remote.URL, fc.Auth.ServerURL)
 	setIfEmpty(&cfg.RepoID, fc.Server.RepoID, fc.Remote.RepoID)
-	setIfEmpty(&cfg.Token, fc.Server.Token, fc.Auth.Token)
+	credentialToken := ""
+	for _, credential := range fc.Credentials {
+		if strings.TrimRight(strings.TrimSpace(credential.ServerURL), "/") == strings.TrimRight(cfg.ServerURL, "/") {
+			credentialToken = credential.Token
+			break
+		}
+	}
+	legacyToken := ""
+	legacyServerURL := fc.Auth.ServerURL
+	if legacyServerURL == "" {
+		legacyServerURL = fc.Server.URL
+	}
+	if legacyServerURL != "" && strings.TrimRight(strings.TrimSpace(legacyServerURL), "/") == strings.TrimRight(cfg.ServerURL, "/") {
+		legacyToken = fc.Auth.Token
+	}
+	serverToken := ""
+	if strings.TrimRight(strings.TrimSpace(fc.Server.URL), "/") == strings.TrimRight(cfg.ServerURL, "/") {
+		serverToken = fc.Server.Token
+	}
+	setIfEmpty(&cfg.Token, serverToken, credentialToken, legacyToken)
 	if cfg.Timeout == 0 && strings.TrimSpace(fc.Server.Timeout) != "" {
 		d, err := time.ParseDuration(strings.TrimSpace(fc.Server.Timeout))
 		if err != nil {

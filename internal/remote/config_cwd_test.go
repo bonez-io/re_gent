@@ -29,7 +29,7 @@ func TestLoadConfigForCWD_WiresConnectAndLogin(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	// ~/.regent/config.toml as written by `rgt login`.
+	// Legacy ~/.regent/config.toml as written by the old top-level login command.
 	writeConfigAt(t, filepath.Join(home, ".regent", "config.toml"), `
 [auth]
 server_url = "http://127.0.0.1:7654"
@@ -62,6 +62,34 @@ repo_id = "girlfriend-assistant"
 	}
 }
 
+func TestLoadConfigForCWD_SelectsCredentialForBoundServer(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeConfigAt(t, filepath.Join(home, ".regent", "config.toml"), `
+[[credentials]]
+server_url = "https://one.example"
+token = "token-for-one-0123456789"
+
+[[credentials]]
+server_url = "https://two.example"
+token = "token-for-two-0123456789"
+`)
+	repo := t.TempDir()
+	writeConfigAt(t, filepath.Join(repo, ".regent", "config.toml"), `
+[remote]
+url = "https://two.example"
+repo_id = "project"
+`)
+
+	cfg, err := LoadConfigForCWD(noEnv, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Token != "token-for-two-0123456789" {
+		t.Fatalf("selected token = %q, want only the bound server credential", cfg.Token)
+	}
+}
+
 // TestLoadConfigForCWD_RepoBindingWinsOverGlobal asserts the per-repo binding
 // takes precedence, which is what keeps multi-repo coherent: two repos on one
 // machine must each resolve their own repo_id.
@@ -91,9 +119,10 @@ repo_id = "repo-local-id"
 	if cfg.ServerURL != "http://127.0.0.1:7654" {
 		t.Errorf("ServerURL = %q, want the repo-local url", cfg.ServerURL)
 	}
-	// The token has no repo-local source, so it falls through to the global file.
-	if cfg.Token != "globaltoken0123456789" {
-		t.Errorf("Token = %q, want the global token", cfg.Token)
+	// A token associated with a different global URL must never be sent to the
+	// repo-local server.
+	if cfg.Token != "" {
+		t.Errorf("Token = %q, want no cross-server credential", cfg.Token)
 	}
 }
 

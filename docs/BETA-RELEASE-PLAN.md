@@ -45,6 +45,18 @@ In progress on `codex/beta-release-foundation`:
 - route-level access conformance tests and secure non-loopback startup;
 - RFC 0003 for authentication, authorization, and tenancy.
 
+Implemented on the stacked `codex/self-hosted-auth` branch, pending review and
+the foundation merge:
+
+- secure-by-default self-hosted server composition with first-owner bootstrap,
+  hashed PATs, browser sessions/CSRF, project memberships and roles,
+  transactional audit events, rate limits, and operator recovery;
+- server-scoped `rgt auth login/status/logout` credential lifecycle with no
+  secret in process arguments or repository configuration;
+- authenticated UI setup/login plus real user, membership, role, and token
+  settings APIs; and
+- a Caddy HTTPS production Compose profile and self-hosted operations guide.
+
 Current operator blockers:
 
 - [GCP Workload Identity Federation](https://github.com/bonez-io/re_gent/issues/97)
@@ -564,27 +576,25 @@ restore, or migration gates; reduce beta breadth instead.
 
 ## 7. Immediate next slice
 
-The next implementation slice is **release foundation and security contract**,
-not another UI polish pass.
+The repository move, release control baseline, public authorization boundary,
+and first secure self-hosted implementation are now prepared. The next slice is
+to review and integrate that foundation before building managed identity or
+more UI surface on top of it.
 
-1. Review and accept or amend the locked decisions in this document.
-2. Create the `v1.2 beta` milestone and reconcile existing issue status against
-   the audited baseline.
-3. Prepare and execute the early transfer to `bonez-io/re_gent`; preserve old
-   tags and leave the old official repo available.
-4. Create private `bonez-io/re_gent-cloud` with access/CI/security baseline.
-5. Land one public RFC/threat-model PR defining auth actors, credentials, roles,
-   route policy, tenant boundaries, project identity, protocol negotiation, and
-   public/private package contracts.
-6. Add failing conformance tests for anonymous denial, role enforcement,
-   cross-tenant access, secure non-loopback startup, and secret-free bindings.
-7. In parallel, benchmark the 10k-file capture path and write the docs IA and
-   six cookbook acceptance fixtures.
-
-The first code PR after the RFC should extract the reusable server-core boundary
-and introduce the authorization decision point without yet adding a cloud
-provider. The second should implement secure self-hosted identity/tokens. The
-private managed composition begins only after those contracts are green.
+1. Review and merge the release-foundation PR, then rebase and review the
+   stacked self-hosted authentication PR.
+2. Expand the security suite across every route family: cross-project access,
+   malformed credentials, CSRF, rate limits, secret redaction, and resource
+   bounds; record a production-topology smoke test.
+3. Exercise the documented clean-host bootstrap, reader/writer capture,
+   backup/restore-to-another-host, upgrade, and rollback journey.
+4. Benchmark the 10k-file capture path and land a measured latency budget before
+   widening the beta.
+5. Build the docs information architecture and six executable cookbook fixtures
+   while the private managed composition starts against the reviewed public
+   contract.
+6. After those contracts settle, take the next product slice: indexed history
+   search, searchable project switching, and truthful Skills installation state.
 
 ## 8. Go/no-go rule
 

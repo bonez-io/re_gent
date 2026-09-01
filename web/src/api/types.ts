@@ -4,6 +4,34 @@ import type { FileDiff } from '../components/FileDiffView'
 export type RepoListResponse = { repos: string[] }
 export type CreateRepoResponse = { repo_id: string; created: boolean }
 
+export type CapabilitiesResponse = {
+  deployment: 'self-hosted' | 'managed'
+  api_version: string
+  auth_methods: string[]
+  bootstrap_required: boolean
+  features: string[]
+}
+
+export type AccessUser = {
+  id: string
+  username: string
+  display_name: string
+  instance_owner: boolean
+  created_at: string
+}
+
+export type ProjectRole = 'owner' | 'admin' | 'writer' | 'reader'
+export type ProjectMember = AccessUser & { role: ProjectRole }
+export type AuthMeResponse = { viewer: AccessUser; capabilities: string[]; auth_method: string; csrf_token?: string }
+export type AuthSessionResponse = { viewer: AccessUser; csrf_token: string }
+export type BootstrapResponse = AuthSessionResponse & { token: string }
+export type UsersResponse = { users: AccessUser[] }
+export type MembersResponse = { members: ProjectMember[] }
+export type CreateUserResponse = { user: AccessUser; initial_token: string }
+export type PersonalAccessToken = { id: string; name: string; prefix: string; created_at: string; expires_at: string; last_used_at?: string }
+export type TokensResponse = { tokens: PersonalAccessToken[] }
+export type CreateTokenResponse = { token: PersonalAccessToken; secret: string }
+
 export type SessionSummary = {
   session_id: string
   agent_id: string

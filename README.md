@@ -294,6 +294,9 @@ explicitly with `NO_COLOR=1`.
 | `rgt connect [server-url-or-ssh-target]` | Bind to an existing `http(s)` server, or give an SSH target to provision it first. A project is written only after its public `/healthz` answers. |
 | `rgt connect --as <name>` | Register this project under a name you choose instead of one derived from its git remote. Recorded in the project binding, so it is said once. |
 | `rgt connect --agent <target>` | Wire a specific host integration (`claude`, `codex`, `opencode`, `pi`, `both`, or `all`) instead of auto-detecting installed agents. |
+| `rgt auth login [server-url]` | Validate and store a server-scoped PAT. Reads it from a hidden prompt or `--token-stdin`, never an argument. |
+| `rgt auth status [server-url]` | Verify the stored login and show the authenticated identity without displaying the token. |
+| `rgt auth logout [server-url]` | Remove that server's credential from this machine without revoking it server-side. |
 | `rgt init` | Initialize `.regent/` in current directory |
 | `rgt connect --no-git-hook` / `rgt init --no-git-hook` | Wire agent hooks but not the Git `pre-push` hook, so `git push` does not deliver queued capture. |
 | `rgt log` | Show step history (supports `--session`, `-n`, `--json`, `--graph`) |
@@ -365,12 +368,16 @@ rgt push
 rgt pull
 ```
 
-The server is currently unauthenticated, and Compose binds it to `127.0.0.1`.
+The development Compose profile is intentionally unauthenticated and binds only
+to `127.0.0.1`. For a remote host, use the secure production profile and the
+complete **[self-hosted guide](docs/self-hosted.md)**; it enables HTTPS,
+first-owner bootstrap, persistent users, project roles, PATs, browser sessions,
+CSRF protection, access settings, recovery, backup, and rollback.
 For the private dev/main GCP deployment, CI/CD, persistence, rollback, and IAP
-access model, see **[infra/gcp/README.md](infra/gcp/README.md)**. To provision a
-generic Linux VPS, run `rgt connect root@host` from a project (or add `--url
-https://public.example` for NAT/DNS), review the plan, and confirm. `make
-server-down` stops it; the named Docker
+access model, see **[infra/gcp/README.md](infra/gcp/README.md)**. The older SSH
+auto-provisioning path remains a development/staging convenience and must not be
+used as an internet-facing production topology. `make server-down` stops the
+local profile; the named Docker
 volume preserves its data between runs.
 
 ---
@@ -382,7 +389,7 @@ by id and stored separately, so two repos never share refs, objects or history â
 even when they use the same session ids and contain identical files.
 
 ```bash
-regent-server --addr 127.0.0.1:7654 --data ~/.regent-server
+regent-server --addr 127.0.0.1:7654 --data ~/.regent-server --auth-mode open
 
 # in each project, once:
 cd ~/code/alpha && rgt push --url http://127.0.0.1:7654 --repo alpha
