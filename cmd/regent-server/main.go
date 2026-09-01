@@ -12,10 +12,11 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
-	"github.com/regent-vcs/regent/internal/server"
+	"github.com/bonez-io/re_gent/server"
 )
 
 func main() {
@@ -24,18 +25,22 @@ func main() {
 	max := flag.Int64("max-object-size", server.DefaultMaxObjectBytes, "maximum accepted object size in bytes")
 	binaries := flag.String("binaries-dir", "", "directory of prebuilt rgt binaries served by /install")
 	skillsDir := flag.String("skills-dir", "", "directory of published skills (<name>/SKILL.md) served by /api/skills")
+	insecureNoAuth := flag.Bool("insecure-no-auth", false, "allow an unauthenticated non-loopback listener (development or an approved access proxy only)")
 	flag.Parse()
 	if flag.NArg() != 0 {
 		fmt.Fprintln(os.Stderr, "regent-server takes no arguments")
 		os.Exit(2)
 	}
-	if err := serve(*addr, *data, *max, *binaries, *skillsDir); err != nil {
+	if err := serve(*addr, *data, *max, *binaries, *skillsDir, *insecureNoAuth); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func serve(addr, data string, max int64, binaries, skillsDir string) error {
+func serve(addr, data string, max int64, binaries, skillsDir string, insecureNoAuth bool) error {
+	if err := validateUnauthenticatedBind(addr, insecureNoAuth); err != nil {
+		return err
+	}
 	if !filepath.IsAbs(data) {
 		var err error
 		data, err = filepath.Abs(data)
@@ -74,4 +79,21 @@ func serve(addr, data string, max int64, binaries, skillsDir string) error {
 		defer cancel()
 		return h.Shutdown(shutdown)
 	}
+}
+
+func validateUnauthenticatedBind(addr string, insecureNoAuth bool) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("invalid listen address %q: %w", addr, err)
+	}
+	if strings.EqualFold(host, "localhost") {
+		return nil
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return nil
+	}
+	if insecureNoAuth {
+		return nil
+	}
+	return fmt.Errorf("refusing unauthenticated non-loopback listener %q; configure authentication or pass --insecure-no-auth only for local development or an approved access proxy", addr)
 }
