@@ -66,6 +66,13 @@ Current operator blockers:
   secret values and the successor repository has no copy. A new fine-grained
   token or GitHub App credential must be configured before a release can update
   the transferred tap.
+- The current canonical repository preserves the successor
+  `re_gent_headless` repository identity, while the original public repository's
+  stars, forks, and traffic remain on `regent-vcs/re_gent`. The
+  [identity-reclaim runbook](./CANONICAL-REPO-SWAP.md) documents a higher-risk
+  alternative. It is a decision candidate, not an approved operation; the
+  archive-with-banner sequence in §3.9 remains locked until maintainers approve
+  a freeze and identity swap explicitly.
 
 ## 1. Audited baseline
 
@@ -370,6 +377,11 @@ Migration sequence:
    live, then archive it. Do not delete it.
 9. Add redirects or compatibility notes for old `go install`, Homebrew, Docker,
    VS Code, OpenCode, Pi, website, and API endpoints.
+
+This sequence preserves the successor repository's GitHub identity. A separate
+[canonical identity-reclaim runbook](./CANONICAL-REPO-SWAP.md) documents how the
+original repository's stars, forks, and traffic could be retained instead. It
+must not be executed without an explicit maintainer decision and freeze window.
 
 The release tag is `v1.2.0-beta.3`. It is cut only from protected `main` after a
 release-candidate soak. The free managed beta may carry a separate deployment

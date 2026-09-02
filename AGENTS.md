@@ -181,6 +181,9 @@ Current artifacts:
   — accepted public/private identity and policy contract.
 - [`docs/self-hosted.md`](./docs/self-hosted.md) — secure self-hosted install,
   access, recovery, backup, restore, upgrade, and rollback guide.
+- [`docs/CANONICAL-REPO-SWAP.md`](./docs/CANONICAL-REPO-SWAP.md) — unexecuted,
+  approval-gated alternative for reclaiming the original repository's GitHub
+  identity; the beta plan's archive-with-banner path remains authoritative.
 - [`AGENTS.md`](./AGENTS.md) — this architecture context.
 
 ---
