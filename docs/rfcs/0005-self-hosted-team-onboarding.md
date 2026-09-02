@@ -121,7 +121,31 @@ Two decisions, then an invitation list.
 |---|---|---|
 | Password | on, cannot be turned off in beta | nothing |
 | Invitation links | on | nothing; email delivery is optional |
-| Single sign-on, OpenID Connect | planned, shown disabled with "coming soon" | an identity provider; implemented once the managed composition's provider code exists, shared with it |
+| GitHub | off until configured | a GitHub OAuth App: client id and secret, created by the admin in their GitHub organization; the wizard shows the callback URL to paste into GitHub. Optional base URL for GitHub Enterprise Server. |
+| Google | off until configured | a Google OAuth client id and secret; same mechanics as GitHub |
+| Single sign-on, OpenID Connect | planned, shown disabled with "coming soon" | a generic identity provider; after beta |
+
+**GitHub and Google sign-in.** The provider code is one public package,
+`internal/identity`, used unchanged by the managed composition (RFC 0004).
+A person who signs in with GitHub is admitted only when one of these holds,
+checked in this order:
+
+1. an invitation names their GitHub username or their verified primary
+   email, in which case the invitation is consumed and the account created;
+2. they are already a member with an identity or email that matches, in which
+   case the identity is linked to that account;
+3. the organization lists their GitHub organization in **allowed GitHub
+   organizations**, an optional field on this screen, in which case they join
+   as `member` at the default project role;
+4. the join policy is `anyone with the server address may register`.
+
+Otherwise the callback ends on a page that says the account is not invited
+and shows the admin's contact. GitHub sign-in reads only the user's id,
+login, and verified emails, plus organization membership when rule 3 is
+configured. It works over plain http on a LAN because GitHub redirects the
+browser, not the server; the callback URL is whatever server address screen
+1 recorded. The admin account keeps its password as the break-glass method
+regardless of which methods are on.
 
 Email delivery: optional SMTP settings on this screen. When configured,
 invitations are emailed. When not, each invitation shows a link to copy.
@@ -142,15 +166,40 @@ Settings and the docs.
 
 ## Teammate flow
 
-1. Opens the invitation link. Sets a display name and a password. Is signed in.
+1. Opens the invitation link. Sets a display name and a password, or, when
+   GitHub sign-in is on, clicks "Continue with GitHub" and is linked to the
+   invitation. Is signed in.
 2. Runs the command from the invitation page: install `rgt`, then
-   `rgt auth login <server>`, which prompts for username and password and
+   `rgt auth login <server>`, which prompts for username and password, or
+   opens the browser for GitHub when that is the person's only method, and
    stores a machine credential. Tokens are never shown to people.
 3. Clones the repository and runs `rgt connect` with no arguments; the
    committed `.regent/config.toml` names the server and project.
 
 Personal access tokens remain available under Settings for CI and scripts,
 and are the only thing that page shows.
+
+## Storage
+
+Users, credentials, memberships, invitations, setup codes, sessions, and
+audit rows are persisted in SQLite at `/data/identity.db` on the compose
+volume, in WAL mode. Nothing about identity is in memory beyond the process
+cache of an open session. This is the same choice Gitea makes for the same
+reason: one container, one volume, and a backup is a copy of that volume.
+
+The identity store is behind an interface, `selfhosted.IdentityStore`, with
+SQLite as the only public implementation. Postgres is not added to the
+self-hosted stack in beta: it would add a second container, a database
+password to manage, and a second migration dialect to keep green, for a
+single-instance deployment that SQLite already serves. The managed
+composition runs Postgres from day one (RFC 0004), and its implementation of
+the same interface can be offered to self-hosted installs later, selected by
+`REGENT_DATABASE_URL`, without changing the wizard or the routes.
+
+What the beta does ship for durability: `rgt admin backup` writes a
+consistent snapshot of `identity.db` and `projects.db` using SQLite's online
+backup API, so a volume copy taken mid-write is never the only option, and
+`docs/self-hosted.md` documents restore.
 
 ## Server changes
 
@@ -167,11 +216,16 @@ In `selfhosted/`:
   at `POST /api/v1/auth/setup-code` for a credential;
 - invitations: create, list, revoke, accept; email delivery when SMTP is set;
 - a connections feed for the wizard: `GET /api/v1/onboarding/connections`;
+- GitHub and Google sign-in through `internal/identity`: provider settings
+  stored encrypted at rest with a key on the data volume, signed OAuth state
+  bound to the browser session, callback handling, and the admission rules
+  above; `identities(provider, subject)` unique per user;
+- `rgt admin backup` and the online-backup route it calls;
 - removal of the bootstrap file and route.
 
 Routes are added to the route-policy matrix with the same fail-closed rule as
-every other route: only sign-in, invitation acceptance, capabilities, health,
-and install are public.
+every other route: only sign-in, the OAuth start and callback routes,
+invitation acceptance, capabilities, health, and install are public.
 
 ## CLI changes
 
@@ -201,8 +255,13 @@ and install are public.
 - Reusing a setup code fails; an expired one fails with a clear message.
 - An invitee reaches a signed-in state from the link alone, and can connect a
   clone with `rgt auth login` plus `rgt connect`.
+- With a GitHub OAuth App configured, an invited GitHub user reaches a
+  signed-in state from the invitation link through GitHub, and an uninvited
+  GitHub user is refused with the not-invited page and no account created.
+- Restarting the stack, and restoring a backup taken with `rgt admin backup`
+  onto an empty volume, both bring back every user, membership, and project.
 - The conformance suite still passes; every new route denies anonymous access
-  except the five public ones listed above.
+  except the public ones listed above.
 - No password, initial password, setup code, or invitation token appears in
   audit rows, application logs after first start, or API responses other than
   the one that created it.
@@ -211,20 +270,24 @@ and install are public.
 
 | Stream | Owns | Deliverable |
 |---|---|---|
-| **S1. Server** | `selfhosted/`, `internal/server/` routes for onboarding, `serverauth/` if new actions | passwords, initial admin, onboarding state, organization, setup codes, invitations, connections feed, bootstrap removal, conformance updates |
+| **S1. Server** | `selfhosted/`, `internal/server/` routes for onboarding, `serverauth/` if new actions | passwords, initial admin, onboarding state, organization, setup codes, invitations, connections feed, backup, bootstrap removal, conformance updates |
+| **S5. Identity providers** | `internal/identity/` | GitHub and Google OAuth: settings, state signing, callback, profile and email fetch, organization membership check, a fake provider for tests; consumed by S1 and by the managed composition |
 | **S2. CLI** | `internal/cli/auth.go`, `internal/cli/connect.go`, `internal/remote/`, `internal/config/` | `--setup`, `init` alias, password login, remotetest endpoints |
 | **S3. Compose and docs** | compose files, `.env.example`, `docs/self-hosted.md`, `scripts/dev-bootstrap.sh` | first-start message, env documentation, rewritten guide, dev bootstrap through the new routes |
 | **S4. UI** | `web/` | sign-in with password, the four wizard screens, invitation acceptance page, Settings entry points |
 
 S1 and S2 agree the setup-code exchange and the onboarding state names on day
-one and then proceed in parallel. S4 tracks S1's capabilities and onboarding
-documents. S3 lands with S1.
+one and then proceed in parallel. S5 agrees its interface with S1 on day one
+and ships with a fake provider first so S1 and S4 never wait on real OAuth
+apps. S4 tracks S1's capabilities and onboarding documents. S3 lands with S1.
 
 ## Relationship to the managed composition
 
 The wizard, the connect command block with a setup code, the connections
 feed, and invitations are shared with RFC 0004's managed service. What
-differs there: no initial password, sign-in through GitHub or Google, many
-organizations per instance, and roles that can be derived from GitHub. The
+differs there: no initial password, no password sign-in at all, Postgres
+instead of SQLite, many organizations per instance, verified-domain
+admission, and roles that can be derived from GitHub. The GitHub and Google
+providers are the same public package in both. The
 managed RFC will reference this document for screens 2 and 3 rather than
 restating them.

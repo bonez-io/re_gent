@@ -373,11 +373,15 @@ pinned commit.
 
 - `cmd/regent-cloud`: boots the public core with the managed controller,
   registry, locator, auditor, limiter, and capabilities.
-- `identity/`: providers (`github`, `google`, `email`), state signing, callback
-  handling, account linking, device flow, session and token issuance.
+- `identity/`: account linking, device flow, session and token issuance.
+  The OAuth providers themselves (`github`, `google`), state signing, and
+  callback handling are the public package `internal/identity`, shared with
+  the self-hosted composition (RFC 0005); only the `email` provider and the
+  managed linking rules are private.
 - `policy/`: organizations, memberships, invitations, domains, projects,
-  source fingerprints, service tokens, quotas. SQLite for the first beta on
-  the encrypted data disk, behind an interface so Postgres can replace it.
+  source fingerprints, service tokens, quotas. Postgres from the first beta,
+  managed by the cloud provider with point-in-time recovery, behind the same
+  store interface the self-hosted SQLite implementation satisfies.
 - `ops/`: Bonez operator identities, audited elevation, export, deletion,
   support views.
 - `deploy/`: Compose for local development with a **dev identity provider**
