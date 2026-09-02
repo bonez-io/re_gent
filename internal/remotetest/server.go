@@ -84,6 +84,53 @@ type Server struct {
 	// a test can exercise `rgt connect`'s legacy path against this same fake
 	// server type rather than only a hand-rolled one-off httptest.Server.
 	registeredRepos map[string]bool
+
+	// RFC 0005 self-hosted onboarding surface. All of it defaults to off, on
+	// the same opt-in pattern as EnableProjectIDs/EnableDeviceAuth above.
+	setupCodesEnabled bool
+	setupCodes        map[string]*fakeSetupCode
+	setupCodeSeq      int
+
+	passwordLoginEnabled bool
+	passwordAccounts     map[string]*fakePasswordAccount
+	passwordSessions     map[string]*fakePasswordSession
+	credentialSeq        int
+
+	backupEnabled bool
+	backupContent []byte
+
+	// recorded holds every request handled by the RFC 0005 handlers below,
+	// keyed by route, so a test can assert on exactly what the client sent —
+	// see RecordedRequests.
+	recorded []recordedRequest
+}
+
+// fakeSetupCode is one outstanding setup code minted by MintSetupCode.
+type fakeSetupCode struct {
+	org, serverURL string
+	used, expired  bool
+}
+
+// fakePasswordAccount is one password-login identity registered by
+// EnablePasswordLogin.
+type fakePasswordAccount struct {
+	username, password string
+	changeRequired     bool
+}
+
+// fakePasswordSession is one browser-style session created by a successful
+// password login, keyed by the opaque cookie value handed back in the
+// Set-Cookie header. handleCreateMachineToken looks sessions up by that
+// value and checks the CSRF token recorded alongside it.
+type fakePasswordSession struct {
+	userID, username string
+	csrf             string
+}
+
+// recordedRequest is one request captured for a test to assert on later.
+type recordedRequest struct {
+	Route string
+	Body  map[string]any
 }
 
 // fakeProject is the fake's in-memory record of one enrolled project.
@@ -164,6 +211,104 @@ func (s *Server) EnableDeviceAuth() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.deviceAuthEnabled = true
+}
+
+// EnableSetupCodes turns on POST /api/v1/auth/setup-code and lists
+// "setup_codes" among capabilities features (RFC 0005 Appendix A,
+// "Enrollment through a setup code"). Off by default.
+func (s *Server) EnableSetupCodes() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.setupCodesEnabled = true
+}
+
+// MintSetupCode creates a one-time setup code bound to org, as the wizard's
+// "POST /api/v1/orgs/{slug}/setup-codes" would, and returns the code a test
+// can exchange via `rgt connect --setup` or `rgt init --setup`. serverURL is
+// echoed back in the exchange response's server_url field; tests typically
+// pass the fake's own URL().
+func (s *Server) MintSetupCode(org, serverURL string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.setupCodeSeq++
+	code := fmt.Sprintf("SETUP-CODE-%d", s.setupCodeSeq)
+	if s.setupCodes == nil {
+		s.setupCodes = map[string]*fakeSetupCode{}
+	}
+	s.setupCodes[code] = &fakeSetupCode{org: org, serverURL: serverURL}
+	return code
+}
+
+// ConsumeSetupCode marks code already used, so the next exchange attempt
+// fails exactly as a reused code does against the real server
+// ("setup_code_invalid") — the helper the S2 test suite uses to prove a
+// setup code is one-time.
+func (s *Server) ConsumeSetupCode(code string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if sc, ok := s.setupCodes[code]; ok {
+		sc.used = true
+	}
+}
+
+// ExpireSetupCode marks code past its 15-minute window, so the next exchange
+// attempt fails with "setup_code_expired" instead of "setup_code_invalid".
+func (s *Server) ExpireSetupCode(code string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if sc, ok := s.setupCodes[code]; ok {
+		sc.expired = true
+	}
+}
+
+// EnablePasswordLogin turns on POST /api/v1/auth/login and the
+// session-cookie-authenticated POST /api/v1/auth/tokens it feeds, and lists
+// "password" among capabilities auth_methods (RFC 0005, "Step 1: sign in and
+// the wizard"). changeRequired mirrors the initial-admin-password state: when
+// true, the login response carries password_change_required and a caller
+// must refuse to mint a machine credential. Off by default; calling it again
+// for a different username adds a second account rather than replacing the
+// first.
+func (s *Server) EnablePasswordLogin(username, password string, changeRequired bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.passwordLoginEnabled = true
+	if s.passwordAccounts == nil {
+		s.passwordAccounts = map[string]*fakePasswordAccount{}
+	}
+	s.passwordAccounts[username] = &fakePasswordAccount{username: username, password: password, changeRequired: changeRequired}
+}
+
+// EnableBackup turns on POST /api/v1/admin/backup, returning content
+// verbatim as the response body (RFC 0005 Appendix A, "Backup"). Off by
+// default.
+func (s *Server) EnableBackup(content []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.backupEnabled = true
+	s.backupContent = content
+}
+
+// RecordedRequests returns the decoded JSON bodies of every request handled
+// at route (e.g. "POST /api/v1/auth/setup-code"), in the order they arrived,
+// so a test can assert on exactly what the client sent — that a second
+// setup-code exchange named the same code, or that the machine credential's
+// name carries the local hostname.
+func (s *Server) RecordedRequests(route string) []map[string]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []map[string]any
+	for _, rr := range s.recorded {
+		if rr.Route == route {
+			out = append(out, rr.Body)
+		}
+	}
+	return out
+}
+
+// recordRequestLocked appends one request. Callers must already hold s.mu.
+func (s *Server) recordRequestLocked(route string, body map[string]any) {
+	s.recorded = append(s.recorded, recordedRequest{Route: route, Body: body})
 }
 
 // ExpireToken makes the fake reject token with {"code":"token_expired"}
@@ -386,6 +531,16 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	case "/api/v1/auth/token/refresh":
 		s.handleTokenRefresh(w, r)
 		return
+	// RFC 0005 self-hosted onboarding: setup-code exchange and password
+	// login are both public routes (Appendix A), so — like capabilities and
+	// the device-login start above — they sit ahead of the bearer-token gate
+	// below rather than requiring one.
+	case "/api/v1/auth/setup-code":
+		s.handleSetupCodeExchange(w, r)
+		return
+	case "/api/v1/auth/login":
+		s.handlePasswordLogin(w, r)
+		return
 	}
 
 	// Legacy repo registration (pre-RFC-0004): kept on this fake so a test can
@@ -397,6 +552,28 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.handleRepos(w, r)
+		return
+	}
+
+	// The machine-credential creation route is session-cookie-and-CSRF
+	// authenticated (RFC 0005: "through the existing PAT creation route"),
+	// not bearer-token authenticated like everything below this point, so it
+	// is handled here — ahead of the bearer-token gate — and checks its own
+	// auth inside handleCreateMachineToken.
+	if r.URL.Path == "/api/v1/auth/tokens" {
+		s.handleCreateMachineToken(w, r)
+		return
+	}
+
+	// The backup route is bearer-token authenticated like the object/ref
+	// protocol below, but it is not part of that protocol's routing (it has
+	// no repo-id path segment), so it is gated and dispatched here.
+	if r.URL.Path == "/api/v1/admin/backup" {
+		if !s.authOK(r) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "bad token", "code": "unauthenticated"})
+			return
+		}
+		s.handleBackup(w, r)
 		return
 	}
 
@@ -581,15 +758,23 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	projectIDs := s.projectIDsEnabled
 	deviceAuth := s.deviceAuthEnabled
+	passwordAuth := s.passwordLoginEnabled
+	setupCodes := s.setupCodesEnabled
 	s.mu.Unlock()
 
 	authMethods := []string{"pat"}
 	if deviceAuth {
 		authMethods = append(authMethods, "device")
 	}
+	if passwordAuth {
+		authMethods = append(authMethods, "password")
+	}
 	features := []string{}
 	if projectIDs {
 		features = append(features, "project_ids")
+	}
+	if setupCodes {
+		features = append(features, "setup_codes")
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"deployment":         "self-hosted",
@@ -699,6 +884,202 @@ func (s *Server) handleTokenRefresh(w http.ResponseWriter, r *http.Request) {
 		"refresh_token": result.RefreshToken,
 		"expires_in":    result.ExpiresIn,
 	})
+}
+
+// --- RFC 0005 self-hosted onboarding ----------------------------------------
+
+// passwordSessionCookieName is this fake's session cookie. It deliberately
+// does not reuse selfhosted/server.go's "__Host-regent_session" name or its
+// Secure attribute: a "__Host-" cookie is only usable over https, and this
+// fake serves plain http (httptest.NewServer), where Go's cookiejar drops a
+// Secure cookie before ever resending it. Nothing in the client contract
+// (internal/remote/password.go) depends on the cookie's name — it relies
+// entirely on http.Client.Jar carrying whatever the server set — so this is a
+// faithful-enough double of the mechanism without inheriting a name that
+// cannot work over http.
+const passwordSessionCookieName = "regent_session_fake"
+
+func (s *Server) handleSetupCodeExchange(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+	var req struct {
+		Code        string `json:"code"`
+		MachineName string `json:"machine_name"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.recordRequestLocked("POST /api/v1/auth/setup-code", map[string]any{"code": req.Code, "machine_name": req.MachineName})
+
+	if !s.setupCodesEnabled {
+		http.NotFound(w, r)
+		return
+	}
+	sc, ok := s.setupCodes[req.Code]
+	if !ok || sc.used {
+		writeAPIError(w, http.StatusBadRequest, "setup_code_invalid", "this setup code is invalid")
+		return
+	}
+	if sc.expired {
+		writeAPIError(w, http.StatusBadRequest, "setup_code_expired", "this setup code has expired")
+		return
+	}
+	sc.used = true
+
+	s.credentialSeq++
+	token := fmt.Sprintf("setup-token-%d", s.credentialSeq)
+	if s.extraTokens == nil {
+		s.extraTokens = map[string]bool{}
+	}
+	s.extraTokens[token] = true
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"token":      token,
+		"expires_at": time.Now().UTC().Add(90 * 24 * time.Hour).Format(time.RFC3339),
+		"org":        sc.org,
+		"server_url": sc.serverURL,
+	})
+}
+
+func (s *Server) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.recordRequestLocked("POST /api/v1/auth/login", map[string]any{"username": req.Username})
+
+	if !s.passwordLoginEnabled {
+		http.NotFound(w, r)
+		return
+	}
+	acct, ok := s.passwordAccounts[req.Username]
+	if !ok || acct.password != req.Password {
+		writeAPIError(w, http.StatusUnauthorized, "invalid_credentials", "invalid username or password")
+		return
+	}
+
+	s.credentialSeq++
+	cookieValue := fmt.Sprintf("session-%d", s.credentialSeq)
+	csrf := fmt.Sprintf("csrf-%d", s.credentialSeq)
+	if s.passwordSessions == nil {
+		s.passwordSessions = map[string]*fakePasswordSession{}
+	}
+	s.passwordSessions[cookieValue] = &fakePasswordSession{
+		userID:   "usr_" + acct.username,
+		username: acct.username,
+		csrf:     csrf,
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     passwordSessionCookieName,
+		Value:    cookieValue,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"user": map[string]any{
+			"id":           "usr_" + acct.username,
+			"username":     acct.username,
+			"display_name": acct.username,
+			"email":        "",
+		},
+		"csrf":                     csrf,
+		"password_change_required": acct.changeRequired,
+	})
+}
+
+// handleCreateMachineToken fakes the pre-existing PAT-creation route
+// (selfhosted/server.go, POST /api/v1/auth/tokens), authenticated the way
+// that route actually is: a session cookie plus the CSRF header named by
+// remote.csrfHeaderName ("X-Regent-CSRF") — not a bearer token, which is why
+// serve() dispatches here ahead of the bearer-token gate.
+func (s *Server) handleCreateMachineToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+	cookie, cookieErr := r.Cookie(passwordSessionCookieName)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if cookieErr != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required", "code": "unauthenticated"})
+		return
+	}
+	session, ok := s.passwordSessions[cookie.Value]
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required", "code": "unauthenticated"})
+		return
+	}
+	if r.Header.Get("X-Regent-CSRF") != session.csrf {
+		writeError(w, http.StatusForbidden, "missing or invalid CSRF token")
+		return
+	}
+
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	s.recordRequestLocked("POST /api/v1/auth/tokens", map[string]any{"name": req.Name, "username": session.username})
+
+	s.credentialSeq++
+	secret := fmt.Sprintf("pat-%d", s.credentialSeq)
+	if s.extraTokens == nil {
+		s.extraTokens = map[string]bool{}
+	}
+	s.extraTokens[secret] = true
+
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"token": map[string]any{
+			"id":   fmt.Sprintf("tok_%d", s.credentialSeq),
+			"name": req.Name,
+		},
+		"secret": secret,
+	})
+}
+
+func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+	s.mu.Lock()
+	enabled := s.backupEnabled
+	content := s.backupContent
+	if enabled {
+		s.recordRequestLocked("POST /api/v1/admin/backup", map[string]any{})
+	}
+	s.mu.Unlock()
+
+	if !enabled {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-tar")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(content)
 }
 
 // --- legacy repo registration (pre-RFC-0004) --------------------------------

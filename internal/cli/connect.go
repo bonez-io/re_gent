@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/bonez-io/re_gent/internal/config"
 	"github.com/bonez-io/re_gent/internal/index"
@@ -72,78 +73,19 @@ The server URL is remembered after the first successful run, so later runs can
 omit it. Running connect more than once is safe: hooks are merged rather than
 duplicated and existing config is preserved.
 
-connect replaces setup, which did the same job with different answers.`,
+connect replaces setup, which did the same job with different answers.
+
+Pass --setup <code> to exchange a one-time code from the self-hosted
+onboarding wizard for a machine credential first (RFC 0005): the code is
+bound to an organization and a user, expires in 15 minutes, and is exchanged
+before anything else here runs. "rgt init <url>" is an alias for this same
+command, --setup included.`,
 		SilenceUsage: true,
 		Args:         cobra.MaximumNArgs(1),
 		Annotations: map[string]string{
 			"commandOrder": "1",
 		},
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cwd, err := os.Getwd()
-			if err != nil {
-				return fmt.Errorf("get working directory: %w", err)
-			}
-			// The URL is optional because setup's was: a machine that has
-			// connected once already knows its server, and making connect
-			// demand the argument again would have been a regression dressed
-			// up as a simplification.
-			explicit := ""
-			if len(args) > 0 {
-				explicit = args[0]
-			}
-			// Do not contact or provision a host when no project was named. This
-			// retains connect's promise to touch nothing outside a project.
-			if !isProjectDir(cwd) {
-				serverURL, resolveErr := resolveServerURL(explicit)
-				if resolveErr != nil {
-					return resolveErr
-				}
-				return notAProject(cwd, serverURL)
-			}
-			var serverURL string
-			if explicit != "" && !isServiceURL(explicit) {
-				override, _ := cmd.Flags().GetString("url")
-				yes, _ := cmd.Flags().GetBool("yes")
-				// This phase is deliberately before isProjectDir/connectHere: an
-				// unreachable public URL must never result in a local .regent.
-				serverURL, err = prepareMachine(explicit, override, yes, cmd.InOrStdin(), cmd.OutOrStdout(), systemBootstrapper{})
-				if err != nil {
-					return err
-				}
-			} else {
-				serverURL, err = resolveServerURL(explicit)
-				if err != nil {
-					return err
-				}
-				serverURL, err = normalizeServiceURL(serverURL)
-				if err != nil {
-					return err
-				}
-				if !(systemBootstrapper{}).Healthy(serverURL) {
-					return fmt.Errorf("server %s is unreachable at /healthz; URL form only binds and never provisions", serverURL)
-				}
-			}
-
-			// The identity/display name supplied here is validated once
-			// runConnect knows which server it is talking to: against a
-			// legacy server it is still a repo_id, constrained to that
-			// charset, and gets checked before anything is written; against a
-			// server with the project API it is a free-text display name (RFC
-			// 0004), which repo_id's charset would wrongly reject ("Payments
-			// API" has a space and an uppercase letter). See runConnectLegacy
-			// and runConnectProject.
-			explicitID, _ := cmd.Flags().GetString("as")
-
-			noGitHook, _ := cmd.Flags().GetBool("no-git-hook")
-			agent, _ := cmd.Flags().GetString("agent")
-			if _, err := resolveAgentTargets(cwd, agentTarget(agent)); err != nil {
-				return err
-			}
-			org, _ := cmd.Flags().GetString("org")
-			asFork, _ := cmd.Flags().GetBool("as-fork")
-
-			return connectHere(serverURL, cwd, explicitID, noGitHook, agentTarget(agent), org, asFork, cmd.OutOrStdout(), isTerminal(os.Stdin))
-		},
+		RunE: runConnectRunE,
 	}
 	// Derivation is a guess and it will be wrong for someone: a fork's remote,
 	// a monorepo whose subdirectories are separate projects, a checkout with no
@@ -167,7 +109,159 @@ connect replaces setup, which did the same job with different answers.`,
 	// is implemented, and it is not this one. --as-fork accepts the other
 	// choice explicitly: enroll it as your own project.
 	cmd.Flags().Bool("as-fork", false, "enroll a detected fork as its own project instead of stopping to ask")
+	// --setup exchanges a one-time code from the self-hosted onboarding
+	// wizard for a machine credential before the rest of connect runs (RFC
+	// 0005, "Enrollment through a setup code"). It is intentionally not a
+	// substitute for --org: the code's own organization always wins, because
+	// the code was only ever issued for one.
+	cmd.Flags().String("setup", "", "one-time setup code from the self-hosted onboarding wizard; exchanged for a machine credential before connecting")
 	return cmd
+}
+
+// runConnectRunE is ConnectCmd's RunE, extracted so `rgt init <url>` can
+// dispatch straight into it (internal/cli/init.go) rather than re-implementing
+// server resolution, the setup-code exchange, and connectHere's call. Reusing
+// the function this way only works because InitCmd registers the identically
+// named flags this reads via cmd.Flags().Get*; cobra flag lookups are
+// per-Command, not per-function, so args and flags always come from whichever
+// command actually parsed them.
+func runConnectRunE(cmd *cobra.Command, args []string) error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("get working directory: %w", err)
+	}
+	// The URL is optional because setup's was: a machine that has
+	// connected once already knows its server, and making connect
+	// demand the argument again would have been a regression dressed
+	// up as a simplification.
+	explicit := ""
+	if len(args) > 0 {
+		explicit = args[0]
+	}
+	// Do not contact or provision a host when no project was named. This
+	// retains connect's promise to touch nothing outside a project.
+	if !isProjectDir(cwd) {
+		serverURL, resolveErr := resolveServerURL(explicit)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		return notAProject(cwd, serverURL)
+	}
+	var serverURL string
+	if explicit != "" && !isServiceURL(explicit) {
+		override, _ := cmd.Flags().GetString("url")
+		yes, _ := cmd.Flags().GetBool("yes")
+		// This phase is deliberately before isProjectDir/connectHere: an
+		// unreachable public URL must never result in a local .regent.
+		serverURL, err = prepareMachine(explicit, override, yes, cmd.InOrStdin(), cmd.OutOrStdout(), systemBootstrapper{})
+		if err != nil {
+			return err
+		}
+	} else {
+		serverURL, err = resolveServerURL(explicit)
+		if err != nil {
+			return err
+		}
+		serverURL, err = normalizeServiceURL(serverURL)
+		if err != nil {
+			return err
+		}
+		if !(systemBootstrapper{}).Healthy(serverURL) {
+			return fmt.Errorf("server %s is unreachable at /healthz; URL form only binds and never provisions", serverURL)
+		}
+	}
+
+	// The identity/display name supplied here is validated once
+	// runConnect knows which server it is talking to: against a
+	// legacy server it is still a repo_id, constrained to that
+	// charset, and gets checked before anything is written; against a
+	// server with the project API it is a free-text display name (RFC
+	// 0004), which repo_id's charset would wrongly reject ("Payments
+	// API" has a space and an uppercase letter). See runConnectLegacy
+	// and runConnectProject.
+	explicitID, _ := cmd.Flags().GetString("as")
+
+	noGitHook, _ := cmd.Flags().GetBool("no-git-hook")
+	agent, _ := cmd.Flags().GetString("agent")
+	if _, err := resolveAgentTargets(cwd, agentTarget(agent)); err != nil {
+		return err
+	}
+	org, _ := cmd.Flags().GetString("org")
+	asFork, _ := cmd.Flags().GetBool("as-fork")
+
+	if setupCode, _ := cmd.Flags().GetString("setup"); setupCode != "" {
+		exchangedOrg, err := connectExchangeSetupCode(cmd, serverURL, setupCode)
+		if err != nil {
+			return err
+		}
+		// The code was issued for exactly one organization; that always wins
+		// over whatever --org happened to carry (usually nothing, since the
+		// two flags serve the same purpose from different directions).
+		if exchangedOrg != "" {
+			org = exchangedOrg
+		}
+	}
+
+	return connectHere(serverURL, cwd, explicitID, noGitHook, agentTarget(agent), org, asFork, cmd.OutOrStdout(), isTerminal(os.Stdin))
+}
+
+// connectExchangeSetupCode performs the client half of "Enrollment through a
+// setup code" (RFC 0005 Appendix A): discover capabilities, exchange the
+// code for a machine credential, and store that credential exactly as `rgt
+// auth login --token-stdin` does — same config, same server key — so
+// everything downstream of this call (connectHere, runConnect) sees a
+// perfectly ordinary signed-in machine and needs no knowledge that a setup
+// code was ever involved. Returns the organization the code was bound to.
+func connectExchangeSetupCode(cmd *cobra.Command, serverURL, code string) (string, error) {
+	client := &http.Client{Timeout: 15 * time.Second}
+	ctx := cmd.Context()
+	// Best-effort, like every other capabilities call in this codebase
+	// (remote.FetchCapabilities never errors): this is step 1 of the
+	// documented exchange, but nothing here actually branches on the result
+	// today, so a legacy or unreachable server does not block the exchange
+	// attempt that follows — the POST itself is the real signal.
+	_ = remote.FetchCapabilities(ctx, client, serverURL)
+
+	result, err := remote.ExchangeSetupCode(ctx, client, serverURL, code, hostname())
+	if err != nil {
+		return "", setupCodeError(serverURL, err)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		return "", fmt.Errorf("load config: %w", err)
+	}
+	config.SetCredential(cfg, serverURL, result.Token)
+	cfg.Server.URL = serverURL
+	if err := config.Save(cfg); err != nil {
+		return "", fmt.Errorf("save credential from setup code: %w", err)
+	}
+	return result.Org, nil
+}
+
+// setupCodeError turns the two documented setup-code failures into a single
+// line telling the person what to actually do — generate a new code — rather
+// than the raw server message, which says nothing about where a code comes
+// from.
+func setupCodeError(serverURL string, err error) error {
+	if remote.IsSetupCodeInvalid(err) {
+		return fmt.Errorf("this setup code is invalid; generate a new one in the web UI at %s", serverURL)
+	}
+	if remote.IsSetupCodeExpired(err) {
+		return fmt.Errorf("this setup code has expired; generate a new one in the web UI at %s", serverURL)
+	}
+	return fmt.Errorf("exchange setup code: %w", err)
+}
+
+// hostname returns this machine's name for the setup-code exchange and the
+// password-login machine-credential name, falling back to a fixed string
+// rather than failing the command over a platform that cannot report one.
+func hostname() string {
+	name, err := os.Hostname()
+	if err != nil || strings.TrimSpace(name) == "" {
+		return "unknown-machine"
+	}
+	return name
 }
 
 // connectHere wires the one project the user is standing in — the only project

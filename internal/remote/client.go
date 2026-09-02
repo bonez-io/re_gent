@@ -140,12 +140,6 @@ func (c *HTTPClient) currentAuth() (token, refreshToken string) {
 	return c.token, c.refreshToken
 }
 
-func (c *HTTPClient) setToken(token string) {
-	c.mu.Lock()
-	c.token = token
-	c.mu.Unlock()
-}
-
 func (c *HTTPClient) objectURL(h store.Hash) string {
 	return fmt.Sprintf("%s/%s/objects/%s", c.baseURL, c.repoID, h)
 }

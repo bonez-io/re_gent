@@ -94,6 +94,7 @@ func newRootCommand() *cobra.Command {
 	rootCmd.AddCommand(cli.ConnectCmd())
 	rootCmd.AddCommand(cli.DisconnectCmd())
 	rootCmd.AddCommand(cli.AuthCmd())
+	rootCmd.AddCommand(cli.AdminCmd())
 	rootCmd.AddCommand(cli.LogCmd())
 	rootCmd.AddCommand(cli.StatusCmd())
 	rootCmd.AddCommand(cli.BlameCmd())
