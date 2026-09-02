@@ -152,6 +152,64 @@ Note: because capture consults the ambient environment, `REGENT_SERVER_URL` must
 running the local-mode suites. The `TestMain` guards in `internal/capture` and `cmd/rgt` do this
 automatically, so `go test ./...` is hermetic even on a machine configured for server mode.
 
+## Self-hosted local loop
+
+Quick check of the native local dev loop described in
+[docs/ui-development.md](docs/ui-development.md) — `regent-server` running
+self-hosted auth natively (no Docker), bootstrap, CLI login, connect, a
+captured turn, and sync, with the server as the read of record.
+
+The scripted version, on a scratch port and temp directories:
+
+```bash
+make smoke
+# or directly:
+./scripts/dev-smoke.sh
+```
+
+It exits non-zero and names the failing step on any problem, and always stops
+the server it started.
+
+The same flow as a Go test, driving the real `rgt` binary against the
+`selfhosted` package in-process (`httptest`, no port or Docker needed):
+
+```bash
+go test ./test/ -run TestSelfHostedDevLoop -count=1
+```
+
+By hand, in two terminals:
+
+```bash
+# terminal 1
+make serve                          # regent-server on 127.0.0.1:7655, self-hosted auth
+
+# terminal 2, once /healthz answers
+./scripts/dev-bootstrap.sh          # claims the bootstrap token, creates the first
+                                     # owner, and runs `rgt auth login` for you
+
+cd /path/to/some/project
+git init -q                          # or use an existing git repo
+rgt connect http://127.0.0.1:7655 --as demo-project --agent claude
+
+# Manual Claude turn (see "Manual Claude Turn" above), then:
+rgt sync
+
+curl -s http://127.0.0.1:7655/demo-project/api/sessions            # 401, anonymous
+curl -s -H "Authorization: Bearer $PAT" \
+  http://127.0.0.1:7655/demo-project/api/sessions                  # your session, with the
+                                                                     # PAT dev-bootstrap.sh printed
+```
+
+`rgt auth login` never accepts a token as an argument or displays a stored
+one; `scripts/dev-bootstrap.sh` reads the one-time bootstrap credential from
+`${REGENT_DATA:-.local/data}/bootstrap-token` directly (mode `0600`, written by
+`regent-server` on first start) rather than asking you to paste it, since this
+is a single-host local loop rather than the browser-driven production
+bootstrap in [docs/self-hosted.md](docs/self-hosted.md). It prints the
+resulting personal access token once, on its own — save it (as `$PAT` above)
+if you want to call the API directly; the CLI itself stays signed in via
+`~/.regent/config.toml`.
+
 ## VPS bootstrap (manual before release)
 
 Use a disposable modern Linux host reachable through your normal `ssh` configuration. From a

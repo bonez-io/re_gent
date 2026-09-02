@@ -1,22 +1,45 @@
-# One-command re_gent server.
+# One-command re_gent server + UI (Docker). Optional: `make serve` / `make dev`
+# run the same server natively and do not need Docker at all.
 #
 #   docker compose up -d --build
 #   # or: make server
 #
-# Local development only. The server uses the explicit insecure override inside
-# the container, while Docker publishes it to host loopback only.
+# Local development only, but the server runs the same persistent self-hosted
+# auth composition as production; Docker Compose publishes both ports to host
+# loopback only. Read the one-time bootstrap token for the first owner with:
+#
+#   docker compose exec server cat /data/bootstrap-token
+#
+# For the legacy fully-open (no application auth) loopback mode instead, layer
+# the optional override file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 services:
   server:
     build: .
     image: regent-server:latest
     container_name: regent-server
-    command: ["--addr", "0.0.0.0:7654", "--data", "/data", "--insecure-no-auth"]
+    command: ["--addr", "0.0.0.0:7654", "--data", "/data", "--auth-mode", "self-hosted"]
     ports:
       # Host port is overridable (REGENT_PORT) to avoid colliding with a
       # locally-running `rgt serve`; container always listens on 7654.
       - "127.0.0.1:${REGENT_PORT:-7654}:7654"
     volumes:
       - regent-data:/data
+    restart: unless-stopped
+
+  web:
+    build: ./web
+    image: regent-web:latest
+    container_name: regent-web
+    depends_on:
+      server:
+        condition: service_healthy
+    ports:
+      # regent-web talks to the "server" container over the compose network by
+      # its container_name (see web/nginx.conf); only this published port is
+      # reachable from the host, and only on loopback.
+      - "127.0.0.1:${REGENT_WEB_PORT:-8080}:8080"
     restart: unless-stopped
 
 volumes:

@@ -1,0 +1,10 @@
+# Optional override: run the Dockerized loopback dev server in the legacy
+# fully-open (no application auth) mode instead of self-hosted auth.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+#
+# Everything else (the web UI container, ports, volumes) is unchanged; only
+# the server command differs.
+services:
+  server:
+    command: ["--addr", "0.0.0.0:7654", "--data", "/data", "--insecure-no-auth"]
