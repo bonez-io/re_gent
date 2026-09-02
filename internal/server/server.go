@@ -94,6 +94,7 @@ type Server struct {
 	ingestFilter   IngestFilter
 	capabilitiesFn CapabilitiesFunc
 	registry       ProjectRegistry
+	enrollmentHook EnrollmentHook
 
 	mu    sync.Mutex
 	repos map[string]*store.Store
@@ -208,6 +209,9 @@ func New(dataDir string, opts ...Option) (*Server, error) {
 	if srv.registry == nil {
 		srv.registry = newFilesystemProjectRegistry(dataDir, srv.locator)
 	}
+	if srv.enrollmentHook == nil {
+		srv.enrollmentHook = noopEnrollmentHook
+	}
 	if err := os.MkdirAll(srv.reposDir(), 0o755); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
@@ -218,7 +222,6 @@ func (s *Server) reposDir() string { return filepath.Join(s.dataDir, "repos") }
 
 // repoDir is the on-disk root of one repo. The id is validated before this is
 // called, so it is always a single safe path segment.
-func (s *Server) repoDir(repoID string) string { return filepath.Join(s.reposDir(), repoID) }
 
 func (s *Server) logf(format string, args ...any) {
 	if s.logger != nil {
@@ -283,10 +286,6 @@ func (s *Server) ListRepos() ([]string, error) {
 // tenant. When create is false and the repo does not exist yet, errRepoNotFound
 // is returned instead of creating it, so reads never bring a repo into
 // existence.
-func (s *Server) openRepo(repoID string, create bool) (*store.Store, error) {
-	return s.openRepoTenant("", repoID, create)
-}
-
 // openRepoTenant is openRepo scoped to a tenant, resolving storage through the
 // configured StorageLocator rather than a hard-coded path. This is the one
 // place the core opens a project's store, so every route goes through the

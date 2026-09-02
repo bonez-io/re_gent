@@ -30,7 +30,7 @@ func nextSeq() int64 { return atomic.AddInt64(&conformanceSeq, 1) }
 
 func buildSelfHostedFixture(t *testing.T) *servertest.Fixture {
 	t.Helper()
-	srv, setup, err := New(t.TempDir())
+	srv, setup, err := New(t.TempDir(), "", "")
 	if err != nil {
 		t.Fatalf("selfhosted.New: %v", err)
 	}
@@ -82,25 +82,20 @@ func requireSingleTenant(t *testing.T, tenantID string) {
 	}
 }
 
-// bootstrapOwner performs the one-time bootstrap exactly as the UI does:
-// POST /api/v1/auth/bootstrap with the Setup.BootstrapToken as a Bootstrap
-// credential, then returns the resulting owner PAT as a bearer credential.
+// bootstrapOwner performs the RFC 0005 first-start flow exactly as the wizard
+// does: log in with the initial (generated) admin password, replace it and
+// create the organization via POST /api/v1/onboarding/admin, then mint a PAT
+// off the resulting session, exactly as Settings > Personal access tokens
+// does. It returns that PAT as a bearer credential — the conformance suite's
+// "instance/organization-level owner credential" (see Fixture.Credential's
+// doc comment).
 func bootstrapOwner(t *testing.T, srv *Server, setup Setup) string {
 	t.Helper()
-	if !setup.BootstrapRequired {
-		t.Fatal("fresh selfhosted server unexpectedly has no bootstrap requirement")
+	if !setup.Generated || setup.AdminPassword == "" {
+		t.Fatal("fresh selfhosted server unexpectedly has no generated initial admin password")
 	}
-	rec := serveRequest(srv, http.MethodPost, "/api/v1/auth/bootstrap", "Bootstrap "+setup.BootstrapToken, "",
-		map[string]string{"username": "conformance-owner", "display_name": "Conformance Owner"})
-	assertStatus(t, rec, http.StatusCreated)
-	var resp struct {
-		Token string `json:"token"`
-	}
-	decodeResponse(t, rec, &resp)
-	if resp.Token == "" {
-		t.Fatalf("bootstrap response missing token: %s", rec.Body.String())
-	}
-	return "Bearer " + resp.Token
+	cookie, csrf, _ := onboardAdmin(t, srv, setup, "Conformance Org "+fmt.Sprint(nextSeq()))
+	return mintOwnerPAT(t, srv, cookie, csrf)
 }
 
 var slugPattern = regexp.MustCompile(`[^a-z0-9]+`)

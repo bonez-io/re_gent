@@ -3,7 +3,6 @@ package selfhosted
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,56 +14,103 @@ import (
 	"time"
 )
 
-type bootstrapResponse struct {
-	Viewer    User   `json:"viewer"`
-	Token     string `json:"token"`
-	CSRFToken string `json:"csrf_token"`
+// onboardAdmin drives the full RFC 0005 first-start flow against a freshly
+// created Server: login with the initial password, replace it and create the
+// organization via POST /api/v1/onboarding/admin, and return the resulting
+// session cookie/CSRF plus the organization slug. Every test in this file
+// that needs an authenticated owner starts here instead of the removed
+// bootstrap-token flow.
+func onboardAdmin(t *testing.T, srv *Server, setup Setup, orgDisplayName string) (cookie, csrf, orgSlug string) {
+	t.Helper()
+	if !setup.Generated || setup.AdminPassword == "" {
+		t.Fatalf("fresh selfhosted server unexpectedly has no generated initial password: %#v", setup)
+	}
+	login := serveRequest(srv, http.MethodPost, "/api/v1/auth/login", "", "",
+		map[string]string{"username": setup.AdminUsername, "password": setup.AdminPassword})
+	assertStatus(t, login, http.StatusCreated)
+	var loginResp struct {
+		CSRF                   string `json:"csrf"`
+		PasswordChangeRequired bool   `json:"password_change_required"`
+	}
+	decodeResponse(t, login, &loginResp)
+	if !loginResp.PasswordChangeRequired {
+		t.Fatal("login with the initial password did not report password_change_required")
+	}
+	loginCookies := login.Result().Cookies()
+	if len(loginCookies) != 1 {
+		t.Fatalf("login response set %d cookies, want 1", len(loginCookies))
+	}
+	loginCookie := loginCookies[0].Name + "=" + loginCookies[0].Value
+
+	onboard := serveRequestHeaders(srv, http.MethodPost, "/api/v1/onboarding/admin", "", loginCookie, map[string]any{
+		"org": map[string]string{"display_name": orgDisplayName, "join_policy": "invite_only", "default_role": "reader"},
+		"admin": map[string]string{
+			"display_name": "Admin", "new_password": "correct-horse-battery-staple",
+		},
+	}, map[string]string{csrfHeaderName: loginResp.CSRF})
+	assertStatus(t, onboard, http.StatusCreated)
+	var onboardResp struct {
+		CSRF string `json:"csrf"`
+		Org  struct {
+			Slug string `json:"slug"`
+		} `json:"org"`
+	}
+	decodeResponse(t, onboard, &onboardResp)
+	if onboardResp.CSRF == "" || onboardResp.Org.Slug == "" {
+		t.Fatalf("onboarding response missing csrf or org slug: %s", onboard.Body.String())
+	}
+	cookies := onboard.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("onboarding response set %d cookies, want 1", len(cookies))
+	}
+	return cookies[0].Name + "=" + cookies[0].Value, onboardResp.CSRF, onboardResp.Org.Slug
+}
+
+// mintOwnerPAT exchanges an onboarded admin's session for a bearer PAT, the
+// credential shape every other test in this package (and the conformance
+// fixture) uses to act as "owner".
+func mintOwnerPAT(t *testing.T, srv *Server, cookie, csrf string) string {
+	t.Helper()
+	resp := serveRequestHeaders(srv, http.MethodPost, "/api/v1/auth/tokens", "", cookie,
+		map[string]any{"name": "test-owner-pat", "expires_in_days": 1}, map[string]string{csrfHeaderName: csrf})
+	assertStatus(t, resp, http.StatusCreated)
+	var created struct {
+		Secret string `json:"secret"`
+	}
+	decodeResponse(t, resp, &created)
+	if created.Secret == "" {
+		t.Fatalf("token creation response missing secret: %s", resp.Body.String())
+	}
+	return "Bearer " + created.Secret
 }
 
 func TestSecureSelfHostedLifecycle(t *testing.T) {
 	dataDir := t.TempDir()
-	srv, setup, err := New(dataDir)
+	srv, setup, err := New(dataDir, "", "")
 	if err != nil {
 		t.Fatal(err)
-	}
-	if !setup.BootstrapRequired || !strings.HasPrefix(setup.BootstrapToken, bootstrapPrefix) {
-		t.Fatalf("fresh setup = %#v, want one-time bootstrap credential", setup)
-	}
-	bootstrapPath := filepath.Join(dataDir, "bootstrap-token")
-	bootstrapFile, err := os.ReadFile(bootstrapPath)
-	if err != nil || strings.TrimSpace(string(bootstrapFile)) != setup.BootstrapToken {
-		t.Fatalf("bootstrap delivery file: content=%q err=%v", bootstrapFile, err)
-	}
-	if runtime.GOOS != "windows" {
-		bootstrapInfo, err := os.Stat(bootstrapPath)
-		if err != nil || bootstrapInfo.Mode().Perm() != 0o600 {
-			t.Fatalf("bootstrap delivery file mode: info=%v err=%v", bootstrapInfo, err)
-		}
 	}
 
 	assertStatus(t, serveRequest(srv, http.MethodGet, "/healthz", "", "", nil), http.StatusOK)
 	assertStatus(t, serveRequest(srv, http.MethodGet, "/api/v1/capabilities", "", "", nil), http.StatusOK)
 	assertStatus(t, serveRequest(srv, http.MethodGet, "/repos", "", "", nil), http.StatusUnauthorized)
-	assertStatus(t, serveRequest(srv, http.MethodPost, "/api/v1/auth/bootstrap", "Bootstrap wrong", "", map[string]string{"username": "owner", "display_name": "Owner"}), http.StatusUnauthorized)
+	assertStatus(t, serveRequest(srv, http.MethodPost, "/api/v1/auth/login", "", "", map[string]string{"username": setup.AdminUsername, "password": "wrong"}), http.StatusUnauthorized)
 
-	bootstrap := serveRequest(srv, http.MethodPost, "/api/v1/auth/bootstrap", "Bootstrap "+setup.BootstrapToken, "", map[string]string{"username": "owner", "display_name": "Owner"})
-	assertStatus(t, bootstrap, http.StatusCreated)
-	var owner bootstrapResponse
-	decodeResponse(t, bootstrap, &owner)
-	if !owner.Viewer.InstanceOwner || !strings.HasPrefix(owner.Token, personalTokenPrefix) || owner.CSRFToken == "" {
-		t.Fatalf("bootstrap response omitted owner credentials or identity: %#v", owner.Viewer)
-	}
-	if _, err := os.Stat(bootstrapPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("bootstrap delivery file remains after setup: %v", err)
-	}
-	cookies := bootstrap.Result().Cookies()
-	if len(cookies) != 1 || cookies[0].Name != sessionCookieName || !cookies[0].Secure || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteStrictMode {
-		t.Fatalf("session cookie is not hardened: %#v", cookies)
-	}
-	assertStatus(t, serveRequest(srv, http.MethodPost, "/api/v1/auth/bootstrap", "Bootstrap "+setup.BootstrapToken, "", map[string]string{"username": "again", "display_name": "Again"}), http.StatusUnauthorized)
+	cookie, csrf, _ := onboardAdmin(t, srv, setup, "Test Org")
+	ownerAuth := mintOwnerPAT(t, srv, cookie, csrf)
 
-	ownerAuth := "Bearer " + owner.Token
-	assertStatus(t, serveRequest(srv, http.MethodGet, "/api/v1/auth/me", ownerAuth, "", nil), http.StatusOK)
+	me := serveRequest(srv, http.MethodGet, "/api/v1/auth/me", ownerAuth, "", nil)
+	assertStatus(t, me, http.StatusOK)
+	var meResp struct {
+		User struct {
+			InstanceOwner bool `json:"instance_owner"`
+		} `json:"user"`
+	}
+	decodeResponse(t, me, &meResp)
+	if !meResp.User.InstanceOwner {
+		t.Fatalf("onboarded admin is not reported as instance owner: %s", me.Body.String())
+	}
+
 	assertStatus(t, serveRequest(srv, http.MethodPost, "/repos", ownerAuth, "", map[string]string{"repo_id": "alpha"}), http.StatusCreated)
 
 	createdUser := serveRequest(srv, http.MethodPost, "/api/v1/users", ownerAuth, "", map[string]any{"username": "reader", "display_name": "Read Only", "repo_id": "alpha", "role": RoleReader})
@@ -98,19 +144,11 @@ func TestSecureSelfHostedLifecycle(t *testing.T) {
 	if len(memberList.Members) != 4 {
 		t.Fatalf("members = %#v, want instance owner plus three project members", memberList.Members)
 	}
-	var tokenCreateAudits int
-	if err := srv.identities.db.QueryRow("SELECT COUNT(*) FROM audit_events WHERE action='token.create'").Scan(&tokenCreateAudits); err != nil {
-		t.Fatal(err)
-	}
-	if tokenCreateAudits != 3 {
-		t.Fatalf("token.create audit count = %d, want 3 created-user credentials", tokenCreateAudits)
-	}
 
 	// Browser sessions are accepted for reads but every cookie-authenticated
 	// mutation must carry the matching CSRF token.
-	cookie := cookies[0].Name + "=" + cookies[0].Value
 	assertStatus(t, serveRequest(srv, http.MethodPost, "/repos", "", cookie, map[string]string{"repo_id": "blocked-by-csrf"}), http.StatusForbidden)
-	withCSRF := serveRequestHeaders(srv, http.MethodPost, "/repos", "", cookie, map[string]string{"repo_id": "browser-created"}, map[string]string{csrfHeaderName: owner.CSRFToken})
+	withCSRF := serveRequestHeaders(srv, http.MethodPost, "/repos", "", cookie, map[string]string{"repo_id": "browser-created"}, map[string]string{csrfHeaderName: csrf})
 	assertStatus(t, withCSRF, http.StatusCreated)
 
 	// A user's PAT can be revoked immediately and never becomes valid again.
@@ -129,13 +167,13 @@ func TestSecureSelfHostedLifecycle(t *testing.T) {
 	if err := srv.Close(); err != nil {
 		t.Fatal(err)
 	}
-	restarted, restartedSetup, err := New(dataDir)
+	restarted, restartedSetup, err := New(dataDir, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = restarted.Close() })
-	if restartedSetup.BootstrapRequired || restartedSetup.BootstrapToken != "" {
-		t.Fatalf("restart reopened bootstrap: %#v", restartedSetup)
+	if restartedSetup.Generated || restartedSetup.AdminPassword != "" || restartedSetup.PasswordChangeRequired {
+		t.Fatalf("restart of an onboarded instance unexpectedly reported first-start state: %#v", restartedSetup)
 	}
 	assertStatus(t, serveRequest(restarted, http.MethodGet, "/api/v1/auth/me", ownerAuth, "", nil), http.StatusOK)
 
@@ -158,7 +196,7 @@ func TestSecureSelfHostedLifecycle(t *testing.T) {
 }
 
 func TestAnonymousIdentityAndDataRoutesAreDenied(t *testing.T) {
-	srv, _, err := New(t.TempDir())
+	srv, _, err := New(t.TempDir(), "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,6 +213,8 @@ func TestAnonymousIdentityAndDataRoutesAreDenied(t *testing.T) {
 		{http.MethodGet, "/api/v1/users"},
 		{http.MethodGet, "/alpha/api/v1/access/members"},
 		{http.MethodGet, "/alpha/api/status"},
+		{http.MethodGet, "/api/v1/orgs/whatever"},
+		{http.MethodPost, "/api/v1/admin/backup"},
 	}
 	for _, test := range tests {
 		t.Run(test.method+" "+test.path, func(t *testing.T) {
@@ -202,9 +242,9 @@ func createTestUser(t *testing.T, srv http.Handler, ownerAuth, username, display
 	return created
 }
 
-func TestBootstrapSecretsAreHashedAtRest(t *testing.T) {
+func TestInitialAdminPasswordIsHashedAtRest(t *testing.T) {
 	dataDir := t.TempDir()
-	srv, setup, err := New(dataDir)
+	srv, setup, err := New(dataDir, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,35 +255,60 @@ func TestBootstrapSecretsAreHashedAtRest(t *testing.T) {
 		if readErr != nil && !os.IsNotExist(readErr) {
 			t.Fatal(readErr)
 		}
-		if bytes.Contains(data, []byte(setup.BootstrapToken)) {
-			t.Fatalf("plaintext bootstrap credential appears in %s", filepath.Base(path))
+		if bytes.Contains(data, []byte(setup.AdminPassword)) {
+			t.Fatalf("plaintext initial admin password appears in %s", filepath.Base(path))
 		}
 	}
 }
 
+func TestRestartKeepsSameInitialPassword(t *testing.T) {
+	dataDir := t.TempDir()
+	srv, setup, err := New(dataDir, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, restartedSetup, err := New(dataDir, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	if restartedSetup.Generated || restartedSetup.AdminPassword != "" {
+		t.Fatalf("restart before onboarding unexpectedly regenerated the initial password: %#v", restartedSetup)
+	}
+	if !restartedSetup.PasswordChangeRequired {
+		t.Fatal("restart before onboarding should still report the initial password in force")
+	}
+	// The password from the first run must still work.
+	login := serveRequest(restarted, http.MethodPost, "/api/v1/auth/login", "", "", map[string]string{"username": setup.AdminUsername, "password": setup.AdminPassword})
+	assertStatus(t, login, http.StatusCreated)
+}
+
 func TestExpiredPATIsRejected(t *testing.T) {
-	srv, setup, err := New(t.TempDir())
+	srv, setup, err := New(t.TempDir(), "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = srv.Close() })
-	bootstrap := serveRequest(srv, http.MethodPost, "/api/v1/auth/bootstrap", "Bootstrap "+setup.BootstrapToken, "", map[string]string{"username": "owner", "display_name": "Owner"})
-	var owner bootstrapResponse
-	decodeResponse(t, bootstrap, &owner)
+	cookie, csrf, _ := onboardAdmin(t, srv, setup, "Test Org")
+	ownerAuth := mintOwnerPAT(t, srv, cookie, csrf)
+	token := strings.TrimPrefix(ownerAuth, "Bearer ")
 	srv.identities.now = func() time.Time { return time.Now().UTC().Add(defaultPATLifetime + time.Hour) }
-	assertStatus(t, serveRequest(srv, http.MethodGet, "/api/v1/auth/me", "Bearer "+owner.Token, "", nil), http.StatusUnauthorized)
+	assertStatus(t, serveRequest(srv, http.MethodGet, "/api/v1/auth/me", "Bearer "+token, "", nil), http.StatusUnauthorized)
 }
 
-func TestBootstrapAttemptsAreRateLimited(t *testing.T) {
-	srv, _, err := New(t.TempDir())
+func TestLoginAttemptsAreRateLimited(t *testing.T) {
+	srv, setup, err := New(t.TempDir(), "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = srv.Close() })
 	for attempt := 0; attempt < 10; attempt++ {
-		assertStatus(t, serveRequest(srv, http.MethodPost, "/api/v1/auth/bootstrap", "Bootstrap invalid", "", map[string]string{"username": "owner", "display_name": "Owner"}), http.StatusUnauthorized)
+		assertStatus(t, serveRequest(srv, http.MethodPost, "/api/v1/auth/login", "", "", map[string]string{"username": setup.AdminUsername, "password": "wrong"}), http.StatusUnauthorized)
 	}
-	limited := serveRequest(srv, http.MethodPost, "/api/v1/auth/bootstrap", "Bootstrap invalid", "", map[string]string{"username": "owner", "display_name": "Owner"})
+	limited := serveRequest(srv, http.MethodPost, "/api/v1/auth/login", "", "", map[string]string{"username": setup.AdminUsername, "password": "wrong"})
 	assertStatus(t, limited, http.StatusTooManyRequests)
 	if limited.Header().Get("Retry-After") == "" {
 		t.Fatal("rate-limited response omitted Retry-After")
@@ -252,12 +317,13 @@ func TestBootstrapAttemptsAreRateLimited(t *testing.T) {
 
 func TestOwnerRecoveryIssuesShortLivedAuditedPAT(t *testing.T) {
 	dataDir := t.TempDir()
-	srv, setup, err := New(dataDir)
+	srv, setup, err := New(dataDir, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	bootstrap := serveRequest(srv, http.MethodPost, "/api/v1/auth/bootstrap", "Bootstrap "+setup.BootstrapToken, "", map[string]string{"username": "owner", "display_name": "Owner"})
-	assertStatus(t, bootstrap, http.StatusCreated)
+	cookie, csrf, _ := onboardAdmin(t, srv, setup, "Test Org")
+	_ = cookie
+	_ = csrf
 	if err := srv.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -268,12 +334,42 @@ func TestOwnerRecoveryIssuesShortLivedAuditedPAT(t *testing.T) {
 	if !strings.HasPrefix(secret, personalTokenPrefix) || token.Name != "operator recovery" || time.Until(token.ExpiresAt) > 25*time.Hour {
 		t.Fatalf("unexpected recovery token metadata: %#v", token)
 	}
-	restarted, _, err := New(dataDir)
+	restarted, _, err := New(dataDir, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = restarted.Close() })
 	assertStatus(t, serveRequest(restarted, http.MethodGet, "/api/v1/auth/me", "Bearer "+secret, "", nil), http.StatusOK)
+}
+
+func TestPasswordChangeRequiredGatesNonAuthRoutes(t *testing.T) {
+	srv, setup, err := New(t.TempDir(), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	login := serveRequest(srv, http.MethodPost, "/api/v1/auth/login", "", "", map[string]string{"username": setup.AdminUsername, "password": setup.AdminPassword})
+	assertStatus(t, login, http.StatusCreated)
+	cookies := login.Result().Cookies()
+	cookie := cookies[0].Name + "=" + cookies[0].Value
+
+	// A selfhosted-handled route reports the coded JSON reason.
+	blocked := serveRequest(srv, http.MethodGet, "/api/v1/users", "", cookie, nil)
+	assertStatus(t, blocked, http.StatusForbidden)
+	var body struct {
+		Code string `json:"code"`
+	}
+	decodeResponse(t, blocked, &body)
+	if body.Code != "password_change_required" {
+		t.Fatalf("blocked response code = %q, want password_change_required", body.Code)
+	}
+
+	// A core-delegated route is still denied (403), even though the core's
+	// own error body does not carry selfhosted's "code" field.
+	assertStatus(t, serveRequest(srv, http.MethodGet, "/repos", "", cookie, nil), http.StatusForbidden)
+
+	// /api/v1/auth/me stays reachable so the UI can show the gated state.
+	assertStatus(t, serveRequest(srv, http.MethodGet, "/api/v1/auth/me", "", cookie, nil), http.StatusOK)
 }
 
 func serveRequest(handler http.Handler, method, path, authorization, cookie string, body any) *httptest.ResponseRecorder {

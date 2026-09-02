@@ -82,6 +82,27 @@ func defaultCapabilities(*http.Request) map[string]any {
 	}
 }
 
+// EnrollmentHook is notified after a versioned-project enrollment
+// (POST /api/v1/projects) succeeds, whether it created a new project or
+// reused an existing one. Compositions that maintain a connections feed for
+// a setup wizard (self-hosted RFC 0005 screen 2) install one via
+// WithEnrollmentHook to append a row there; the default does nothing. It runs
+// synchronously, after the project registry write has committed and before
+// the HTTP response is written, so it must not block on anything slow or
+// fallible enough to want retrying — the self-hosted composition treats a
+// failure here as log-and-continue, never as a reason to fail the enrollment
+// response the caller is waiting on.
+type EnrollmentHook func(ctx context.Context, principal serverauth.Principal, project Project, created bool)
+
+// WithEnrollmentHook installs the hook createProject calls after a successful
+// enrollment. The default (installed when no hook is configured) does
+// nothing, matching today's behavior.
+func WithEnrollmentHook(hook EnrollmentHook) Option {
+	return func(s *Server) { s.enrollmentHook = hook }
+}
+
+func noopEnrollmentHook(context.Context, serverauth.Principal, Project, bool) {}
+
 // noopAuditor is the default serverauth.Auditor: it records nothing, matching
 // today's behavior for open mode and for any composition that has not yet
 // installed one.

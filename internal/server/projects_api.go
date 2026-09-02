@@ -213,9 +213,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request, tenantID 
 		}
 	}
 
-	project, created, err := s.registry.Create(r.Context(), tenantID, ProjectCreate{
-		Fingerprint: req.Fingerprint, Remote: req.Remote, RootCommit: req.RootCommit, DisplayName: req.DisplayName,
-	})
+	project, created, err := s.registry.Create(r.Context(), tenantID, ProjectCreate(req))
 	if err != nil {
 		s.logf("create project: %v", err)
 		writeAPIError(w, http.StatusBadRequest, err.Error(), "invalid_request")
@@ -233,6 +231,8 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request, tenantID 
 			}
 		}
 	}
+
+	s.enrollmentHook(r.Context(), principal, project, created)
 
 	status := http.StatusOK
 	if created {

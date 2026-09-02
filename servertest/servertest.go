@@ -737,6 +737,12 @@ func viewerID(t *testing.T, handler http.Handler, credential string) string {
 			return id
 		}
 	}
+	// RFC 0005 Appendix A shape: {"user": {"id": ...}, "orgs": [...], ...}.
+	if user, ok := body["user"].(map[string]any); ok {
+		if id, ok := user["id"].(string); ok && id != "" {
+			return id
+		}
+	}
 	if id, ok := body["id"].(string); ok && id != "" {
 		return id
 	}
