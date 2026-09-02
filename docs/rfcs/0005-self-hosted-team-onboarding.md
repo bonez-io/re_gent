@@ -80,7 +80,7 @@ Fields, with defaults:
 | Admin display name | empty | |
 | Admin email | empty, optional | Needed only for invitation replies. |
 | New password | required, minimum 12 characters | Replaces the initial password. Argon2id. |
-| Who can join | `invited only` | Alternative: `anyone with the server address may register`, off by default. |
+| Who can join | `invite_only` | Alternative `open`: anyone with the server address may register. Off by default. |
 | Default role for new members | `reader` | Applies to projects a new member is granted at invitation time. |
 
 Saving this screen replaces the initial password, records the organization,
@@ -137,7 +137,7 @@ checked in this order:
 3. the organization lists their GitHub organization in **allowed GitHub
    organizations**, an optional field on this screen, in which case they join
    as `member` at the default project role;
-4. the join policy is `anyone with the server address may register`.
+4. the join policy is `open`.
 
 Otherwise the callback ends on a page that says the account is not invited
 and shows the admin's contact. GitHub sign-in reads only the user's id,
