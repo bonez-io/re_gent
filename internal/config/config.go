@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -49,10 +50,29 @@ type Auth struct {
 // Credential is one machine-only server login. Keeping credentials keyed by
 // server avoids sending a token issued by one deployment to another. The
 // legacy singular Auth table remains readable for compatibility.
+//
+// A personal access token (Kind == "") never expires and has no refresh
+// token: Token is presented as-is, forever, until `rgt auth logout`. A device
+// login (Kind == CredentialKindDevice, RFC 0004) is short-lived: Token is the
+// access token, RefreshToken exchanges for a new pair after ExpiresAt, and
+// both are stored here rather than only in memory because a CLI invocation
+// is a new process every time.
 type Credential struct {
 	ServerURL string `toml:"server_url"`
 	Token     string `toml:"token"`
+	// Kind distinguishes a device-issued credential from a personal access
+	// token. Empty means "pat", the shape every credential had before RFC 0004.
+	Kind string `toml:"kind,omitempty"`
+	// RefreshToken exchanges for a new access/refresh pair once Token expires.
+	// Empty for a PAT, which does not expire and has nothing to refresh.
+	RefreshToken string `toml:"refresh_token,omitempty"`
+	// ExpiresAt is when Token stops being accepted, RFC 3339. Empty for a PAT.
+	ExpiresAt string `toml:"expires_at,omitempty"`
 }
+
+// CredentialKindDevice marks a Credential issued by the device-login flow
+// (RFC 0004), as opposed to a personal access token.
+const CredentialKindDevice = "device"
 
 // DefaultPath returns the path to the default per-user config file:
 // ~/.regent/config.toml.
@@ -203,6 +223,78 @@ func SetCredential(cfg *UserConfig, serverURL, token string) {
 	if legacyCredentialMatches(cfg, serverURL) {
 		cfg.Auth = Auth{}
 	}
+}
+
+// SetDeviceCredential inserts or replaces the device-issued credential for
+// serverURL, storing the access token, refresh token, and computed expiry.
+// It never touches a differently-keyed server's credential, and it replaces
+// any PAT previously stored for this server the same way SetCredential does.
+func SetDeviceCredential(cfg *UserConfig, serverURL, accessToken, refreshToken string, expiresInSeconds int) {
+	if cfg == nil {
+		return
+	}
+	serverURL = normalizeServerURL(serverURL)
+	next := Credential{
+		ServerURL:    serverURL,
+		Token:        accessToken,
+		Kind:         CredentialKindDevice,
+		RefreshToken: refreshToken,
+		ExpiresAt:    time.Now().UTC().Add(time.Duration(expiresInSeconds) * time.Second).Format(time.RFC3339),
+	}
+	for i := range cfg.Credentials {
+		if normalizeServerURL(cfg.Credentials[i].ServerURL) == serverURL {
+			cfg.Credentials[i] = next
+			if legacyCredentialMatches(cfg, serverURL) {
+				cfg.Auth = Auth{}
+			}
+			return
+		}
+	}
+	cfg.Credentials = append(cfg.Credentials, next)
+	if legacyCredentialMatches(cfg, serverURL) {
+		cfg.Auth = Auth{}
+	}
+}
+
+// RefreshTokenForServer returns the refresh token stored for serverURL, or ""
+// when there is none (a PAT, or no stored credential at all).
+func RefreshTokenForServer(cfg *UserConfig, serverURL string) string {
+	if cfg == nil {
+		return ""
+	}
+	want := normalizeServerURL(serverURL)
+	for _, credential := range cfg.Credentials {
+		if normalizeServerURL(credential.ServerURL) == want {
+			return credential.RefreshToken
+		}
+	}
+	return ""
+}
+
+// CredentialExpired reports whether the stored credential for serverURL has
+// passed its expiry. A personal access token (no ExpiresAt) never expires. No
+// stored credential is reported as not expired — TokenForServer already
+// returns "" for that case, and CheckAuth is the caller that reports "not
+// signed in".
+func CredentialExpired(cfg *UserConfig, serverURL string) bool {
+	if cfg == nil {
+		return false
+	}
+	want := normalizeServerURL(serverURL)
+	for _, credential := range cfg.Credentials {
+		if normalizeServerURL(credential.ServerURL) != want {
+			continue
+		}
+		if credential.ExpiresAt == "" {
+			return false
+		}
+		expiry, err := time.Parse(time.RFC3339, credential.ExpiresAt)
+		if err != nil {
+			return false
+		}
+		return time.Now().After(expiry)
+	}
+	return false
 }
 
 // RemoveCredential forgets only the named server's login.

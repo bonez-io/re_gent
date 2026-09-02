@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -71,11 +72,28 @@ func authLoginCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+
+			client := &http.Client{Timeout: 10 * time.Second}
+			// Capability discovery decides the sign-in method, never the
+			// hostname (RFC 0001): a server that lists "device" among
+			// auth_methods gets the device flow; everything else — including
+			// a server unreachable or too old to answer capabilities at
+			// all — keeps the personal-access-token flow exactly as before.
+			caps := remote.FetchCapabilities(cmd.Context(), client, serverURL)
+			if caps.SupportsAuthMethod("device") {
+				viewer, err := runAuthDeviceLogin(cmd, cfg, serverURL, client)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "Signed in to %s as %s (%s).\n", serverURL, viewer.DisplayName, viewer.Username)
+				return nil
+			}
+
 			tokenValue, err := readLoginToken(cmd, tokenStdin)
 			if err != nil {
 				return err
 			}
-			viewer, err := runAuthLogin(authLoginParams{serverURL: serverURL, token: tokenValue, client: &http.Client{Timeout: 10 * time.Second}})
+			viewer, err := runAuthLogin(authLoginParams{serverURL: serverURL, token: tokenValue, client: client})
 			if err != nil {
 				return err
 			}
@@ -174,6 +192,87 @@ func runAuthLogin(params authLoginParams) (authViewer, error) {
 		client = http.DefaultClient
 	}
 	return verifyAuthToken(client, serverURL, strings.TrimSpace(params.token))
+}
+
+// maxDeviceLoginWait bounds how long the polling loop below waits when the
+// server's own expires_in is missing or absurd, so a malformed response
+// cannot hang the command forever.
+const maxDeviceLoginWait = 10 * time.Minute
+
+// runAuthDeviceLogin drives the device-login flow (RFC 0004, "CLI flow"):
+// start, print the URL and code, poll until approved, store the resulting
+// access/refresh pair keyed by server, and verify the identity it was issued
+// for exactly as the PAT flow does.
+func runAuthDeviceLogin(cmd *cobra.Command, cfg *config.UserConfig, serverURL string, client *http.Client) (authViewer, error) {
+	ctx := cmd.Context()
+	auth, err := remote.StartDeviceAuthorization(ctx, client, serverURL)
+	if err != nil {
+		return authViewer{}, fmt.Errorf("start device login: %w", err)
+	}
+
+	out := cmd.OutOrStdout()
+	fmt.Fprintf(out, "To sign in, open this URL and enter the code:\n\n  %s\n  %s\n\n", auth.VerificationURL, auth.UserCode)
+	fmt.Fprintf(out, "Waiting for approval...\n")
+
+	interval := time.Duration(auth.Interval) * time.Second
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	wait := time.Duration(auth.ExpiresIn) * time.Second
+	if wait <= 0 || wait > maxDeviceLoginWait {
+		wait = maxDeviceLoginWait
+	}
+	deadline := time.Now().Add(wait)
+
+	for {
+		if err := sleepOrDone(ctx, interval); err != nil {
+			return authViewer{}, err
+		}
+		if time.Now().After(deadline) {
+			return authViewer{}, fmt.Errorf("device login was not approved in time; run `rgt auth login %s` again", serverURL)
+		}
+
+		pair, err := remote.PollDeviceToken(ctx, client, serverURL, auth.DeviceCode)
+		if err == nil {
+			config.SetDeviceCredential(cfg, serverURL, pair.AccessToken, pair.RefreshToken, pair.ExpiresIn)
+			cfg.Server.URL = serverURL
+			if err := config.Save(cfg); err != nil {
+				return authViewer{}, fmt.Errorf("save login: %w", err)
+			}
+			return verifyAuthToken(client, serverURL, pair.AccessToken)
+		}
+
+		var pending *remote.DevicePollError
+		if !errors.As(err, &pending) {
+			return authViewer{}, fmt.Errorf("poll device login: %w", err)
+		}
+		switch pending.Code {
+		case "authorization_pending":
+			continue
+		case "slow_down":
+			interval += 5 * time.Second
+			continue
+		case "expired":
+			return authViewer{}, fmt.Errorf("device code expired before it was approved; run `rgt auth login %s` again", serverURL)
+		case "denied":
+			return authViewer{}, fmt.Errorf("device login was denied")
+		default:
+			return authViewer{}, fmt.Errorf("device login: unrecognised state %q", pending.Code)
+		}
+	}
+}
+
+// sleepOrDone waits for d, returning early with the context's error if it is
+// cancelled first — so a device-login poll loop cannot outlive its caller.
+func sleepOrDone(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func verifyAuthToken(client *http.Client, serverURL, tokenValue string) (authViewer, error) {

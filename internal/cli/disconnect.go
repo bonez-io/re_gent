@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/bonez-io/re_gent/internal/config"
 	"github.com/bonez-io/re_gent/internal/store"
 	"github.com/spf13/cobra"
 )
@@ -62,18 +63,36 @@ func disconnectProject(root string) error {
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}
-	cfg, err := s.ReadRepoConfig()
+
+	// readRepoConfig (setup.go) understands both the legacy repo_id binding
+	// and the project_id binding RFC 0004 added. s.ReadRepoConfig alone would
+	// call a project-id-only binding "not connected", because
+	// store.RemoteConfig has no field for project_id — see readRepoConfig's
+	// comment for why that gap is closed there instead of here.
+	binding, err := readRepoConfig(root)
 	if err != nil {
 		return fmt.Errorf("read repo config: %w", err)
 	}
-	if cfg.Remote.URL == "" && cfg.Remote.RepoID == "" {
+	if binding.Remote.URL == "" && binding.Remote.RepoID == "" {
 		return fmt.Errorf("%s is not connected to a server", filepath.Base(root))
+	}
+
+	cfg, err := s.ReadRepoConfig()
+	if err != nil {
+		return fmt.Errorf("read repo config: %w", err)
 	}
 	cfg.Remote.URL = ""
 	cfg.Remote.RepoID = ""
 	if err := s.WriteRepoConfig(cfg); err != nil {
 		return fmt.Errorf("write repo config: %w", err)
 	}
+	// store.WriteRepoConfig above marshals store.RepoConfig, which has no
+	// project_id field, so a fresh write already drops it from the file — but
+	// only incidentally, by not knowing the key exists. ClearRemoteBinding is
+	// the explicit form of the same result (a no-op if there is nothing left
+	// to remove), kept here so this does not silently regress if
+	// store.WriteRepoConfig's behaviour ever changes to preserve unknown keys.
+	_ = config.ClearRemoteBinding(filepath.Join(regentDir, "config.toml"))
 
 	if err := removeClaudeHooks(root); err != nil {
 		return fmt.Errorf("remove hooks: %w", err)

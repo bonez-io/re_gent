@@ -88,14 +88,28 @@ func readRemoteConfig(dir string) (store.RemoteConfig, error) {
 // readRepoConfig reads the complete portable project binding. Keep this next
 // to readRemoteConfig: the remote and capture declarations deliberately share
 // .regent/config.toml and must be parsed with the same rules.
+//
+// store.RepoConfig predates the project-id binding RFC 0004 added: its
+// RemoteConfig has a RepoID field and no ProjectID field. Every reader in
+// this package — isConnected, readRemoteConfig, and doctor's own call here —
+// keys off RepoID, so a project-id binding is surfaced through that same
+// field rather than adding a second code path every caller would need to
+// know about. project_id wins when a file somehow carries both, matching
+// config.RemoteBinding.Key.
 func readRepoConfig(dir string) (store.RepoConfig, error) {
-	data, err := os.ReadFile(filepath.Join(dir, ".regent", "config.toml"))
+	path := filepath.Join(dir, ".regent", "config.toml")
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return store.RepoConfig{}, err
 	}
 	var cfg store.RepoConfig
 	if err := toml.Unmarshal(data, &cfg); err != nil {
 		return store.RepoConfig{}, err
+	}
+	if cfg.Remote.RepoID == "" {
+		if binding, bindErr := config.LoadRemoteBinding(path); bindErr == nil {
+			cfg.Remote.RepoID = binding.Key()
+		}
 	}
 	return cfg, nil
 }

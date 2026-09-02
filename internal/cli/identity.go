@@ -221,3 +221,66 @@ func gitOutput(dir string, args ...string) string {
 	}
 	return strings.TrimSpace(string(out))
 }
+
+// Fingerprint is the stable identity of a source repository (RFC 0004,
+// "Project enrollment: connect once"): the git remote's normalized host and
+// path, plus the repository's smallest root commit, hashed together. It is
+// what the client sends the project-enrollment API so that connecting the
+// same repository twice — from two clones, from https and from ssh — lands
+// on the same project instead of creating a duplicate.
+//
+// This is deliberately a different identity than deriveRepoID above.
+// deriveRepoID produces a server-legal *string* by sanitising and truncating,
+// because the legacy protocol interpolates it directly into a URL path
+// segment. A Fingerprint is never interpolated anywhere; it is one opaque
+// field in a JSON body, so it carries the readable Remote and RootCommit
+// alongside the hash rather than destroying them to fit a charset.
+type Fingerprint struct {
+	// Remote is "host/path", normalized exactly as splitRemote does: lower
+	// case, credentials stripped, port stripped, ".git" stripped. Empty when
+	// the repository has no remote.
+	Remote string
+	// RootCommit is the repository's smallest root commit (see firstCommit).
+	// Can be empty for a git repository with no commits yet.
+	RootCommit string
+	// Hex is blake3(Remote + "\n" + RootCommit), hex-encoded. A repository
+	// with no remote hashes "\n"+RootCommit, so the empty Remote is still
+	// part of what was hashed rather than silently absent from it.
+	Hex string
+}
+
+// sourceFingerprint computes projectRoot's Fingerprint. ok is false only when
+// projectRoot is not a git repository at all — the one case RFC 0004 says has
+// no fingerprint, and where the CLI must fall back to requiring --as and
+// always creating a new project. A git repository with no remote still gets a
+// fingerprint (from its root commit alone); a git repository with no commits
+// yet still gets a fingerprint (from its remote alone, or an empty one if it
+// has neither).
+func sourceFingerprint(projectRoot string) (fp Fingerprint, ok bool) {
+	if !isGitRepo(projectRoot) {
+		return Fingerprint{}, false
+	}
+	host, path := splitRemote(gitRemoteURL(projectRoot))
+	remote := ""
+	if host != "" && path != "" {
+		remote = host + "/" + path
+	}
+	root := firstCommit(projectRoot)
+
+	sum := blake3.Sum256([]byte(remote + "\n" + root))
+	return Fingerprint{
+		Remote:     remote,
+		RootCommit: root,
+		Hex:        hex.EncodeToString(sum[:]),
+	}, true
+}
+
+// isGitRepo reports whether dir is inside a git working tree. It is checked
+// separately from gitRemoteURL/firstCommit because both of those legitimately
+// return "" for a real repository (no remote configured, no commits yet) —
+// only this distinguishes "no such fact" from "not a git repository at all".
+func isGitRepo(dir string) bool {
+	cmd := exec.Command("git", "-C", dir, "rev-parse", "--is-inside-work-tree")
+	out, err := cmd.Output()
+	return err == nil && strings.TrimSpace(string(out)) == "true"
+}

@@ -150,7 +150,7 @@ func printSyncStatus(out io.Writer, cfg remote.Config, cache *store.Store, spool
 	}
 
 	fmt.Fprintf(out, "server:  %s\n", cfg.ServerURL)
-	fmt.Fprintf(out, "repo:    %s\n", cfg.RepoID)
+	fmt.Fprintf(out, "repo:    %s\n", cfg.Key())
 	fmt.Fprintf(out, "cache:   %s\n", cache.Root)
 
 	if status.Clean() {

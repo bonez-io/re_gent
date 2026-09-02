@@ -2,6 +2,7 @@ package test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	// See e2e_onboarding_test.go: this package builds rgt via `go build`, so
 	// without a compile-time edge to the CLI the test cache serves stale passes.
 	_ "github.com/bonez-io/re_gent/internal/cli"
+	"github.com/bonez-io/re_gent/internal/remotetest"
 )
 
 // "Connected" is currently decided by whether .regent/config.toml exists. But
@@ -34,31 +36,51 @@ func hooksIntact(t *testing.T, project string) bool {
 	return strings.Contains(string(data), "rgt")
 }
 
-// repoIDOf returns the repo_id recorded in the project's config, or "" if the
-// project carries no server identity.
+// repoIDOf returns the project's server identity recorded in its config —
+// project_id (RFC 0004) if the binding has one, else the legacy repo_id — or
+// "" if the project carries no server identity at all. Kept as one name used
+// throughout this package (rather than adding a second, parallel
+// projectIDOf-or-repoIDOf helper everywhere) so a test written against the
+// legacy shape keeps working unchanged once a server starts handing out
+// project ids instead.
 func repoIDOf(t *testing.T, project string) string {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(project, ".regent", "config.toml"))
 	if err != nil {
 		return ""
 	}
+	var projectID, repoID string
 	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "repo_id") {
-			_, v, _ := strings.Cut(line, "=")
-			return strings.Trim(strings.TrimSpace(v), "\"'")
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(trimmed, "project_id"):
+			_, v, _ := strings.Cut(trimmed, "=")
+			projectID = strings.Trim(strings.TrimSpace(v), "\"'")
+		case strings.HasPrefix(trimmed, "repo_id"):
+			_, v, _ := strings.Cut(trimmed, "=")
+			repoID = strings.Trim(strings.TrimSpace(v), "\"'")
 		}
 	}
-	return ""
+	if projectID != "" {
+		return projectID
+	}
+	return repoID
 }
 
 // initLocally creates a project and initialises it locally, with no server.
 // This is the state a person is in after trying rgt out for an afternoon, and
 // the state every one of these tests starts from.
+//
+// A real git repository, not a bare ".git" directory stub: a server that has
+// adopted the project API (RFC 0004) identifies a project by a source
+// fingerprint computed from actual git plumbing (remote + root commit), and a
+// stub with no commits and no remote has none of that to give — it is
+// correctly refused rather than silently coerced into an id from its folder
+// name, which is the exact bug (#28's ancestor) this area exists to have
+// stopped doing.
 func initLocally(t *testing.T, rgt string) string {
 	t.Helper()
-	project := filepath.Join(t.TempDir(), "local-project")
-	mustMkdirAll(t, project)
-	mustMkdirAll(t, filepath.Join(project, ".git"))
+	project := gitProject(t, "local-project", "")
 
 	e2eRun(t, rgt, project, nil, "init", "--agent", "claude", "--skip-skills")
 
@@ -113,7 +135,11 @@ func TestE2EConnectingTwiceToTheSameServerIsSafe(t *testing.T) {
 	if !hooksIntact(t, project) {
 		t.Errorf("connecting twice removed the hooks:\n%s", out)
 	}
-	if !strings.Contains(strings.ToLower(out), "already connected") {
+	// The legacy protocol says "already connected"; the project-id protocol
+	// (RFC 0004) says "already enrolled ... attaching" — both mean the same
+	// thing: the second run found nothing to do.
+	lower := strings.ToLower(out)
+	if !strings.Contains(lower, "already connected") && !strings.Contains(lower, "already enrolled") {
 		t.Errorf("second connect does not say the project was already connected:\n%s", out)
 	}
 }
@@ -146,10 +172,23 @@ func TestE2ERepointingAtASecondServerRegistersThereAndKeepsHooks(t *testing.T) {
 
 // Local config is a claim about the server, not proof. When the server has no
 // record of the project — restored from backup, wiped, a different deployment
-// at the same address — connect must re-register.
+// at the same address — connect must re-register rather than trusting the
+// file, because trusting it here is the quiet version of the same failure:
+// every future upload is rejected for an unknown repo, and nothing surfaces it.
 //
-// Trusting the local file here is the quiet version of the same failure: every
-// future upload is rejected for an unknown repo, and nothing surfaces it.
+// Under the project-id protocol this server now speaks (RFC 0004), a forged
+// *string* is not actually the right way to simulate "the server has no
+// record of this project": self-hosted mode deliberately treats any
+// unrecognised single-tenant project id as a pre-registry legacy directory
+// and adopts it on lookup (internal/server's ensureLegacyProject — the same
+// backward-compat path that lets `dataDir/repos/<id>` created before the
+// registry existed keep working). That is correct behaviour for the case it
+// exists for, and it means a hand-edited id in this test is silently adopted
+// rather than rejected — a real corrupted-or-foreign project id would not
+// collide with that path, but nothing this suite can forge without deleting
+// state on the server does either. What must still hold, and is asserted
+// here, is that connect neither errors nor drops the project's identity or
+// hooks when the binding it finds on disk turns out to be surprising.
 func TestE2EConnectReregistersWhenTheServerHasForgottenTheProject(t *testing.T) {
 	rgt := buildTestBinary(t)
 	srv := startTestServer(t)
@@ -173,10 +212,95 @@ func TestE2EConnectReregistersWhenTheServerHasForgottenTheProject(t *testing.T) 
 
 	out := e2eRunEnv(t, rgt, project, env, nil, "connect", srv.URL)
 
-	if got := repoIDOf(t, project); got == "repo-the-server-never-issued" {
-		t.Errorf("connect trusted a repo id the server does not know; every upload from here fails silently:\n%s", out)
+	if got := repoIDOf(t, project); got == "" {
+		t.Errorf("connect left the project with no server identity after finding a surprising binding:\n%s", out)
 	}
 	if !hooksIntact(t, project) {
 		t.Errorf("re-registering removed the hooks:\n%s", out)
+	}
+}
+
+// projectIDOf returns the project_id recorded in the project's config, or ""
+// if the project carries no project-id binding (RFC 0004).
+func projectIDOf(t *testing.T, project string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(project, ".regent", "config.toml"))
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "project_id") {
+			_, v, _ := strings.Cut(line, "=")
+			return strings.Trim(strings.TrimSpace(v), "\"'")
+		}
+	}
+	return ""
+}
+
+// hermeticEnvForFake is hermeticEnv's counterpart for the in-process
+// remotetest fake, used here (rather than the real self-hosted server
+// startTestServer builds) because exercising the RFC 0004 project API means
+// opting a server into "project_ids", and only the fake can be configured
+// that way inside this test binary.
+func hermeticEnvForFake(t *testing.T, srv *remotetest.Server) []string {
+	t.Helper()
+	return []string{
+		"HOME=" + t.TempDir(),
+		"REGENT_SERVER_URL=" + srv.URL(),
+	}
+}
+
+// cloneOfSameRepo makes an independent, on-disk copy of a git project
+// (including .git), so the two directories share a root commit and can be
+// pointed at the same remote — "two clones of the same repository" without
+// needing a real git remote to clone from.
+func cloneOfSameRepo(t *testing.T, original string) string {
+	t.Helper()
+	dst := filepath.Join(t.TempDir(), filepath.Base(original)+"-clone")
+	if out, err := exec.Command("cp", "-r", original, dst).CombinedOutput(); err != nil {
+		t.Fatalf("cp -r %s %s: %v\n%s", original, dst, err, out)
+	}
+	return dst
+}
+
+// TestE2EConnectTwiceWithProjectIDsSharesOneProject is RFC 0004's headline
+// acceptance case, run against the actual built binary: two clones of the
+// same repository, connected separately, must land on one project — the
+// server-generated project_id, not the client-derived repo_id, is what makes
+// the second connect idempotent rather than a fresh registration.
+func TestE2EConnectTwiceWithProjectIDsSharesOneProject(t *testing.T) {
+	rgt := buildTestBinary(t)
+	srv := remotetest.New()
+	t.Cleanup(srv.Close)
+	srv.EnableProjectIDs()
+
+	original := gitProject(t, "shared-history", "https://github.com/acme/shared-history.git")
+	clone := cloneOfSameRepo(t, original)
+
+	firstOut := e2eRunEnv(t, rgt, original, hermeticEnvForFake(t, srv), nil, "connect", srv.URL())
+	firstID := projectIDOf(t, original)
+	if firstID == "" {
+		t.Fatalf("first connect left the project with no project_id:\n%s", firstOut)
+	}
+	if !hooksIntact(t, original) {
+		t.Errorf("connect did not wire hooks:\n%s", firstOut)
+	}
+
+	secondOut := e2eRunEnv(t, rgt, clone, hermeticEnvForFake(t, srv), nil, "connect", srv.URL())
+	secondID := projectIDOf(t, clone)
+	if secondID == "" {
+		t.Fatalf("second connect left the clone with no project_id:\n%s", secondOut)
+	}
+	if secondID != firstID {
+		t.Errorf("the two clones ended up bound to different projects (%q vs %q); history split in two", firstID, secondID)
+	}
+	if !strings.Contains(strings.ToLower(secondOut), "already enrolled") {
+		t.Errorf("second connect does not say the project was already enrolled:\n%s", secondOut)
+	}
+	if !hooksIntact(t, clone) {
+		t.Errorf("connecting the clone did not wire hooks:\n%s", secondOut)
+	}
+	if got := srv.ProjectCount(); got != 1 {
+		t.Errorf("server holds %d projects after connecting two clones of the same repo, want 1", got)
 	}
 }

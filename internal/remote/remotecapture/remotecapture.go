@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bonez-io/re_gent/internal/capture"
+	"github.com/bonez-io/re_gent/internal/config"
 	"github.com/bonez-io/re_gent/internal/remote"
 	"github.com/bonez-io/re_gent/internal/store"
 )
@@ -44,6 +45,15 @@ func Open(cwd string, cfg remote.Config) (*capture.Recorder, *Link, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	// A device-issued access token (RFC 0004) expires; every hook invocation
+	// is a fresh process, so the refreshed pair has to be written back to
+	// disk here or the next invocation starts from the same stale token and
+	// pays the refresh round trip again. A personal access token has no
+	// RefreshToken, so this is a no-op for the flow every self-hosted server
+	// still uses.
+	if cfg.RefreshToken != "" {
+		client.SetRefresh(cfg.RefreshToken, persistRefreshedToken(cfg.ServerURL))
+	}
 	cacheDir, err := remote.CacheDirFor(cfg)
 	if err != nil {
 		return nil, nil, err
@@ -66,6 +76,27 @@ func Open(cwd string, cfg remote.Config) (*capture.Recorder, *Link, error) {
 	link := &Link{Client: client, Spool: spool, Timeout: cfg.Timeout}
 	rec.Delivery = link
 	return rec, link, nil
+}
+
+// persistRefreshedToken returns an HTTPClient.SetRefresh callback that writes
+// a refreshed access/refresh pair into the machine-local config so the next
+// process (the next hook invocation, a `rgt pull`, a `rgt sync`) starts
+// already-authenticated instead of repeating the same refresh.
+//
+// This runs inside a live agent turn, so a failure here is deliberately
+// swallowed: losing the refreshed pair costs one extra refresh round trip
+// next time, which is recoverable, whereas surfacing an error here would not
+// be — nothing calling this treats a delivery helper's persistence step as
+// something the agent turn should fail over.
+func persistRefreshedToken(serverURL string) func(accessToken, refreshToken string, expiresIn int) {
+	return func(accessToken, refreshToken string, expiresIn int) {
+		cfg, err := config.Load()
+		if err != nil {
+			return
+		}
+		config.SetDeviceCredential(cfg, serverURL, accessToken, refreshToken, expiresIn)
+		_ = config.Save(cfg)
+	}
 }
 
 // Start delivers work an earlier hook invocation queued.

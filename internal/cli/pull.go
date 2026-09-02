@@ -100,7 +100,7 @@ func runPullCommand(out io.Writer, cfg remote.Config, opts pullOptions) error {
 		return err
 	}
 	if len(refs) == 0 {
-		fmt.Fprintf(out, "%s holds no history for %s yet.\n", cfg.ServerURL, cfg.RepoID)
+		fmt.Fprintf(out, "%s holds no history for %s yet.\n", cfg.ServerURL, cfg.Key())
 		fmt.Fprintln(out, "Nothing has been pushed to this project. Once a teammate records a session, 'rgt pull' will find it.")
 		return nil
 	}

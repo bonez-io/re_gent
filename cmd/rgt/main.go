@@ -149,7 +149,7 @@ func commandStore(cwd string) (*store.Store, error) {
 	}
 	s, err := store.Open(cacheDir)
 	if err != nil {
-		return nil, &cli.NotPulledError{Message: fmt.Sprintf("This machine has no cached history for %s. Run 'rgt status' to check the server, then 'rgt pull' when history is available.", cfg.RepoID)}
+		return nil, &cli.NotPulledError{Message: fmt.Sprintf("This machine has no cached history for %s. Run 'rgt status' to check the server, then 'rgt pull' when history is available.", cfg.Key())}
 	}
 	return s, nil
 }
@@ -168,7 +168,7 @@ func commandNotPulledReporter(w io.Writer) bool {
 }
 
 func connectedNotPulledReport(cfg remote.Config) string {
-	return fmt.Sprintf("Connected to %s as %s, not yet pulled.\nThis project's history is recorded on the server; none of it is on this machine yet.\n  - Fetch it: rgt pull", cfg.ServerURL, cfg.RepoID)
+	return fmt.Sprintf("Connected to %s as %s, not yet pulled.\nThis project's history is recorded on the server; none of it is on this machine yet.\n  - Fetch it: rgt pull", cfg.ServerURL, cfg.Key())
 }
 
 // reportServerModeCache asks the live server before making any claim about
@@ -187,7 +187,7 @@ func reportServerModeCache(w io.Writer, cfg remote.Config) {
 		fmt.Fprintf(w,
 			"Connected to %s as %s, but the server does not know this project.\n"+
 				"  - Re-register it: rgt connect %s\n",
-			cfg.ServerURL, cfg.RepoID, cfg.ServerURL)
+			cfg.ServerURL, cfg.Key(), cfg.ServerURL)
 	case err != nil:
 		fmt.Fprintf(w,
 			"Cannot reach %s to check this project's history; this machine's cache is empty.\n"+
@@ -198,7 +198,7 @@ func reportServerModeCache(w io.Writer, cfg remote.Config) {
 		fmt.Fprintf(w,
 			"Connected to %s as %s; the server knows this project but holds no history yet.\n"+
 				"  - Record a session here, or ask a teammate to deliver one with: rgt sync\n",
-			cfg.ServerURL, cfg.RepoID)
+			cfg.ServerURL, cfg.Key())
 	default:
 		fmt.Fprintln(w, connectedNotPulledReport(cfg))
 	}

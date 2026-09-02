@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,13 +29,22 @@ type connectParams struct {
 	configPath  string // global config path; "" means default
 	httpClient  *http.Client
 	// repoID overrides the identity that would otherwise be derived from the
-	// project's git remote. Empty means derive.
+	// project's git remote (legacy server), or the display name that would
+	// otherwise be derived from the fingerprint's remote (project-id server,
+	// RFC 0004). Empty means derive.
 	repoID string
 	// noGitHook leaves the Git pre-push hook alone (--no-git-hook). Agent hooks
 	// are unaffected: this opts out of sync-on-push, not of capture.
 	noGitHook bool
 	// agent selects which host integrations to wire. Empty retains auto-detection.
 	agent agentTarget
+	// org selects the organization enrollment route on a project-id server
+	// (RFC 0004). Ignored against a legacy server.
+	org string
+	// asFork accepts enrolling a detected fork as its own project. Without
+	// it, a fork match stops connect rather than silently picking one of the
+	// two choices RFC 0004 describes.
+	asFork bool
 	// out receives diagnostic and exceptional state. Normal onboarding output
 	// is rendered by connectHere after the operation succeeds.
 	out io.Writer
@@ -114,30 +124,32 @@ connect replaces setup, which did the same job with different answers.`,
 				}
 			}
 
-			// An identity supplied here is checked before anything is written
-			// or registered. A name the server will reject must fail with the
-			// name in the message, not as a 400 halfway through connecting.
+			// The identity/display name supplied here is validated once
+			// runConnect knows which server it is talking to: against a
+			// legacy server it is still a repo_id, constrained to that
+			// charset, and gets checked before anything is written; against a
+			// server with the project API it is a free-text display name (RFC
+			// 0004), which repo_id's charset would wrongly reject ("Payments
+			// API" has a space and an uppercase letter). See runConnectLegacy
+			// and runConnectProject.
 			explicitID, _ := cmd.Flags().GetString("as")
-			if explicitID != "" {
-				if err := remote.ValidateRepoID(explicitID); err != nil {
-					return fmt.Errorf("cannot use %q as this project's identity: %w", explicitID, err)
-				}
-			}
 
 			noGitHook, _ := cmd.Flags().GetBool("no-git-hook")
 			agent, _ := cmd.Flags().GetString("agent")
 			if _, err := resolveAgentTargets(cwd, agentTarget(agent)); err != nil {
 				return err
 			}
+			org, _ := cmd.Flags().GetString("org")
+			asFork, _ := cmd.Flags().GetBool("as-fork")
 
-			return connectHere(serverURL, cwd, explicitID, noGitHook, agentTarget(agent), cmd.OutOrStdout(), isTerminal(os.Stdin))
+			return connectHere(serverURL, cwd, explicitID, noGitHook, agentTarget(agent), org, asFork, cmd.OutOrStdout(), isTerminal(os.Stdin))
 		},
 	}
 	// Derivation is a guess and it will be wrong for someone: a fork's remote,
 	// a monorepo whose subdirectories are separate projects, a checkout with no
 	// remote whose derived id is a hash nobody can read. This is how they say
 	// otherwise. It is recorded in the binding, so it is said once.
-	cmd.Flags().String("as", "", "identity to register this project under, instead of deriving one from its git remote")
+	cmd.Flags().String("as", "", "identity (legacy server) or display name (project-id server) for this project, instead of deriving one")
 	// Sync-on-push is on by default because a queue that outlives an outage
 	// should drain at the next moment work is shared, without anyone
 	// remembering `rgt sync`. This is the per-run exit; REGENT_GIT_SYNC_ON_PUSH=0
@@ -146,6 +158,15 @@ connect replaces setup, which did the same job with different answers.`,
 	cmd.Flags().String("agent", string(agentAuto), "Agent hooks to configure: auto, claude, codex, opencode, pi, both, all")
 	cmd.Flags().String("url", "", "public http(s) URL to prove and bind when provisioning an SSH target")
 	cmd.Flags().Bool("yes", false, "provision an SSH target without asking for confirmation")
+	// --org selects the organization route (RFC 0004) on a server that has
+	// adopted the project API. Meaningless, and ignored, against a legacy
+	// server: there is nothing for it to select there.
+	cmd.Flags().String("org", "", "organization to enroll this project in (project-id servers only)")
+	// The default for a detected fork is to explain the two choices and do
+	// nothing, because only one of them — contribute to the upstream project —
+	// is implemented, and it is not this one. --as-fork accepts the other
+	// choice explicitly: enroll it as your own project.
+	cmd.Flags().Bool("as-fork", false, "enroll a detected fork as its own project instead of stopping to ask")
 	return cmd
 }
 
@@ -161,7 +182,7 @@ connect replaces setup, which did the same job with different answers.`,
 // canPrompt is false wherever there is no person to answer — under
 // `curl | sh`, in CI, in a devcontainer — and the share question is simply not
 // asked there.
-func connectHere(serverURL, dir, repoID string, noGitHook bool, agent agentTarget, out io.Writer, canPrompt bool) error {
+func connectHere(serverURL, dir, repoID string, noGitHook bool, agent agentTarget, org string, asFork bool, out io.Writer, canPrompt bool) error {
 	if out == nil {
 		out = io.Discard
 	}
@@ -169,7 +190,7 @@ func connectHere(serverURL, dir, repoID string, noGitHook bool, agent agentTarge
 	flow.Header("connect", filepath.Base(dir))
 	var setupOutput bytes.Buffer
 	err := flow.Wait("Installing project integration", func() error {
-		return runConnect(connectParams{serverURL: serverURL, projectRoot: dir, repoID: repoID, noGitHook: noGitHook, agent: agent, out: &setupOutput})
+		return runConnect(connectParams{serverURL: serverURL, projectRoot: dir, repoID: repoID, noGitHook: noGitHook, agent: agent, org: org, asFork: asFork, out: &setupOutput})
 	})
 	if setupOutput.Len() > 0 {
 		_, _ = io.Copy(out, &setupOutput)
@@ -245,6 +266,32 @@ func runConnect(p connectParams) error {
 		Verbosef(p.writer(), "  using existing .regent/\n")
 	}
 
+	// 2.5. Discover what the server supports (RFC 0004). This never fails
+	// connect on its own: a server that predates capabilities, or one that is
+	// simply unreachable right now, is legacy, and runConnectLegacy is
+	// exactly what every server behaved as before this existed. Only a
+	// server that explicitly lists "project_ids" gets the new flow.
+	caps := remote.FetchCapabilities(context.Background(), p.httpClient, p.serverURL)
+	if caps.HasFeature("project_ids") {
+		return runConnectProject(p, s, token)
+	}
+	return runConnectLegacy(p, s, token)
+}
+
+// runConnectLegacy is every server's behaviour before RFC 0004: a
+// client-derived repo_id, registered with POST /repos, bound in
+// .regent/config.toml as [remote].repo_id.
+func runConnectLegacy(p connectParams, s *store.Store, token string) error {
+	if p.repoID != "" {
+		// Checked here rather than at flag-parse time: against a project-id
+		// server this same flag is a free-text display name, so the
+		// repo_id charset restriction only makes sense once we know this is
+		// the legacy path. See ConnectCmd's "as" flag.
+		if err := remote.ValidateRepoID(p.repoID); err != nil {
+			return fmt.Errorf("cannot use %q as this project's identity: %w", p.repoID, err)
+		}
+	}
+
 	// 3. Check whether this repo is already connected to this server.
 	repoCfg, err := s.ReadRepoConfig()
 	if err != nil {
@@ -303,6 +350,152 @@ func runConnect(p connectParams) error {
 
 	// 7. Wire Claude hooks (merge/dedupe).
 	return connectWireHooksForTargetTo(p.projectRoot, p.noGitHook, p.agent, p.writer())
+}
+
+// runConnectProject is RFC 0004's "connect once": the server has the project
+// API, so identity comes from a computed source fingerprint rather than a
+// derived string, and the binding is a project_id rather than a repo_id.
+//
+// Unlike runConnectLegacy, the binding is written last: stage the cache,
+// import existing history, confirm it landed, and only then write
+// .regent/config.toml (issue #45's atomic cutover). A failure at any earlier
+// point leaves the previous binding — none, or a different server's — exactly
+// as it was, per RFC 0001 step 6: "A failure before this point leaves the
+// previous capture mode active."
+func runConnectProject(p connectParams, s *store.Store, token string) error {
+	ctx := context.Background()
+	regentConfigPath := filepath.Join(p.projectRoot, ".regent", "config.toml")
+
+	// Already bound to a project on this server? Confirm with the server
+	// instead of trusting the file, and stop: this is the no-op re-run RFC
+	// 0004 requires ("must GET the project, confirm it exists, and be a
+	// no-op on success").
+	binding, err := config.LoadRemoteBinding(regentConfigPath)
+	if err != nil {
+		return fmt.Errorf("read repo config: %w", err)
+	}
+	switch {
+	case binding.ProjectID != "" && binding.URL == p.serverURL:
+		project, getErr := remote.GetProject(ctx, p.httpClient, p.serverURL, token, binding.ProjectID)
+		if getErr == nil {
+			Verbosef(p.writer(), "  already connected to %s (project_id: %s)\n", p.serverURL, binding.ProjectID)
+			fmt.Fprintf(p.writer(), "  %s already enrolled as %q, attaching\n", style.Success(""), project.DisplayName)
+			return connectWireHooksForTargetTo(p.projectRoot, p.noGitHook, p.agent, p.writer())
+		}
+		if remote.IsNotSignedIn(getErr) {
+			return ErrNotSignedIn
+		}
+		fmt.Fprintf(p.writer(), "  %s %s has no record of project %s; enrolling again.\n", style.Warning(""), p.serverURL, binding.ProjectID)
+	case binding.URL != "" && binding.URL != p.serverURL:
+		// Moving to a different server. This is a move, not a disconnect: the
+		// hooks stay, capture never stops. Naming the old server is the only
+		// warning the user gets that their history did not travel with them.
+		fmt.Fprintf(p.writer(), "  %s Moving this project from %s to %s.\n", style.Warning(""), binding.URL, p.serverURL)
+		fmt.Fprintf(p.writer(), "    History already on %s stays there; it is not copied.\n", binding.URL)
+	}
+
+	// Compute the fingerprint and pick a display name. A directory that is
+	// not a git repository has no fingerprint at all (RFC 0004): it is always
+	// a new project, named from --as when given, else from the folder — the
+	// same fallback a git repository with no remote uses below, and the same
+	// one deriveRepoID always used for a non-git directory. It still
+	// connects; it is just told, once, that nothing will find its way back
+	// to this exact project from a different checkout, because there is no
+	// fingerprint for a second checkout to match.
+	fp, hasFingerprint := sourceFingerprint(p.projectRoot)
+	if !hasFingerprint {
+		fmt.Fprintf(p.writer(), "  %s\n", style.DimText(fmt.Sprintf(
+			"%s is not a git repository, so it has no source fingerprint; a different checkout will not attach to this project automatically.",
+			filepath.Base(p.projectRoot))))
+	}
+	displayName := p.repoID
+	if displayName == "" && fp.Remote != "" {
+		displayName = lastPathSegment(fp.Remote)
+	}
+	if displayName == "" {
+		displayName = filepath.Base(p.projectRoot)
+	}
+
+	req := remote.EnrollProjectRequest{Org: p.org, DisplayName: displayName}
+	if hasFingerprint {
+		req.Fingerprint = fp.Hex
+		req.Remote = fp.Remote
+		req.RootCommit = fp.RootCommit
+	}
+
+	result, err := remote.EnrollProject(ctx, p.httpClient, p.serverURL, token, req)
+	if err != nil {
+		if remote.IsNotSignedIn(err) {
+			return ErrNotSignedIn
+		}
+		if remote.IsFingerprintConflict(err) {
+			return fmt.Errorf("%s is already enrolled in this organization, and you do not have access to it; ask an admin to add you", filepath.Base(p.projectRoot))
+		}
+		return fmt.Errorf("enroll project: %w", err)
+	}
+
+	// A fork of a public project: RFC 0004 defaults to offering to contribute
+	// to the upstream instead of enrolling a new project, and contributing is
+	// not implemented. Rather than pretend otherwise, stop and say so plainly
+	// unless the caller has explicitly chosen to enroll the fork on its own.
+	if result.Upstream != nil && !p.asFork {
+		orgFlag := ""
+		if p.org != "" {
+			orgFlag = " --org " + p.org
+		}
+		return fmt.Errorf(`%s looks like a fork of %q (%s).
+
+Two choices:
+  - enroll it as your own project:
+      rgt connect %s%s --as-fork
+  - contribute your sessions to %q instead:
+      not implemented yet
+
+Nothing was written.`, filepath.Base(p.projectRoot), result.Upstream.DisplayName, result.Upstream.ID, p.serverURL, orgFlag, result.Upstream.DisplayName)
+	}
+
+	if result.Created {
+		Verbosef(p.writer(), "  enrolled project: %s (%s)\n", result.Project.DisplayName, result.Project.ID)
+	} else {
+		// The connect-once guarantee: this fingerprint was already enrolled,
+		// by this machine or another clone of the same repository, and the
+		// server handed back the existing project instead of a duplicate.
+		fmt.Fprintf(p.writer(), "  %s already enrolled as %q, attaching\n", style.Success(""), result.Project.DisplayName)
+	}
+
+	// Carry over history recorded before this moment, BEFORE writing the
+	// binding: the binding is the thing that says "the server is now
+	// canonical", and it must not say that until the history is actually
+	// there (#45).
+	var carryover bytes.Buffer
+	outcome := carryOverLocalHistory(&carryover, s, carryOverConfigForProject(p, result.Project.ID, token))
+	if outcome.Failed() {
+		_, _ = io.Copy(p.writer(), &carryover)
+		return fmt.Errorf("could not carry this project's existing history over to %s; the previous capture mode is unchanged and no binding was written", p.serverURL)
+	}
+	if Verbose() || strings.Contains(carryover.String(), carriedOverHeadline) || strings.Contains(carryover.String(), "⚠") {
+		_, _ = io.Copy(p.writer(), &carryover)
+	}
+
+	// Only now write the binding.
+	if err := config.SaveRemoteBinding(regentConfigPath, config.RemoteBinding{URL: p.serverURL, ProjectID: result.Project.ID}); err != nil {
+		return fmt.Errorf("write repo config: %w", err)
+	}
+	Verbosef(p.writer(), "  wrote remote config\n")
+
+	return connectWireHooksForTargetTo(p.projectRoot, p.noGitHook, p.agent, p.writer())
+}
+
+// lastPathSegment returns the part of a "host/path" fingerprint remote after
+// its final "/", used as the default display name for an enrolled project —
+// RFC 0004: "Display name defaults to --as or the last path segment of the
+// remote."
+func lastPathSegment(remote string) string {
+	remote = strings.TrimSuffix(remote, "/")
+	if i := strings.LastIndexByte(remote, '/'); i >= 0 {
+		return remote[i+1:]
+	}
+	return remote
 }
 
 // connectWireHooks wires every agent detected in the project, not just Claude.

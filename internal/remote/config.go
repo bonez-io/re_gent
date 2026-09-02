@@ -35,21 +35,44 @@ const maxTimeout = 60 * time.Second
 type Config struct {
 	// ServerURL is the base URL of the re_gent server, e.g. https://regent.example.com.
 	ServerURL string
-	// RepoID is the repository name registered with the server.
+	// RepoID is the repository name registered with the server. Legacy
+	// identifier, kept for servers that predate the project API (RFC 0004).
+	// Prefer Key() over reading this directly.
 	RepoID string
+	// ProjectID is the server-generated project id (RFC 0004), e.g.
+	// "prj_2f9c1a4b7d3e6081". Empty when this binding predates project ids.
+	// Prefer Key() over reading this directly.
+	ProjectID string
 	// Token is the bearer token used for authentication. It is never logged.
 	Token string
+	// RefreshToken exchanges for a new Token once it expires (RFC 0004 device
+	// login). Empty for a personal access token, which does not expire.
+	RefreshToken string
 	// Timeout bounds all network work for one hook invocation.
 	Timeout time.Duration
 	// CacheDir overrides the default machine-local cache location.
 	CacheDir string
 }
 
+// Key is the identifier every storage path and protocol call keys on:
+// ProjectID when set, else the legacy RepoID. Every caller that used to read
+// RepoID directly should call Key instead, so a project-id binding and a
+// legacy repo-id binding are interchangeable to the rest of the program. See
+// also config.RemoteBinding.Key, which answers the same question for the
+// on-disk binding before it becomes a Config.
+func (c Config) Key() string {
+	if c.ProjectID != "" {
+		return c.ProjectID
+	}
+	return c.RepoID
+}
+
 // Enabled reports whether server mode is configured. Both a server URL and a
-// repo id are required: half a configuration is treated as no configuration so
-// that a typo degrades to local mode rather than to a broken remote.
+// project identity are required: half a configuration is treated as no
+// configuration so that a typo degrades to local mode rather than to a
+// broken remote.
 func (c Config) Enabled() bool {
-	return c.ServerURL != "" && c.RepoID != ""
+	return c.ServerURL != "" && c.Key() != ""
 }
 
 // Validate checks a server-mode configuration without contacting the server.
@@ -73,7 +96,7 @@ func (c Config) Validate() error {
 	if err := ValidateCredentialTransport(c.ServerURL, c.Token); err != nil {
 		return err
 	}
-	return ValidateRepoID(c.RepoID)
+	return ValidateRepoID(c.Key())
 }
 
 // ValidateCredentialTransport prevents bearer credentials from crossing a
@@ -138,16 +161,18 @@ type fileConfig struct {
 		Timeout string `toml:"timeout"`
 	} `toml:"server"`
 	Remote struct {
-		URL    string `toml:"url"`
-		RepoID string `toml:"repo_id"`
+		URL       string `toml:"url"`
+		RepoID    string `toml:"repo_id"`
+		ProjectID string `toml:"project_id"`
 	} `toml:"remote"`
 	Auth struct {
 		ServerURL string `toml:"server_url"`
 		Token     string `toml:"token"`
 	} `toml:"auth"`
 	Credentials []struct {
-		ServerURL string `toml:"server_url"`
-		Token     string `toml:"token"`
+		ServerURL    string `toml:"server_url"`
+		Token        string `toml:"token"`
+		RefreshToken string `toml:"refresh_token"`
 	} `toml:"credentials"`
 }
 
@@ -237,30 +262,49 @@ func RepoConfigPath(cwd string) string {
 	return ""
 }
 
-// applyEnv overlays REGENT_* environment variables onto cfg. Env values always
-// win over file values.
+// applyEnv overlays REGENT_* environment variables onto cfg. A present,
+// non-empty value always wins over the file. A variable that is present but
+// empty is treated as absent, not as an instruction to blank the field: a
+// caller that wants "definitely no ambient override" (a test harness giving
+// every child process a clean, predictable environment; a shell that exports
+// REGENT_SERVER_URL= defensively before a script that may or may not set it)
+// needs that to be inert, and "empty string overrides a real file binding"
+// has no legitimate use this codebase has ever asked for — it can only ever
+// discard a working configuration by accident.
 func applyEnv(env Env, cfg *Config) error {
 	if env == nil {
 		env = OSEnv
 	}
 	if v, ok := env("REGENT_SERVER_URL"); ok {
-		nextURL := strings.TrimSpace(v)
-		if strings.TrimRight(nextURL, "/") != strings.TrimRight(cfg.ServerURL, "/") {
-			// A file credential is scoped to the file's server. Redirecting the
-			// request through the environment must not carry that credential to
-			// another host; REGENT_TOKEN is the explicit override for that case.
-			cfg.Token = ""
+		if nextURL := strings.TrimSpace(v); nextURL != "" {
+			if strings.TrimRight(nextURL, "/") != strings.TrimRight(cfg.ServerURL, "/") {
+				// A file credential is scoped to the file's server. Redirecting the
+				// request through the environment must not carry that credential to
+				// another host; REGENT_TOKEN is the explicit override for that case.
+				cfg.Token = ""
+			}
+			cfg.ServerURL = nextURL
 		}
-		cfg.ServerURL = nextURL
 	}
 	if v, ok := env("REGENT_REPO_ID"); ok {
-		cfg.RepoID = strings.TrimSpace(v)
+		if id := strings.TrimSpace(v); id != "" {
+			cfg.RepoID = id
+		}
+	}
+	if v, ok := env("REGENT_PROJECT_ID"); ok {
+		if id := strings.TrimSpace(v); id != "" {
+			cfg.ProjectID = id
+		}
 	}
 	if v, ok := env("REGENT_TOKEN"); ok {
-		cfg.Token = strings.TrimSpace(v)
+		if token := strings.TrimSpace(v); token != "" {
+			cfg.Token = token
+		}
 	}
 	if v, ok := env("REGENT_CACHE_DIR"); ok {
-		cfg.CacheDir = strings.TrimSpace(v)
+		if dir := strings.TrimSpace(v); dir != "" {
+			cfg.CacheDir = dir
+		}
 	}
 	if v, ok := env("REGENT_SERVER_TIMEOUT"); ok {
 		d, err := time.ParseDuration(strings.TrimSpace(v))
@@ -296,13 +340,17 @@ func mergeFile(path string, cfg *Config) error {
 
 	setIfEmpty(&cfg.ServerURL, fc.Server.URL, fc.Remote.URL, fc.Auth.ServerURL)
 	setIfEmpty(&cfg.RepoID, fc.Server.RepoID, fc.Remote.RepoID)
+	setIfEmpty(&cfg.ProjectID, fc.Remote.ProjectID)
 	credentialToken := ""
+	credentialRefreshToken := ""
 	for _, credential := range fc.Credentials {
 		if strings.TrimRight(strings.TrimSpace(credential.ServerURL), "/") == strings.TrimRight(cfg.ServerURL, "/") {
 			credentialToken = credential.Token
+			credentialRefreshToken = credential.RefreshToken
 			break
 		}
 	}
+	setIfEmpty(&cfg.RefreshToken, credentialRefreshToken)
 	legacyToken := ""
 	legacyServerURL := fc.Auth.ServerURL
 	if legacyServerURL == "" {
@@ -375,7 +423,8 @@ func DefaultConfigPath() string {
 // derives the same id for both, correctly, because it is the same repository.
 // The id is meant to match. The cache is not.
 func CacheDirFor(cfg Config) (string, error) {
-	if err := ValidateRepoID(cfg.RepoID); err != nil {
+	key := cfg.Key()
+	if err := ValidateRepoID(key); err != nil {
 		return "", err
 	}
 	base := cfg.CacheDir
@@ -386,7 +435,7 @@ func CacheDirFor(cfg Config) (string, error) {
 		}
 		base = filepath.Join(userCache, "regent")
 	}
-	return filepath.Join(base, "repos", serverCacheKey(cfg.ServerURL), cfg.RepoID), nil
+	return filepath.Join(base, "repos", serverCacheKey(cfg.ServerURL), key), nil
 }
 
 // serverCacheKey turns a server address into one path segment.
