@@ -135,4 +135,3 @@ func setGitRemote(t *testing.T, dir, url string) {
 		t.Fatalf("git remote: %v\n%s", err, out)
 	}
 }
-
