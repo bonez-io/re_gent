@@ -24,6 +24,7 @@ services:
       # the server generate a random one. Only takes effect on an empty
       # regent-data volume; a running instance ignores a changed value.
       REGENT_ADMIN_PASSWORD: ${REGENT_ADMIN_PASSWORD:-}
+      REGENT_PUBLIC_URL: "https://${REGENT_DOMAIN}"
     volumes:
       - regent-data:/data
     networks: [regent-internal]
