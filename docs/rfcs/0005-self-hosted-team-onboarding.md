@@ -101,7 +101,7 @@ curl -fsSL http://127.0.0.1:8080/install | sh && rgt connect http://127.0.0.1:80
   credential stored exactly as `rgt auth login` stores one, then enrolls the
   repository through `/api/v1/projects` (RFC 0004 connect-once), installs the
   agent hooks, and carries over local history.
-- The UI listens on `GET /api/v1/onboarding/connections` (long-poll or SSE)
+- The UI listens on `GET /api/v1/orgs/{slug}/connections` (long-poll)
   and appends a row the moment a project is enrolled: display name, remote,
   machine name, and a green check.
 - "Connect another repository" issues a fresh code and keeps the list.
@@ -126,7 +126,7 @@ Two decisions, then an invitation list.
 | Single sign-on, OpenID Connect | planned, shown disabled with "coming soon" | a generic identity provider; after beta |
 
 **GitHub and Google sign-in.** The provider code is one public package,
-`internal/identity`, used unchanged by the managed composition (RFC 0004).
+`identity`, used unchanged by the managed composition (RFC 0004).
 A person who signs in with GitHub is admitted only when one of these holds,
 checked in this order:
 
@@ -215,8 +215,8 @@ In `selfhosted/`:
 - setup codes: hashed, one-time, 15-minute expiry, bound to a user, exchanged
   at `POST /api/v1/auth/setup-code` for a credential;
 - invitations: create, list, revoke, accept; email delivery when SMTP is set;
-- a connections feed for the wizard: `GET /api/v1/onboarding/connections`;
-- GitHub and Google sign-in through `internal/identity`: provider settings
+- a connections feed for the wizard: `GET /api/v1/orgs/{slug}/connections`;
+- GitHub and Google sign-in through `identity`: provider settings
   stored encrypted at rest with a key on the data volume, signed OAuth state
   bound to the browser session, callback handling, and the admission rules
   above; `identities(provider, subject)` unique per user;
@@ -271,7 +271,7 @@ invitation acceptance, capabilities, health, and install are public.
 | Stream | Owns | Deliverable |
 |---|---|---|
 | **S1. Server** | `selfhosted/`, `internal/server/` routes for onboarding, `serverauth/` if new actions | passwords, initial admin, onboarding state, organization, setup codes, invitations, connections feed, backup, bootstrap removal, conformance updates |
-| **S5. Identity providers** | `internal/identity/` | GitHub and Google OAuth: settings, state signing, callback, profile and email fetch, organization membership check, a fake provider for tests; consumed by S1 and by the managed composition |
+| **S5. Identity providers** | `identity/` | GitHub and Google OAuth: settings, state signing, callback, profile and email fetch, organization membership check, a fake provider for tests; consumed by S1 and by the managed composition |
 | **S2. CLI** | `internal/cli/auth.go`, `internal/cli/connect.go`, `internal/remote/`, `internal/config/` | `--setup`, `init` alias, password login, remotetest endpoints |
 | **S3. Compose and docs** | compose files, `.env.example`, `docs/self-hosted.md`, `scripts/dev-bootstrap.sh` | first-start message, env documentation, rewritten guide, dev bootstrap through the new routes |
 | **S4. UI** | `web/` | sign-in with password, the four wizard screens, invitation acceptance page, Settings entry points |
@@ -291,3 +291,154 @@ admission, and roles that can be derived from GitHub. The GitHub and Google
 providers are the same public package in both. The
 managed RFC will reference this document for screens 2 and 3 rather than
 restating them.
+
+## Appendix A: API contract shared by both compositions
+
+Locked on 2026-09-02 so that S1, S2, S4, S5, and the managed composition
+(RFC 0006) build against one shape. Every route below sits behind the
+route-policy matrix; the ones marked public are the only anonymous ones.
+Errors are `{"error": "<message>", "code": "<snake_case>"}`. Sessions, the
+`__Host-` cookie, and the CSRF header are exactly RFC 0003's.
+
+Both compositions expose organizations in the path. Self-hosted has exactly
+one, created on screen 1; its slug defaults to a slugified organization name
+and is editable there. The UI never special-cases the deployment; it reads
+`deployment` from capabilities only to choose the sign-in screen.
+
+### Capabilities, `GET /api/v1/capabilities`, public
+
+```json
+{
+  "deployment": "self-hosted",
+  "auth_methods": ["password", "browser_session", "github"],
+  "auth_starts": {"github": "/api/v1/auth/github/start"},
+  "onboarding": "admin_password",
+  "features": ["project_ids", "organizations", "invitations", "setup_codes"]
+}
+```
+
+`onboarding` is present only on self-hosted and only until it is `done`;
+it is what lets the UI open the wizard before anyone has signed in. Managed
+reports `deployment: "managed"`, no `password`, and adds `device`, `google`,
+`domains`, `service_tokens`.
+
+### Sign-in
+
+| Route | Body → Response | Notes |
+|---|---|---|
+| `POST /api/v1/auth/login`, public | `{username, password}` → `{user, csrf}` + cookie | self-hosted only; rate limited 10/min per IP and per user; `password_change_required: true` in the response while the initial password is in force |
+| `POST /api/v1/auth/password` | `{current, new}` → `204` | minimum 12 characters, `password_too_short` |
+| `POST /api/v1/auth/logout` | → `204` | |
+| `GET /api/v1/auth/me` | → `{user:{id, username, display_name, email}, orgs:[{slug, display_name, role, onboarding}], last_org}` | `onboarding` per organization is `connect`, `users`, or `done` |
+| `GET /api/v1/auth/{provider}/start?invite=&return=`, public | `302` to the provider | `provider` ∈ configured methods; `invite` and `return` travel in the signed state |
+| `GET /api/v1/auth/{provider}/callback`, public | `302` to `return` or to the not-invited page | admission rules in screen 3 above; managed applies RFC 0004's rules instead |
+| `POST /api/v1/auth/setup-code`, public | `{code, machine_name}` → `{token, expires_at, org, server_url}` | one-time; `setup_code_invalid`, `setup_code_expired`; the token is a machine credential identical in shape to a PAT |
+| `POST /api/v1/auth/device`, `POST /api/v1/auth/device/token` | RFC 0004 | managed only in beta |
+
+### Onboarding, self-hosted only
+
+| Route | Body → Response |
+|---|---|
+| `POST /api/v1/onboarding/admin` | `{org:{display_name, slug, server_url, join_policy, default_role}, admin:{username, display_name, email, new_password}}` → `{user, csrf, org}` + cookie. Requires a session obtained with the initial password, or the `admin_password` state with the initial password in the body as `current_password`. Atomic: replaces the password, creates the organization, moves state to `connect`. |
+
+### Organizations
+
+| Route | Body → Response | Notes |
+|---|---|---|
+| `POST /api/v1/orgs` | `{slug, display_name}` → org | managed only; self-hosted returns `409 single_org` |
+| `GET /api/v1/orgs/{slug}` | → `{slug, display_name, server_url, join_policy, default_role, onboarding, allowed_github_orgs}` | |
+| `PATCH /api/v1/orgs/{slug}` | any of the above except `onboarding` → org | admin |
+| `POST /api/v1/orgs/{slug}/onboarding` | `{state}` → org | admin; only forward moves, `connect → users → done` |
+| `GET /api/v1/orgs/{slug}/auth-methods` | → `{password:{enabled}, github:{enabled, client_id, base_url, has_secret, callback_url}, google:{…}, smtp:{enabled, host, port, username, from, has_password}}` | admin; secrets never returned |
+| `PUT /api/v1/orgs/{slug}/auth-methods` | same shape with `client_secret` and `password` fields → `204` | admin; a missing secret field keeps the stored one |
+| `POST /api/v1/orgs/{slug}/setup-codes` | `{}` → `{code, expires_at, command}` | admin; `command` is the full block the wizard prints; 15 minutes; invalidates none of the earlier codes |
+| `GET /api/v1/orgs/{slug}/connections?cursor=` | → `{connections:[{project_id, display_name, remote, machine_name, connected_by, connected_at}], cursor}` | member; long-poll: holds up to 25 seconds for a new row after `cursor`, returns immediately otherwise |
+| `POST /api/v1/orgs/{slug}/invitations` | `{email?, username?, org_role, grants:[{project_id, role}]}` → `{id, link, expires_at, emailed}` | admin; `org_role` ∈ `admin`, `member`; exactly one of `email`, `username` |
+| `GET /api/v1/orgs/{slug}/invitations` | → list with `status` ∈ `pending`, `accepted`, `expired`, `revoked` | admin |
+| `DELETE /api/v1/orgs/{slug}/invitations/{id}` | → `204` | admin |
+| `GET /api/v1/orgs/{slug}/members` | → `[{user_id, username, display_name, role, methods}]` | member |
+| `PATCH /api/v1/orgs/{slug}/members/{user_id}` | `{role}` → `204` | admin; the last admin cannot be demoted, `last_admin` |
+
+### Invitations, public
+
+| Route | Body → Response |
+|---|---|
+| `GET /api/v1/invitations/{token}` | → `{org_display_name, email, username, methods}`; `invitation_expired`, `invitation_revoked`, `404` otherwise |
+| `POST /api/v1/invitations/{token}/accept` | `{display_name, username?, password?}` → `{user, csrf, org}` + cookie. Password required when it is the only method; with GitHub or Google the caller instead follows `auth_starts` with `?invite=`. |
+
+### Enrollment through a setup code
+
+`rgt connect <url> --setup <code>`:
+
+1. `GET /api/v1/capabilities`.
+2. `POST /api/v1/auth/setup-code` with the code and the machine's hostname.
+   Store the token under the server URL exactly as `rgt auth login` does.
+3. Proceed with the normal connect-once flow from RFC 0004 against
+   `/api/v1/projects`, passing `org` from the setup-code response.
+4. The server records the connection row for the feed when the enrollment
+   call succeeds, whether it created or reused the project.
+
+### Backup, self-hosted only
+
+`POST /api/v1/admin/backup` → `application/x-tar` of `identity.db` and
+`projects.db` taken with SQLite's online backup API. Admin. `rgt admin
+backup [--out FILE]` calls it and writes the file, mode 0600.
+
+## Appendix B: the `identity` package
+
+Public, at the repository root so that the managed module can import it
+(`internal/` cannot cross a module boundary).
+
+```go
+package identity
+
+type Profile struct {
+    Provider      string   // "github", "google"
+    Subject       string   // provider user id, stable
+    Login         string   // GitHub login; empty for Google
+    DisplayName   string
+    Email         string   // verified primary email, or ""
+    EmailVerified bool
+    Orgs          []string // GitHub organization logins, only when requested
+    AvatarURL     string
+}
+
+type Config struct {
+    ClientID, ClientSecret string
+    BaseURL                string   // GitHub Enterprise Server; "" for github.com
+    Scopes                 []string // defaults per provider
+    ReadOrgs               bool     // request read:org and fill Profile.Orgs
+}
+
+type Provider interface {
+    Name() string
+    AuthURL(state, redirectURL string) string
+    Exchange(ctx context.Context, code, redirectURL string) (Profile, error)
+}
+
+func NewGitHub(Config) Provider
+func NewGoogle(Config) Provider
+func NewFake(profiles map[string]Profile) Provider // code == key; for tests and the dev composition
+
+// State carries what must survive the round trip. Signed with an HMAC key
+// the composition owns; bound to the browser session nonce.
+type State struct{ Nonce, Invite, Return, Provider string; IssuedAt time.Time }
+type Signer interface{ Sign(State) (string, error); Verify(string) (State, error) }
+func NewHMACSigner(key []byte, ttl time.Duration) Signer
+
+// Resolver is the composition's admission logic. It receives the verified
+// profile and the state and decides what happens: a session for an existing
+// or new user, a link to an invitation, or a refusal with a reason the UI
+// can show.
+type Resolver interface {
+    Resolve(ctx context.Context, p Profile, s State) (Outcome, error)
+}
+type Outcome struct{ UserID string; Refused bool; Reason string; Redirect string }
+
+// Handlers wires start and callback for every configured provider under a
+// prefix and is mounted by the composition. It knows nothing about users.
+func Handlers(providers map[string]Provider, signer Signer, resolver Resolver, opts ...Option) http.Handler
+```
+
+Options cover the session-nonce accessor, the callback base URL, and a
+rate limiter. The package has no database and no cookie of its own.

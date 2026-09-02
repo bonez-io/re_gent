@@ -375,7 +375,7 @@ pinned commit.
   registry, locator, auditor, limiter, and capabilities.
 - `identity/`: account linking, device flow, session and token issuance.
   The OAuth providers themselves (`github`, `google`), state signing, and
-  callback handling are the public package `internal/identity`, shared with
+  callback handling are the public package `identity`, shared with
   the self-hosted composition (RFC 0005); only the `email` provider and the
   managed linking rules are private.
 - `policy/`: organizations, memberships, invitations, domains, projects,
