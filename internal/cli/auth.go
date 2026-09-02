@@ -295,7 +295,7 @@ func runAuthPasswordLogin(cmd *cobra.Command, cfg *config.UserConfig, serverURL 
 	if err != nil {
 		return fmt.Errorf("create cookie jar: %w", err)
 	}
-	client := &http.Client{Timeout: 10 * time.Second, Jar: jar}
+	client := &http.Client{Timeout: 10 * time.Second, Jar: secureCookieJar{jar}}
 
 	fmt.Fprint(cmd.ErrOrStderr(), "Username: ")
 	username, err := readAnswer(cmd.InOrStdin())
@@ -453,4 +453,29 @@ func normalizeAuthServerURL(value string) (string, error) {
 		return "", errors.New("server URL must not contain credentials, a query, or a fragment")
 	}
 	return value, nil
+}
+
+// secureCookieJar presents every URL to the underlying jar as https.
+//
+// The server's session cookie is Secure (RFC 0003), and Go's cookie jar
+// drops Secure cookies on plain-http requests on the toolchains our release
+// binaries are built with, so a password login against http://127.0.0.1 or
+// a LAN address would authenticate and then fail to mint the credential on
+// the very next request. The user chose that address, and the bearer token
+// that follows travels over the same connection, so the cookie is not the
+// secret that decides whether http is acceptable here.
+type secureCookieJar struct{ jar http.CookieJar }
+
+func (j secureCookieJar) SetCookies(u *url.URL, cookies []*http.Cookie) {
+	j.jar.SetCookies(asHTTPSURL(u), cookies)
+}
+
+func (j secureCookieJar) Cookies(u *url.URL) []*http.Cookie {
+	return j.jar.Cookies(asHTTPSURL(u))
+}
+
+func asHTTPSURL(u *url.URL) *url.URL {
+	c := *u
+	c.Scheme = "https"
+	return &c
 }

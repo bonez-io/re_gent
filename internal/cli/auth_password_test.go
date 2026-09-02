@@ -3,6 +3,9 @@ package cli
 import (
 	"bytes"
 	"context"
+	"net/http"
+	"net/http/cookiejar"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -159,5 +162,19 @@ func TestRunAuthPasswordLoginRejectsWrongPassword(t *testing.T) {
 	}
 	if config.TokenForServer(cfg, srv.URL()) != "" {
 		t.Error("a credential was stored for a rejected password")
+	}
+}
+
+func TestSecureCookieJarCarriesSecureCookiesOverPlainHTTP(t *testing.T) {
+	inner, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jar := secureCookieJar{inner}
+	u, _ := url.Parse("http://127.0.0.1:7655/api/v1/auth/login")
+	jar.SetCookies(u, []*http.Cookie{{Name: "__Host-regent_session", Value: "s", Path: "/", Secure: true}})
+	next, _ := url.Parse("http://127.0.0.1:7655/api/v1/auth/tokens")
+	if got := jar.Cookies(next); len(got) != 1 || got[0].Value != "s" {
+		t.Fatalf("secure cookie was not carried over plain http: %v", got)
 	}
 }
