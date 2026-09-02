@@ -1,4 +1,4 @@
-.PHONY: help build release-binaries test test-race test-cover lint fmt clean install dist install-dist server server-down server-logs ui ui-install ui-check dev serve serve-open smoke bin/rgt bin/regent-server
+.PHONY: help build release-binaries test test-race test-cover lint fmt clean install dist install-dist server server-down server-logs ui ui-install ui-check dev serve serve-open smoke backup bin/rgt bin/regent-server
 
 # Default target
 help:
@@ -22,6 +22,7 @@ help:
 	@echo "  make serve        - Build & run regent-server in self-hosted mode on 127.0.0.1:7655"
 	@echo "  make serve-open   - Same, but the legacy fully-open (no-auth) mode"
 	@echo "  make smoke        - End-to-end check of the local dev loop (scripts/dev-smoke.sh)"
+	@echo "  make backup       - Back up the local dev server's databases (pending: see target)"
 	@echo ""
 	@echo "  Local development server (Docker, optional):"
 	@echo "  make server      - Build & start the server + web UI (docker compose up -d)"
@@ -121,8 +122,12 @@ server:
 	@echo ""
 	@echo "re_gent server is up on http://localhost:$${REGENT_PORT:-7654} (health: /healthz)."
 	@echo "re_gent web UI is up on http://localhost:8080."
-	@echo "Self-hosted auth is on by default. Read the one-time bootstrap token for the first owner:"
-	@echo "  docker compose exec server cat /data/bootstrap-token"
+	@echo "Self-hosted auth is on by default. First start only: the server created the"
+	@echo "admin user with a random initial password (or REGENT_ADMIN_PASSWORD, if set in"
+	@echo ".env) and printed it to its own stdout. Read it with:"
+	@echo "  docker compose logs server"
+	@echo "Sign in as admin with that password at http://localhost:8080; the wizard's"
+	@echo "first screen replaces it immediately."
 	@echo "For the legacy fully-open (no-auth) loopback mode instead:"
 	@echo "  docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build"
 
@@ -159,14 +164,20 @@ bin/regent-server:
 	go build -ldflags "$(LDFLAGS)" -o bin/regent-server ./cmd/regent-server
 
 # Persistent self-hosted auth (same composition as production), foreground.
-# First start writes a one-time bootstrap credential; `scripts/dev-bootstrap.sh`
-# claims it and signs the CLI in automatically.
+# First start creates the admin user with a random initial password (or
+# REGENT_ADMIN_PASSWORD / a password already saved by a previous
+# dev-bootstrap.sh run, if either is present) and prints it to this terminal;
+# `scripts/dev-bootstrap.sh` drives the onboarding wizard and signs the CLI
+# in.
+REGENT_ADMIN_PASSWORD_FILE := $(REGENT_LOCAL_DIR)/admin-password.txt
 serve: bin/rgt bin/regent-server
 	@mkdir -p $(REGENT_DATA)
 	@echo "Starting regent-server on 127.0.0.1:$(REGENT_PORT) (auth: self-hosted, data: $(REGENT_DATA))"
-	@echo "First start only: bootstrap token written to $(REGENT_DATA)/bootstrap-token"
-	@echo "Run ./scripts/dev-bootstrap.sh in another terminal to claim it and sign in."
-	./bin/regent-server --addr 127.0.0.1:$(REGENT_PORT) --data $(REGENT_DATA) --auth-mode self-hosted
+	@echo "First start only: creates the admin user with a random initial password (or"
+	@echo "REGENT_ADMIN_PASSWORD, if set) and prints it to this terminal."
+	@echo "Run ./scripts/dev-bootstrap.sh in another terminal to finish setup and sign in."
+	@REGENT_ADMIN_PASSWORD="$${REGENT_ADMIN_PASSWORD:-$$(cat $(REGENT_ADMIN_PASSWORD_FILE) 2>/dev/null || true)}" \
+		./bin/regent-server --addr 127.0.0.1:$(REGENT_PORT) --data $(REGENT_DATA) --auth-mode self-hosted
 
 # Legacy fully-open (no application auth) mode, foreground, loopback only.
 serve-open: bin/rgt bin/regent-server
@@ -184,6 +195,7 @@ serve-open: bin/rgt bin/regent-server
 dev: bin/rgt bin/regent-server ui-install
 	@mkdir -p $(REGENT_DATA)
 	@( \
+		REGENT_ADMIN_PASSWORD="$${REGENT_ADMIN_PASSWORD:-$$(cat $(REGENT_ADMIN_PASSWORD_FILE) 2>/dev/null || true)}" \
 		./bin/regent-server --addr 127.0.0.1:$(REGENT_PORT) --data $(REGENT_DATA) --auth-mode self-hosted \
 			> $(REGENT_LOCAL_DIR)/server.log 2>&1 & \
 		server_pid=$$!; \
@@ -193,8 +205,22 @@ dev: bin/rgt bin/regent-server ui-install
 		cd web && VITE_REGENT_SERVER_URL=http://127.0.0.1:$(REGENT_PORT) corepack pnpm dev; \
 	)
 
-# End-to-end check of the whole native dev loop: server, bootstrap, CLI login,
-# connect, a captured turn, sync, and the server-side read. Uses its own free
-# port and temp directories; never touches ./bin, ./.local, or Docker.
+# End-to-end check of the whole native dev loop: server, onboarding, CLI
+# login, connect, a captured turn, sync, and the server-side read. Uses its
+# own free port and temp directories; never touches ./bin, ./.local, or
+# Docker.
 smoke:
 	./scripts/dev-smoke.sh
+
+# Backs up the local dev server's databases (RFC 0005 Appendix A: identity.db
+# and projects.db, via SQLite's online backup API) to $(REGENT_LOCAL_DIR).
+# Requires ./scripts/dev-bootstrap.sh (or an equivalent "rgt auth login") to
+# have already bound this machine to the local dev server. `rgt admin backup`
+# and the server's POST /api/v1/admin/backup route it calls are new (RFC
+# 0005 stream S1); if this fails with "unknown command" or a 404/"not found"
+# from the server rather than a real backup, that work has not landed in
+# this checkout yet -- no change is needed here once it does.
+backup: bin/rgt
+	@mkdir -p $(REGENT_LOCAL_DIR)
+	@echo "Backing up the local dev server to $(REGENT_LOCAL_DIR)/backup.tar"
+	./bin/rgt admin backup --out $(REGENT_LOCAL_DIR)/backup.tar

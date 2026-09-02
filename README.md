@@ -359,6 +359,12 @@ Start a loopback-only server for local development:
 make server
 curl http://127.0.0.1:7654/healthz
 
+# First run only: sign in as admin with the password `docker compose logs
+# server` printed, then complete the wizard at http://localhost:8080 (or
+# run ./scripts/dev-bootstrap.sh instead) so `rgt auth login` has a
+# credential to store.
+rgt auth login http://127.0.0.1:7654
+
 # Connect a project
 cd ~/code/my-project
 rgt connect http://127.0.0.1:7654
@@ -368,10 +374,14 @@ rgt push
 rgt pull
 ```
 
-The development Compose profile is intentionally unauthenticated and binds only
-to `127.0.0.1`. For a remote host, use the secure production profile and the
-complete **[self-hosted guide](docs/self-hosted.md)**; it enables HTTPS,
-first-owner bootstrap, persistent users, project roles, PATs, browser sessions,
+This profile runs the same persistent self-hosted auth composition as
+production, bound only to `127.0.0.1`; first start prints the admin sign-in
+line to its own stdout, readable any time with `docker compose logs server`.
+For the legacy fully-open (no application auth) loopback mode instead, run
+`docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build`.
+For a remote host, use the secure production profile and the complete
+**[self-hosted guide](docs/self-hosted.md)**; it enables HTTPS, the browser
+onboarding wizard, persistent users, project roles, PATs, browser sessions,
 CSRF protection, access settings, recovery, backup, and rollback.
 For the private dev/main GCP deployment, CI/CD, persistence, rollback, and IAP
 access model, see **[infra/gcp/README.md](infra/gcp/README.md)**. The older SSH

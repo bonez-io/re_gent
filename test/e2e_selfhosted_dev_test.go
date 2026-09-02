@@ -2,8 +2,12 @@ package test
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"os/exec"
 	"path/filepath"
@@ -14,14 +18,24 @@ import (
 	"github.com/bonez-io/re_gent/selfhosted"
 )
 
-// TestSelfHostedDevLoop exercises the whole "Stream F" local dev loop end to
-// end, the same sequence docs/ui-development.md and scripts/dev-smoke.sh
-// walk a person through by hand:
+// TestSelfHostedDevLoop exercises the whole "Stream S3" local dev loop end to
+// end, the same sequence docs/ui-development.md and scripts/dev-bootstrap.sh
+// walk a person through by hand, against the onboarding contract locked in
+// docs/rfcs/0005-self-hosted-team-onboarding.md Appendix A:
 //
-//	regent-server (self-hosted auth) -> bootstrap the first owner ->
+//	regent-server (self-hosted auth, REGENT_ADMIN_PASSWORD set) -> sign in as
+//	admin with that password -> POST /api/v1/onboarding/admin (org
+//	"Local Dev Test") -> create a PAT through the existing PAT route ->
 //	rgt auth login -> git init a project -> rgt connect -> one captured
 //	Claude turn -> rgt sync -> the server holds the session, readable with a
 //	bearer token and refused anonymously.
+//
+// S1 (the server side of RFC 0005, in selfhosted/) landed the onboarding
+// routes this test drives, but skipIfMissingRoute stays as a safety net: if
+// a future checkout ever lands without them again (a revert, a partial
+// worktree), POST /api/v1/auth/login or /api/v1/onboarding/admin answering
+// 404 skips with a clear message instead of failing outright, so
+// `go test ./test/...` stays green on either side of that landing.
 //
 // Unlike test/e2e_server_test.go this drives the *secure* self-hosted
 // composition (selfhosted.Server, run in-process via httptest so no port or
@@ -33,8 +47,10 @@ import (
 func TestSelfHostedDevLoop(t *testing.T) {
 	rgt := buildTestBinary(t)
 
+	adminPassword := randomDevSecret(t)
+
 	dataDir := t.TempDir()
-	srv, setup, err := selfhosted.New(dataDir)
+	srv, _, err := selfhosted.New(dataDir, "admin", adminPassword)
 	if err != nil {
 		t.Fatalf("start self-hosted server: %v", err)
 	}
@@ -42,33 +58,55 @@ func TestSelfHostedDevLoop(t *testing.T) {
 	ts := httptest.NewServer(srv)
 	t.Cleanup(ts.Close)
 
-	if !setup.BootstrapRequired {
-		t.Fatalf("fresh self-hosted server did not require bootstrap: %#v", setup)
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("build cookie jar: %v", err)
+	}
+	client := &http.Client{Jar: jar}
+
+	// Sign in as admin with REGENT_ADMIN_PASSWORD, the way
+	// scripts/dev-bootstrap.sh does on a fresh instance.
+	loginStatus, csrf, loginBody := postJSONForCSRF(t, client, ts.URL+"/api/v1/auth/login", "",
+		map[string]string{"username": "admin", "password": adminPassword})
+	skipIfMissingRoute(t, loginStatus, "POST /api/v1/auth/login")
+	if loginStatus/100 != 2 {
+		t.Fatalf("POST /api/v1/auth/login: status %d: %s", loginStatus, loginBody)
+	}
+	if csrf == "" {
+		t.Fatalf("login response did not include a csrf token: %s", loginBody)
 	}
 
-	// capabilities is public and unauthenticated, exactly like a browser or
-	// dev-bootstrap.sh checking whether setup is still needed.
-	capBody := httpGetJSON(t, ts.URL+"/api/v1/capabilities", "")
-	if required, _ := capBody["bootstrap_required"].(bool); !required {
-		t.Fatalf("capabilities did not report bootstrap_required=true: %#v", capBody)
+	// Complete the wizard's first screen: replace the initial password,
+	// create the organization, move onboarding to "connect".
+	onboardStatus, onboardCSRF, onboardBody := postJSONForCSRF(t, client, ts.URL+"/api/v1/onboarding/admin", csrf,
+		map[string]any{
+			"org": map[string]any{
+				"display_name": "Local Dev Test",
+				"slug":         "local-dev-test",
+				"server_url":   ts.URL,
+				"join_policy":  "invite_only",
+				"default_role": "reader",
+			},
+			"admin": map[string]any{
+				"username":     "admin",
+				"display_name": "Smoke Test",
+				"new_password": randomDevSecret(t),
+			},
+		})
+	skipIfMissingRoute(t, onboardStatus, "POST /api/v1/onboarding/admin")
+	if onboardStatus/100 != 2 {
+		t.Fatalf("POST /api/v1/onboarding/admin: status %d: %s", onboardStatus, onboardBody)
+	}
+	if onboardCSRF != "" {
+		csrf = onboardCSRF
 	}
 
-	// Bootstrap the first owner the way scripts/dev-bootstrap.sh does: the
-	// bootstrap credential authorizes exactly one POST, which both claims it
-	// and creates the owner.
-	pat, csrfToken := bootstrapFirstOwner(t, ts.URL, setup.BootstrapToken, "smoke", "Smoke Test")
+	// Create a PAT through the existing PAT route, the way
+	// scripts/dev-bootstrap.sh does once onboarding has an authenticated
+	// session.
+	pat := createPAT(t, client, ts.URL, csrf)
 	if pat == "" {
-		t.Fatal("bootstrap did not return a personal access token")
-	}
-	if csrfToken == "" {
-		t.Fatal("bootstrap did not return a CSRF token")
-	}
-
-	// A second bootstrap attempt must fail: the credential is one-time, the
-	// same guarantee docs/self-hosted.md and dev-bootstrap.sh's idempotency
-	// both depend on.
-	if status := bootstrapAttemptStatus(t, ts.URL, setup.BootstrapToken); status != http.StatusUnauthorized {
-		t.Fatalf("second bootstrap attempt with the same credential = %d, want %d (bootstrap must be one-time)", status, http.StatusUnauthorized)
+		t.Fatal("token response did not include a secret")
 	}
 
 	// Each "machine" in this test gets its own HOME so config.toml lands in a
@@ -153,53 +191,95 @@ func TestSelfHostedDevLoop(t *testing.T) {
 	}
 }
 
-// bootstrapFirstOwner POSTs the bootstrap credential the way
-// scripts/dev-bootstrap.sh does and returns the new owner's personal access
-// token and CSRF token.
-func bootstrapFirstOwner(t *testing.T, baseURL, bootstrapToken, username, displayName string) (pat, csrfToken string) {
+// skipIfMissingRoute skips the test with a clear, actionable message when
+// status is 404 -- the signal that this checkout's selfhosted package does
+// not implement the RFC 0005 onboarding route being called yet.
+func skipIfMissingRoute(t *testing.T, status int, route string) {
 	t.Helper()
-	body, _ := json.Marshal(map[string]string{"username": username, "display_name": displayName})
-	req, err := http.NewRequest(http.MethodPost, baseURL+"/api/v1/auth/bootstrap", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("build bootstrap request: %v", err)
+	if status == http.StatusNotFound {
+		t.Skipf("%s is not implemented yet (RFC 0005 / stream S1 has not landed onboarding in selfhosted/); skipping until it does", route)
 	}
-	req.Header.Set("Authorization", "Bootstrap "+bootstrapToken)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+}
+
+// postJSONForCSRF POSTs a JSON body through client (whose cookie jar carries
+// the session cookie across calls, matching the __Host- session cookie
+// selfhosted/server.go sets) and, when csrfIn is non-empty, sets the CSRF
+// header a self-hosted session credential requires for unsafe methods
+// (csrfHeaderName in selfhosted/server.go, "X-Regent-CSRF"). It returns the
+// response status, its "csrf" field (or the legacy "csrf_token" field, for
+// tolerance against either shape), and the raw body so a failing caller can
+// report what the server actually said.
+func postJSONForCSRF(t *testing.T, client *http.Client, url, csrfIn string, body any) (status int, csrfOut string, rawBody string) {
+	t.Helper()
+	raw, err := json.Marshal(body)
 	if err != nil {
-		t.Fatalf("POST /api/v1/auth/bootstrap: %v", err)
+		t.Fatalf("marshal body for POST %s: %v", url, err)
+	}
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("build POST %s: %v", url, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if csrfIn != "" {
+		req.Header.Set("X-Regent-CSRF", csrfIn)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("POST %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	var out struct {
+		CSRF    string `json:"csrf"`
+		CSRFOld string `json:"csrf_token"`
+	}
+	_ = json.Unmarshal(respBody, &out)
+	if out.CSRF != "" {
+		return resp.StatusCode, out.CSRF, string(respBody)
+	}
+	return resp.StatusCode, out.CSRFOld, string(respBody)
+}
+
+// createPAT calls the existing personal-access-token route
+// (POST /api/v1/auth/tokens) through an authenticated session and returns
+// the token secret, the way scripts/dev-bootstrap.sh does once onboarding
+// has left it with a session and a CSRF token.
+func createPAT(t *testing.T, client *http.Client, baseURL, csrf string) string {
+	t.Helper()
+	raw, _ := json.Marshal(map[string]any{"name": "dev-loop-test", "expires_in_days": 1})
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/api/v1/auth/tokens", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("build POST /api/v1/auth/tokens: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Regent-CSRF", csrf)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("POST /api/v1/auth/tokens: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("POST /api/v1/auth/bootstrap: status %d", resp.StatusCode)
+		t.Fatalf("POST /api/v1/auth/tokens: status %d", resp.StatusCode)
 	}
 	var out struct {
-		Token     string `json:"token"`
-		CSRFToken string `json:"csrf_token"`
+		Secret string `json:"secret"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		t.Fatalf("decode bootstrap response: %v", err)
+		t.Fatalf("decode token response: %v", err)
 	}
-	return out.Token, out.CSRFToken
+	return out.Secret
 }
 
-// bootstrapAttemptStatus POSTs a bootstrap attempt and returns just the
-// status code, for asserting the credential cannot be reused.
-func bootstrapAttemptStatus(t *testing.T, baseURL, bootstrapToken string) int {
+// randomDevSecret returns a 30-character hex secret, long enough to satisfy
+// both the server's own initial-password length and the wizard's 12
+// character minimum for a replacement password (RFC 0005 screen 1).
+func randomDevSecret(t *testing.T) string {
 	t.Helper()
-	body, _ := json.Marshal(map[string]string{"username": "again", "display_name": "Again"})
-	req, err := http.NewRequest(http.MethodPost, baseURL+"/api/v1/auth/bootstrap", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("build bootstrap request: %v", err)
+	buf := make([]byte, 15)
+	if _, err := rand.Read(buf); err != nil {
+		t.Fatalf("generate random secret: %v", err)
 	}
-	req.Header.Set("Authorization", "Bootstrap "+bootstrapToken)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("POST /api/v1/auth/bootstrap: %v", err)
-	}
-	defer resp.Body.Close()
-	return resp.StatusCode
+	return fmt.Sprintf("%x", buf)
 }
 
 // httpGetJSON performs an authenticated (or, with an empty bearer, anonymous)

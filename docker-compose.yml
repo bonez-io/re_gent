@@ -6,12 +6,17 @@
 #
 # Local development only, but the server runs the same persistent self-hosted
 # auth composition as production; Docker Compose publishes both ports to host
-# loopback only. Read the one-time bootstrap token for the first owner with:
+# loopback only. On first start (an empty regent-data volume) the server
+# creates the `admin` user with a random initial password -- or with
+# REGENT_ADMIN_PASSWORD, set in .env, when you want a known one -- and prints
+# the sign-in line to its own stdout, so both of these show it:
 #
-#   docker compose exec server cat /data/bootstrap-token
+#   docker compose up -d          # foreground output on the first run
+#   docker compose logs server    # any time after
 #
-# For the legacy fully-open (no application auth) loopback mode instead, layer
-# the optional override file:
+# That password only works until the wizard's first screen replaces it, at
+# https://<server address>/. For the legacy fully-open (no application auth)
+# loopback mode instead, layer the optional override file:
 #
 #   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 services:
@@ -20,6 +25,11 @@ services:
     image: regent-server:latest
     container_name: regent-server
     command: ["--addr", "0.0.0.0:7654", "--data", "/data", "--auth-mode", "self-hosted"]
+    environment:
+      # Optional: pin the admin user's initial password instead of letting
+      # the server generate a random one. Only takes effect on an empty
+      # regent-data volume; a running instance ignores a changed value.
+      REGENT_ADMIN_PASSWORD: ${REGENT_ADMIN_PASSWORD:-}
     ports:
       # Host port is overridable (REGENT_PORT) to avoid colliding with a
       # locally-running `rgt serve`; container always listens on 7654.

@@ -20,19 +20,22 @@ self-hosted auth mode production runs, and starts Vite in the foreground on
 `VITE_REGENT_SERVER_URL`), so the browser and API remain same-origin during
 development. Ctrl-C stops Vite and the background server together.
 
-Self-hosted mode requires a one-time setup step before anything can sign in.
-Once `make dev` (or `make serve`, below) reports the server is up:
+Self-hosted mode requires a one-time onboarding step before anything can sign
+in (RFC 0005). Once `make dev` (or `make serve`, below) reports the server is
+up:
 
 ```sh
 ./scripts/dev-bootstrap.sh
 ```
 
-This is idempotent: on a fresh data directory it claims the bootstrap
-credential, creates the first local owner (username taken from `$USER`),
-prints that owner's personal access token once, and signs the CLI in with it
-(`rgt auth login --token-stdin`). On a server that already has an owner it
-says so and exits 0 without doing anything. See `scripts/dev-bootstrap.sh` for
-what it does step by step.
+This is idempotent: on a fresh data directory it signs in as `admin` with a
+generated (or `$REGENT_ADMIN_PASSWORD`) initial password, completes the
+wizard's first screen for a "Local Dev" organization, creates a personal
+access token, and signs the CLI in with it (`rgt auth login --token-stdin`).
+Passwords and the PAT are saved under `.local/` (mode `0600`) so re-running it
+resumes from wherever onboarding left off; a server whose onboarding is
+already done and has a saved PAT says so and exits 0 without doing anything.
+See `scripts/dev-bootstrap.sh` for what it does step by step.
 
 To run the two processes separately, in two terminals:
 
@@ -43,7 +46,7 @@ make ui      # terminal 2 — Vite (after ./scripts/dev-bootstrap.sh)
 
 `make serve-open` runs the legacy fully-open (no application auth) mode
 instead, still bound to loopback only — useful for quickly poking at the API
-without going through bootstrap, but it is not what production or `make dev`
+without going through onboarding, but it is not what production or `make dev`
 run.
 
 ### Docker (optional)
@@ -57,10 +60,13 @@ docker compose up -d --build
 
 This builds and starts both `regent-server` (self-hosted auth, port
 `${REGENT_PORT:-7654}`) and the `web` container (nginx + the built UI, port
-`8080`), both published to loopback only. Read the bootstrap token with:
+`8080`), both published to loopback only. First start only: the server
+creates the admin user with a random initial password (or
+`REGENT_ADMIN_PASSWORD`, set in `.env`) and prints it to its own stdout —
+read it with:
 
 ```sh
-docker compose exec server cat /data/bootstrap-token
+docker compose logs server
 ```
 
 For the legacy fully-open mode instead, layer the override file:
@@ -104,7 +110,7 @@ go test ./internal/server/...
 ```
 
 `make smoke` runs an end-to-end check of the whole native dev loop — server,
-bootstrap, `rgt auth login`, `rgt connect`, a captured turn, `rgt sync`, and
+onboarding, `rgt auth login`, `rgt connect`, a captured turn, `rgt sync`, and
 the server-side read, all on a scratch port and temp directory. Run it after
 touching anything in the connect/auth/capture/sync path:
 

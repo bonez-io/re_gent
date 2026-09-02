@@ -2,8 +2,14 @@
 #
 #   export REGENT_DOMAIN=regent.example.com
 #   docker compose -f docker-compose.production.yml up -d --build
-#   docker compose -f docker-compose.production.yml exec regent-server \
-#     sh -c 'cat /data/bootstrap-token'
+#   docker compose -f docker-compose.production.yml logs regent-server
+#
+# On first start (an empty regent-data volume) the server creates the `admin`
+# user with a random initial password -- or with REGENT_ADMIN_PASSWORD, set in
+# the environment or .env, when you want a known one -- and prints the
+# sign-in line to its own stdout, which the `logs` command above shows. That
+# password only works until the wizard's first screen replaces it, at
+# https://$REGENT_DOMAIN/.
 #
 # Caddy obtains and renews public TLS certificates. The Go server is reachable
 # only on the internal network and always runs the persistent self-hosted auth
@@ -13,6 +19,11 @@ services:
     build: .
     image: regent-server:production
     command: ["--addr", "0.0.0.0:7654", "--data", "/data", "--auth-mode", "self-hosted"]
+    environment:
+      # Optional: pin the admin user's initial password instead of letting
+      # the server generate a random one. Only takes effect on an empty
+      # regent-data volume; a running instance ignores a changed value.
+      REGENT_ADMIN_PASSWORD: ${REGENT_ADMIN_PASSWORD:-}
     volumes:
       - regent-data:/data
     networks: [regent-internal]

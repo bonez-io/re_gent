@@ -4,12 +4,22 @@
 # and inside a scratch temp directory. Never touches ./bin, ./.local, the
 # real ~/.regent/config.toml, or Docker.
 #
-# Flow: build regent-server + rgt -> start the server -> bootstrap the first
-# owner -> `rgt auth login` -> `git init` a temp project -> `rgt connect` ->
-# one manual Claude turn (per TESTING.md) -> `rgt sync` -> assert the project
-# is listed via GET /api/v1/projects, the session is visible via the server
-# API with a bearer token, and that an anonymous request is refused -> stop
-# the server.
+# Flow, against the onboarding contract locked in
+# docs/rfcs/0005-self-hosted-team-onboarding.md Appendix A: build
+# regent-server + rgt -> start the server with a known REGENT_ADMIN_PASSWORD
+# -> sign in as admin with it -> POST /api/v1/onboarding/admin (org
+# "Local Dev Smoke") -> create a PAT through the existing PAT route ->
+# `rgt auth login` -> `git init` a temp project -> `rgt connect` -> one
+# manual Claude turn (per TESTING.md) -> `rgt sync` -> assert the project is
+# listed via GET /api/v1/projects, the session is visible via the server API
+# with a bearer token, and that an anonymous request is refused -> stop the
+# server.
+#
+# S1 (the server side of RFC 0005) may not have landed the onboarding routes
+# yet in this checkout. If POST /api/v1/auth/login or
+# /api/v1/onboarding/admin answers 404, this script prints a clear message
+# and exits 0 rather than failing, so `make smoke` stays usable for other
+# streams while S1 is in flight.
 #
 # The server assigns its own opaque storage key (`prj_<hex>`) to an enrolled
 # project; `--as` only supplies its display name. So the URL key used below is
@@ -91,12 +101,37 @@ PORT=$(pick_free_port)
 SERVER_URL="http://127.0.0.1:$PORT"
 echo "    using $SERVER_URL"
 
+command -v jq >/dev/null 2>&1 || { echo "jq is required" >&2; exit 1; }
+
+skip() {
+  echo ""
+  echo "SKIPPED: $*"
+  echo "(RFC 0005 stream S1 has not landed the onboarding routes yet in this checkout)"
+  exit 0
+}
+
+# http_status POSTs (or GETs, with no -d/body args) and writes the response
+# body to $BODY_FILE, printing just the status code -- lets the onboarding
+# steps below tell "not implemented yet" (404) apart from a real failure
+# without curl's -f aborting the script first.
+BODY_FILE="$WORK_DIR/http-body.json"
+http_status() {
+  curl -sS -o "$BODY_FILE" -w '%{http_code}' "$@"
+}
+
+# head -c bounds /dev/urandom itself (rather than piping tr's output through
+# a second `head -c`) so tr always hits a natural EOF -- under `set -o
+# pipefail` above, a downstream `head -c N` closing the pipe early would
+# SIGPIPE tr and fail the whole assignment.
+ADMIN_PASSWORD="smoke-$(head -c 512 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9' | head -c 20)"
+
 step "building regent-server and rgt"
 go build -o "$BIN_DIR/regent-server" ./cmd/regent-server
 go build -o "$BIN_DIR/rgt" ./cmd/rgt
 
-step "starting regent-server (self-hosted auth)"
-"$BIN_DIR/regent-server" --addr "127.0.0.1:$PORT" --data "$DATA_DIR" --auth-mode self-hosted \
+step "starting regent-server (self-hosted auth, known REGENT_ADMIN_PASSWORD)"
+REGENT_ADMIN_PASSWORD="$ADMIN_PASSWORD" "$BIN_DIR/regent-server" \
+  --addr "127.0.0.1:$PORT" --data "$DATA_DIR" --auth-mode self-hosted \
   > "$WORK_DIR/server.log" 2>&1 &
 SERVER_PID=$!
 
@@ -115,21 +150,40 @@ for _ in $(seq 1 60); do
 done
 [ "$healthy" -eq 1 ]
 
-step "checking capabilities reports bootstrap_required"
+step "checking capabilities reports an onboarding state"
 capabilities=$(curl -fsS "$SERVER_URL/api/v1/capabilities")
-case "$capabilities" in
-  *'"bootstrap_required":true'*) : ;;
-  *) echo "capabilities did not report bootstrap_required=true: $capabilities" >&2; exit 1 ;;
-esac
+onboarding=$(printf '%s' "$capabilities" | jq -r '.onboarding // empty')
+[ -n "$onboarding" ] || skip "capabilities has no \"onboarding\" field: $capabilities"
 
-step "bootstrapping the first owner"
-bootstrap_token=$(cat "$DATA_DIR/bootstrap-token")
-bootstrap_response=$(curl -fsS -X POST "$SERVER_URL/api/v1/auth/bootstrap" \
-  -H "Authorization: Bootstrap $bootstrap_token" \
-  -H "Content-Type: application/json" \
-  -d '{"username":"smoke","display_name":"Smoke Test"}')
-bootstrap_token=""
-PAT=$(printf '%s' "$bootstrap_response" | grep -o '"token":"[^"]*"' | head -1 | sed 's/^"token":"//; s/"$//')
+step "signing in as admin"
+COOKIE_JAR="$WORK_DIR/cookies.txt"
+login_body=$(jq -nc --arg p "$ADMIN_PASSWORD" '{username:"admin",password:$p}')
+status=$(http_status -c "$COOKIE_JAR" -X POST "$SERVER_URL/api/v1/auth/login" \
+  -H "Content-Type: application/json" -d "$login_body")
+[ "$status" != "404" ] || skip "POST /api/v1/auth/login"
+[ "$status" -ge 200 ] && [ "$status" -lt 300 ] || { echo "POST /api/v1/auth/login: status $status: $(cat "$BODY_FILE")" >&2; exit 1; }
+csrf=$(jq -r '.csrf // .csrf_token // empty' "$BODY_FILE")
+[ -n "$csrf" ] || { echo "login response did not include a csrf token: $(cat "$BODY_FILE")" >&2; exit 1; }
+
+step "completing the wizard's first screen"
+onboarding_body=$(jq -nc \
+  '{org:{display_name:"Local Dev Smoke",slug:"local-dev-smoke",server_url:$url,join_policy:"invite_only",default_role:"reader"},
+    admin:{username:"admin",display_name:"Smoke Test",new_password:$pass}}' \
+  --arg url "$SERVER_URL" --arg pass "smoke-new-$(head -c 512 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9' | head -c 20)")
+status=$(http_status -b "$COOKIE_JAR" -c "$COOKIE_JAR" -X POST "$SERVER_URL/api/v1/onboarding/admin" \
+  -H "Content-Type: application/json" -H "X-Regent-CSRF: $csrf" -d "$onboarding_body")
+[ "$status" != "404" ] || skip "POST /api/v1/onboarding/admin"
+[ "$status" -ge 200 ] && [ "$status" -lt 300 ] || { echo "POST /api/v1/onboarding/admin: status $status: $(cat "$BODY_FILE")" >&2; exit 1; }
+new_csrf=$(jq -r '.csrf // .csrf_token // empty' "$BODY_FILE")
+[ -n "$new_csrf" ] || { echo "onboarding response did not include a csrf token: $(cat "$BODY_FILE")" >&2; exit 1; }
+csrf="$new_csrf"
+
+step "creating a personal access token"
+status=$(http_status -b "$COOKIE_JAR" -c "$COOKIE_JAR" -X POST "$SERVER_URL/api/v1/auth/tokens" \
+  -H "Content-Type: application/json" -H "X-Regent-CSRF: $csrf" \
+  -d '{"name":"dev-smoke","expires_in_days":1}')
+[ "$status" -eq 201 ] || { echo "POST /api/v1/auth/tokens: status $status: $(cat "$BODY_FILE")" >&2; exit 1; }
+PAT=$(jq -r '.secret // empty' "$BODY_FILE")
 [ -n "$PAT" ]
 
 step "rgt auth login"
