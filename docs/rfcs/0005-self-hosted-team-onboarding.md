@@ -58,6 +58,15 @@ forces immediately, so its exposure in a log is bounded to that window. The
 A restart before onboarding completes keeps the same initial password; it does
 not rotate, because rotation is what made the old flow confusing.
 
+**Upgrading a data directory from the bootstrap-token era.** Such a
+directory already has an instance owner and no password. The server adopts
+that owner as the admin instead of creating a second one: it prints the same
+three-line message with the owner's username, the owner must replace the
+initial password on first browser sign-in, and every token the owner already
+holds keeps working, because the initial-password gate applies to browser
+sessions only. Existing projects appear in the organization the wizard
+creates; nothing is renamed or moved.
+
 ## Step 1: sign in and the wizard
 
 The sign-in page shows username and password. The capabilities document

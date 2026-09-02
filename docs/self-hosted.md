@@ -163,6 +163,14 @@ user, membership, and project.
 
 ## Upgrade and rollback
 
+**Coming from a release that used the bootstrap token.** Start the new image
+on the same volume. The server finds the existing owner, adopts them as the
+admin, and prints the ready message with that username and a new initial
+password. Sign in with it, replace it on the first screen, and finish the
+wizard; every project already on the volume shows up in the organization
+you create. Tokens the owner already holds keep working throughout, so
+hooks on teammates' machines never stop capturing.
+
 Take a backup, record the current Git revision or image digest, then rebuild
 and restart:
 
