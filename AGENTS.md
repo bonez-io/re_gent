@@ -175,16 +175,26 @@ Current artifacts:
 
 - [`README.md`](./README.md) — user-facing overview and install notes.
 - [`TESTING.md`](./TESTING.md) — current manual and automated verification guide.
+- [`docs/BETA-RELEASE-PLAN.md`](./docs/BETA-RELEASE-PLAN.md) — active
+  `v1.2.0-beta.3` release source of truth, acceptance gates, and execution order.
+- [`docs/rfcs/0003-authentication-authorization-tenancy.md`](./docs/rfcs/0003-authentication-authorization-tenancy.md)
+  — accepted public/private identity and policy contract.
+- [`docs/self-hosted.md`](./docs/self-hosted.md) — secure self-hosted install,
+  access, recovery, backup, restore, upgrade, and rollback guide.
 - [`AGENTS.md`](./AGENTS.md) — this architecture context.
 
 ---
 
 ## Next concrete steps
 
-1. Keep Codex and Codex capture behavior aligned through `internal/capture`.
-2. Add focused tests before extending hook payload handling or schema shape.
-3. Implement missing advanced commands (`fork`, `rewind`, `reindex`) only when their storage semantics are explicit.
-4. Improve snapshot performance for large repositories without weakening blame correctness.
+1. Complete route-family security conformance and a production-topology smoke.
+2. Exercise clean-host bootstrap, role-correct capture/browse, restore to another
+   host, upgrade, and rollback.
+3. Benchmark the 10k-file capture path and publish the latency budget.
+4. Build the docs site and executable cookbook fixtures while the private
+   managed composition starts against the accepted public contract.
+5. Implement indexed history search, searchable project switching, and truthful
+   Skills installation state after those contracts settle.
 
 ---
 

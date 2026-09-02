@@ -1,8 +1,8 @@
 # RFC 0003: Authentication, authorization, and tenancy
 
-- Status: Proposed for `v1.2.0-beta.3`
+- Status: Accepted for `v1.2.0-beta.3`
 - Owners: re_gent maintainers
-- Last updated: 2026-09-01
+- Last updated: 2026-09-02
 - Related plan: [`../BETA-RELEASE-PLAN.md`](../BETA-RELEASE-PLAN.md)
 
 ## Summary
@@ -21,10 +21,10 @@ composition concerns. A server without an access controller is legacy local
 mode and may not listen on a non-loopback address without the explicit
 `--insecure-no-auth` override.
 
-This RFC establishes the contract. The first self-hosted implementation now
-exists on the release branch, pending review and the remaining conformance
-evidence. The managed identity store and tenant composition remain private
-follow-up work and are not implemented by this RFC.
+This RFC establishes the contract. The first self-hosted implementation is
+merged into `dev`; the remaining conformance evidence stays a release gate.
+The managed identity store and tenant composition remain private follow-up work
+and are not implemented by this RFC.
 
 ## Goals
 

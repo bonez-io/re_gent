@@ -2,7 +2,7 @@
 
 > Status: active release source of truth
 >
-> Last reviewed: 2026-09-01
+> Last reviewed: 2026-09-02
 >
 > Target: `v1.2.0-beta.3` OSS release plus the first free managed beta
 >
@@ -21,7 +21,7 @@ untested recovery story.
 
 ## Execution status
 
-Completed on 2026-09-01:
+Completed through 2026-09-02:
 
 - Transferred and renamed the successor repository to `bonez-io/re_gent` while
   preserving repository identity, branches, tags, issues, the open pull request,
@@ -37,25 +37,23 @@ Completed on 2026-09-01:
   settings on the public repository.
 - Reconciled the existing issue epics into the milestone and created the
   [`v1.2.0-beta.3` release tracker](https://github.com/bonez-io/re_gent/issues/96).
+- Merged the
+  [release and authorization foundation](https://github.com/bonez-io/re_gent/pull/99)
+  into `dev`: canonical namespaces, public server embedding and authorization
+  contracts, route-level conformance tests, secure non-loopback startup, and
+  accepted RFC 0003.
+- Merged the
+  [secure self-hosted access slice](https://github.com/bonez-io/re_gent/pull/100)
+  into `dev` after fresh Linux, macOS, lint, build, and UI CI passed:
 
-In progress on `codex/beta-release-foundation`:
-
-- canonical Go module, release, documentation, and infrastructure namespace;
-- public server embedding and authorization contracts;
-- route-level access conformance tests and secure non-loopback startup;
-- RFC 0003 for authentication, authorization, and tenancy.
-
-Implemented on the stacked `codex/self-hosted-auth` branch, pending review and
-the foundation merge:
-
-- secure-by-default self-hosted server composition with first-owner bootstrap,
-  hashed PATs, browser sessions/CSRF, project memberships and roles,
-  transactional audit events, rate limits, and operator recovery;
-- server-scoped `rgt auth login/status/logout` credential lifecycle with no
-  secret in process arguments or repository configuration;
-- authenticated UI setup/login plus real user, membership, role, and token
-  settings APIs; and
-- a Caddy HTTPS production Compose profile and self-hosted operations guide.
+  - secure-by-default server composition with first-owner bootstrap,
+    hashed PATs, browser sessions/CSRF, project memberships and roles,
+    transactional audit events, rate limits, and operator recovery;
+  - server-scoped `rgt auth login/status/logout` credential lifecycle with no
+    secret in process arguments or repository configuration;
+  - authenticated UI setup/login plus real user, membership, role, and token
+    settings APIs; and
+  - a Caddy HTTPS production Compose profile and self-hosted operations guide.
 
 Current operator blockers:
 
@@ -577,23 +575,20 @@ restore, or migration gates; reduce beta breadth instead.
 ## 7. Immediate next slice
 
 The repository move, release control baseline, public authorization boundary,
-and first secure self-hosted implementation are now prepared. The next slice is
-to review and integrate that foundation before building managed identity or
-more UI surface on top of it.
+and first secure self-hosted implementation are integrated in `dev`. The next
+slice proves their production properties before building more surface area.
 
-1. Review and merge the release-foundation PR, then rebase and review the
-   stacked self-hosted authentication PR.
-2. Expand the security suite across every route family: cross-project access,
+1. Expand the security suite across every route family: cross-project access,
    malformed credentials, CSRF, rate limits, secret redaction, and resource
    bounds; record a production-topology smoke test.
-3. Exercise the documented clean-host bootstrap, reader/writer capture,
+2. Exercise the documented clean-host bootstrap, reader/writer capture,
    backup/restore-to-another-host, upgrade, and rollback journey.
-4. Benchmark the 10k-file capture path and land a measured latency budget before
+3. Benchmark the 10k-file capture path and land a measured latency budget before
    widening the beta.
-5. Build the docs information architecture and six executable cookbook fixtures
+4. Build the docs information architecture and six executable cookbook fixtures
    while the private managed composition starts against the reviewed public
    contract.
-6. After those contracts settle, take the next product slice: indexed history
+5. After those contracts settle, take the next product slice: indexed history
    search, searchable project switching, and truthful Skills installation state.
 
 ## 8. Go/no-go rule

@@ -471,7 +471,13 @@ npm install && npm run compile
 
 ## Roadmap
 
-See [ROADMAP.md](ROADMAP.md) for planned features including:
+The active `v1.2.0-beta.3` scope, architecture decisions, workstreams, and
+release gates live in the
+[beta release plan](docs/BETA-RELEASE-PLAN.md). The
+[release tracker](https://github.com/bonez-io/re_gent/issues/96) holds linked
+execution evidence.
+
+See [ROADMAP.md](ROADMAP.md) for older long-range product context including:
 - Non-destructive rewind and fork operations
 - Additional tool adapters (Cursor, Cline, Continue)
 - Session sharing and merge support
