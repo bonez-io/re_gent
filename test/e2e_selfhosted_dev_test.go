@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -62,7 +63,7 @@ func TestSelfHostedDevLoop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build cookie jar: %v", err)
 	}
-	client := &http.Client{Jar: jar}
+	client := &http.Client{Jar: loopbackSecureJar{jar}}
 
 	// Sign in as admin with REGENT_ADMIN_PASSWORD, the way
 	// scripts/dev-bootstrap.sh does on a fresh instance.
@@ -343,4 +344,26 @@ func gitInit(t *testing.T, dir string) {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
 	}
+}
+
+// loopbackSecureJar lets a Secure session cookie travel over the plain-http
+// httptest listener. Browsers and curl treat loopback as a secure context;
+// Go's cookiejar only started doing so in newer toolchains, and CI still runs
+// the oldest supported one, where the cookie was silently dropped and every
+// call after login came back 401. Presenting the loopback URL to the jar as
+// https on both store and load makes the test independent of that change.
+type loopbackSecureJar struct{ jar http.CookieJar }
+
+func (j loopbackSecureJar) SetCookies(u *url.URL, cookies []*http.Cookie) {
+	j.jar.SetCookies(asHTTPS(u), cookies)
+}
+
+func (j loopbackSecureJar) Cookies(u *url.URL) []*http.Cookie {
+	return j.jar.Cookies(asHTTPS(u))
+}
+
+func asHTTPS(u *url.URL) *url.URL {
+	c := *u
+	c.Scheme = "https"
+	return &c
 }
