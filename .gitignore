@@ -78,3 +78,6 @@ simple.py
 
 # rgt writes these when it rewrites hook config; never commit them.
 .claude/settings.json.bak-*
+
+# local compose overrides (ports, admin password)
+.env

@@ -23,7 +23,9 @@ services:
   server:
     build: .
     image: regent-server:latest
-    container_name: regent-server
+    networks:
+      default:
+        aliases: [regent-server]
     command: ["--addr", "0.0.0.0:7654", "--data", "/data", "--auth-mode", "self-hosted"]
     environment:
       # Printed in the first-start ready message; the origin people open.
@@ -43,13 +45,12 @@ services:
   web:
     build: ./web
     image: regent-web:latest
-    container_name: regent-web
     depends_on:
       server:
         condition: service_healthy
     ports:
       # regent-web talks to the "server" container over the compose network by
-      # its container_name (see web/nginx.conf); only this published port is
+      # the network alias regent-server (see web/nginx.conf); only this published port is
       # reachable from the host, and only on loopback.
       - "127.0.0.1:${REGENT_WEB_PORT:-8080}:8080"
     restart: unless-stopped
