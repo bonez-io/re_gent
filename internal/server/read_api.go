@@ -191,9 +191,10 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request, repoID string
 		return
 	}
 
-	// Reads never bring a repo into existence: openRepo(create=false) returns
-	// errRepoNotFound, which we surface as a 404 like the object/ref handlers.
-	st, err := s.openRepo(repoID, false)
+	// Reads never bring a repo into existence: openRepoTenant(create=false)
+	// returns errRepoNotFound, which we surface as a 404 like the object/ref
+	// handlers.
+	st, err := s.openRepoTenant(resourceTenantFromContext(r.Context()), repoID, false)
 	if err != nil {
 		if errors.Is(err, errRepoNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown repo " + repoID})
@@ -221,9 +222,58 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request, repoID string
 		s.handleAPIBlame(w, r, repoID, st)
 	case len(segs) == 3 && segs[2] == "diff":
 		s.handleAPIDiff(w, r, repoID, st)
+	case len(segs) == 5 && segs[2] == "commits" && segs[4] == "steps":
+		s.handleAPICommitSteps(w, r, repoID, st, segs[3])
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 	}
+}
+
+// handleAPICommitSteps serves GET /{project}/api/commits/{sha}/steps: every
+// step in the project whose recorded git_commit effect names sha, per RFC
+// 0004's pull-request-provenance route. No hook records a git_commit effect on
+// a step yet (see internal/store.Effect and internal/capture), so this always
+// returns an empty list today — that is the honest answer, not a stub: the
+// moment a producer starts recording Effect{Kind:"git_commit", Descriptor:sha}
+// this route surfaces it with no further change here.
+func (s *Server) handleAPICommitSteps(w http.ResponseWriter, r *http.Request, repoID string, st *store.Store, sha string) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if sha == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing commit sha"})
+		return
+	}
+	refs, err := st.ListRefs("sessions")
+	if err != nil {
+		s.logf("list session refs for commit lookup in %s: %v", repoID, err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "list sessions failed"})
+		return
+	}
+	matches := []logStepJSON{}
+	seen := make(map[store.Hash]bool)
+	for _, tip := range refs {
+		steps, hashes, walkErr := walkSession(st, tip, maxSessionWalk)
+		if walkErr != nil {
+			s.logf("walk session for commit lookup in %s: %v", repoID, walkErr)
+		}
+		for i, step := range steps {
+			if step == nil || seen[hashes[i]] {
+				continue
+			}
+			seen[hashes[i]] = true
+			for _, effect := range step.Effects {
+				if effect.Kind == "git_commit" && effect.Descriptor == sha {
+					matches = append(matches, s.stepToJSON(st, repoID, hashes[i], step))
+					break
+				}
+			}
+		}
+	}
+	sort.Slice(matches, func(i, j int) bool { return matches[i].Timestamp < matches[j].Timestamp })
+	writeJSON(w, http.StatusOK, map[string]any{"steps": matches})
 }
 
 // handleAPISessions reconstructs the session list from the object store: every

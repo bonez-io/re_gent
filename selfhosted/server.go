@@ -89,20 +89,26 @@ func New(dataDir string, opts ...server.Option) (*Server, Setup, error) {
 		return nil, Setup{}, fmt.Errorf("remove stale bootstrap credential: %w", err)
 	}
 	coreOpts := append([]server.Option{}, opts...)
-	coreOpts = append(coreOpts, server.WithAccessController(identities))
+	srv := &Server{identities: identities}
+	coreOpts = append(coreOpts,
+		server.WithAccessController(identities),
+		// identityStore implements serverauth.Auditor (Record) by writing
+		// into the same audit_events table its own direct routes use, so
+		// core-driven mutations and denials land in one audit trail.
+		server.WithAuditor(identities),
+		server.WithCapabilities(srv.capabilitiesDocument),
+	)
 	core, err := server.New(dataDir, coreOpts...)
 	if err != nil {
 		_ = identities.close()
 		return nil, Setup{}, err
 	}
 	setup := Setup{BootstrapRequired: required, BootstrapToken: bootstrap}
-	return &Server{
-		core:             core,
-		identities:       identities,
-		bootstrapPath:    bootstrapPath,
-		bootstrapLimiter: newRequestLimiter(10, time.Minute),
-		sessionLimiter:   newRequestLimiter(60, time.Minute),
-	}, setup, nil
+	srv.core = core
+	srv.bootstrapPath = bootstrapPath
+	srv.bootstrapLimiter = newRequestLimiter(10, time.Minute)
+	srv.sessionLimiter = newRequestLimiter(60, time.Minute)
+	return srv, setup, nil
 }
 
 // Close releases the identity database. The repository core has no open
@@ -115,8 +121,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 	switch {
-	case r.URL.Path == "/api/v1/capabilities":
-		s.handleCapabilities(w, r)
 	case r.URL.Path == "/api/v1/auth/bootstrap":
 		s.handleBootstrap(w, r)
 	case r.URL.Path == "/api/v1/auth/session":
@@ -136,23 +140,25 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		methodNotAllowed(w, http.MethodGet)
-		return
-	}
+// capabilitiesDocument builds the GET /api/v1/capabilities response. It is
+// installed into the public server core via server.WithCapabilities, so the
+// core itself serves the route publicly (before authentication, like
+// /healthz) rather than selfhosted intercepting the path — the RFC 0004
+// "capabilities becomes composition-provided" seam. The document returned is
+// byte-for-byte what selfhosted always returned, with "project_ids" added to
+// features for the versioned project API this stream adds.
+func (s *Server) capabilitiesDocument(*http.Request) map[string]any {
 	required, err := s.identities.bootstrapRequired()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "capabilities unavailable")
-		return
+		required = false
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	return map[string]any{
 		"deployment":         "self-hosted",
 		"api_version":        "v1",
 		"auth_methods":       []string{"pat", "browser_session"},
 		"bootstrap_required": required,
-		"features":           []string{"projects", "history", "skills", "users", "memberships", "personal_tokens"},
-	})
+		"features":           []string{"projects", "history", "skills", "users", "memberships", "personal_tokens", "project_ids"},
+	}
 }
 
 func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {

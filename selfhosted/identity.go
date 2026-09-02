@@ -190,6 +190,58 @@ CREATE TABLE IF NOT EXISTS audit_events (
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("create identity schema: %w", err)
 	}
+	// Additive migration: the serverauth.Auditor seam (RFC 0004) needs a
+	// request id, an actor classification, and tenant/project scope on every
+	// row. These default to '' / 'user' so every pre-existing row (and every
+	// existing appendAuditTx call site, which does not set them) stays valid;
+	// only new callers populate them.
+	if err := s.ensureAuditColumns(); err != nil {
+		return fmt.Errorf("extend audit_events schema: %w", err)
+	}
+	return nil
+}
+
+// ensureAuditColumns adds any audit_events column this version of selfhosted
+// expects but an older database does not have yet. It checks PRAGMA
+// table_info first rather than relying on "ADD COLUMN IF NOT EXISTS": that
+// syntax is not supported by the SQLite version modernc.org/sqlite v1.28.0
+// embeds, and plain ADD COLUMN errors on a column that already exists.
+func (s *identityStore) ensureAuditColumns() error {
+	rows, err := s.db.Query(`PRAGMA table_info(audit_events)`)
+	if err != nil {
+		return err
+	}
+	existing := make(map[string]bool)
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		existing[name] = true
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	additions := []struct{ name, ddl string }{
+		{"request_id", `ALTER TABLE audit_events ADD COLUMN request_id TEXT NOT NULL DEFAULT ''`},
+		{"actor_kind", `ALTER TABLE audit_events ADD COLUMN actor_kind TEXT NOT NULL DEFAULT 'user'`},
+		{"tenant_id", `ALTER TABLE audit_events ADD COLUMN tenant_id TEXT NOT NULL DEFAULT ''`},
+		{"project_id", `ALTER TABLE audit_events ADD COLUMN project_id TEXT NOT NULL DEFAULT ''`},
+	}
+	for _, add := range additions {
+		if existing[add.name] {
+			continue
+		}
+		if _, err := s.db.Exec(add.ddl); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -323,7 +375,14 @@ func (s *identityStore) authenticate(r *http.Request) (authenticated, error) {
 		wantKind = "session"
 		authMethod = "session"
 	} else {
-		return authenticated{}, serverauth.ErrUnauthenticated
+		// Neither an Authorization header nor a session cookie was presented
+		// at all, as opposed to one being present and wrong: this is the
+		// specific "no credentials" case the public core's anonymous-
+		// principal flow (serverauth.ErrNoCredentials) distinguishes from bad
+		// credentials. It wraps ErrUnauthenticated, so Authorize below (and
+		// every writeAccessError call in this package) still denies it with
+		// exactly the same 401 it always has.
+		return authenticated{}, serverauth.ErrNoCredentials
 	}
 	if (wantKind == "pat" && !strings.HasPrefix(secret, personalTokenPrefix)) ||
 		(wantKind == "session" && !strings.HasPrefix(secret, sessionTokenPrefix)) {
@@ -408,7 +467,7 @@ func (s *identityStore) Authorize(_ context.Context, principal serverauth.Princi
 	switch permission.Action {
 	case serverauth.ActionObjectWrite, serverauth.ActionRefWrite, serverauth.ActionHistoryWrite:
 		minimum = RoleWriter
-	case serverauth.ActionMemberWrite:
+	case serverauth.ActionMemberWrite, serverauth.ActionRepositoryWrite:
 		minimum = RoleAdmin
 	case serverauth.ActionRepositoryRead, serverauth.ActionObjectRead, serverauth.ActionRefRead, serverauth.ActionHistoryRead, serverauth.ActionMemberRead:
 		minimum = RoleReader
@@ -720,8 +779,44 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, token.ID, userID, kind, name, token.Prefix,
 	return secret, token, csrf, nil
 }
 
+// appendAuditTx records a mutation selfhosted performs directly (bootstrap,
+// user/token/membership management) inside the same transaction as the
+// mutation itself, so the audit row and the change it describes commit or
+// roll back together. It is the same audit_events table Record (below) writes
+// into for core-driven events; this call site's actor is always a signed-in
+// user, so actor_kind defaults to "user" and tenant/project/request scope
+// default to "" (self-hosted has one implicit tenant and these routes are not
+// project-scoped the way object/ref/history routes are).
 func appendAuditTx(tx *sql.Tx, actor, action, targetType, targetID, outcome string, at time.Time) error {
-	_, err := tx.Exec(`INSERT INTO audit_events(actor_id, action, target_type, target_id, outcome, created_at) VALUES (?, ?, ?, ?, ?, ?)`, actor, action, targetType, targetID, outcome, formatTime(at))
+	_, err := tx.Exec(`INSERT INTO audit_events(actor_id, action, target_type, target_id, outcome, created_at, actor_kind)
+VALUES (?, ?, ?, ?, ?, ?, 'user')`, actor, action, targetType, targetID, outcome, formatTime(at))
+	return err
+}
+
+// Record implements serverauth.Auditor by writing into the same audit_events
+// table appendAuditTx uses, so a mutation or denial the public server core
+// reports (object/ref writes, project create/rename, and any Authorize
+// denial) lands in the same self-hosted audit trail as the identity routes
+// selfhosted handles directly. Recording is a single autocommit insert rather
+// than participating in a business transaction, since the core calls this
+// after its own mutation (or its own denial) has already been decided.
+func (s *identityStore) Record(ctx context.Context, event serverauth.AuditEvent) error {
+	at := event.At
+	if at.IsZero() {
+		at = s.now()
+	}
+	actorKind := event.ActorKind
+	if actorKind == "" {
+		actorKind = "user"
+	}
+	var actor sql.NullString
+	if event.Actor != "" {
+		actor = sql.NullString{String: event.Actor, Valid: true}
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO audit_events(actor_id, action, target_type, target_id, outcome, created_at, request_id, actor_kind, tenant_id, project_id)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		actor, string(event.Action), event.TargetType, event.TargetID, event.Outcome, formatTime(at),
+		event.RequestID, actorKind, event.TenantID, event.ProjectID)
 	return err
 }
 

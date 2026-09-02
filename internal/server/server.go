@@ -88,6 +88,13 @@ type Server struct {
 	logger         *log.Logger
 	access         serverauth.Controller
 
+	locator        StorageLocator
+	auditor        serverauth.Auditor
+	limiter        serverauth.Limiter
+	ingestFilter   IngestFilter
+	capabilitiesFn CapabilitiesFunc
+	registry       ProjectRegistry
+
 	mu    sync.Mutex
 	repos map[string]*store.Store
 }
@@ -131,6 +138,44 @@ func WithBinariesDir(dir string) Option {
 	return func(s *Server) { s.binariesDir = dir }
 }
 
+// WithStorageLocator overrides where a project's on-disk store lives. The
+// default reproduces today's dataDir/repos/<id> layout.
+func WithStorageLocator(locator StorageLocator) Option {
+	return func(s *Server) { s.locator = locator }
+}
+
+// WithAuditor installs the sink for mutation and denial audit events. The
+// default records nothing.
+func WithAuditor(auditor serverauth.Auditor) Option {
+	return func(s *Server) { s.auditor = auditor }
+}
+
+// WithLimiter installs the quota/rate approval consulted before an object
+// write, a ref move, and a project creation. The default allows everything.
+func WithLimiter(limiter serverauth.Limiter) Option {
+	return func(s *Server) { s.limiter = limiter }
+}
+
+// WithIngestFilter installs the gate consulted before an object is written.
+// The default accepts every object unchanged.
+func WithIngestFilter(filter IngestFilter) Option {
+	return func(s *Server) { s.ingestFilter = filter }
+}
+
+// WithCapabilities installs the builder for the public GET
+// /api/v1/capabilities document. The default returns the RFC 0004 open-mode
+// document.
+func WithCapabilities(fn CapabilitiesFunc) Option {
+	return func(s *Server) { s.capabilitiesFn = fn }
+}
+
+// WithProjectRegistry overrides the project registry backing the versioned
+// project API (/api/v1/projects, /api/v1/orgs/{org}/projects). The default is
+// a filesystem+SQLite registry rooted at dataDir.
+func WithProjectRegistry(registry ProjectRegistry) Option {
+	return func(s *Server) { s.registry = registry }
+}
+
 // New creates a Server persisting repo data under dataDir, which is created if
 // it does not exist.
 func New(dataDir string, opts ...Option) (*Server, error) {
@@ -144,6 +189,24 @@ func New(dataDir string, opts ...Option) (*Server, error) {
 	}
 	for _, opt := range opts {
 		opt(srv)
+	}
+	if srv.locator == nil {
+		srv.locator = defaultStorageLocator{dataDir: dataDir}
+	}
+	if srv.auditor == nil {
+		srv.auditor = noopAuditor{}
+	}
+	if srv.limiter == nil {
+		srv.limiter = allowLimiter{}
+	}
+	if srv.ingestFilter == nil {
+		srv.ingestFilter = passthroughIngestFilter{}
+	}
+	if srv.capabilitiesFn == nil {
+		srv.capabilitiesFn = defaultCapabilities
+	}
+	if srv.registry == nil {
+		srv.registry = newFilesystemProjectRegistry(dataDir, srv.locator)
 	}
 	if err := os.MkdirAll(srv.reposDir(), 0o755); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
@@ -185,9 +248,13 @@ func (s *Server) CreateRepo(repoID string) (bool, error) {
 	if err := ValidateRepoID(repoID); err != nil {
 		return false, err
 	}
-	_, err := os.Stat(s.repoDir(repoID))
-	existed := err == nil
-	if _, err := s.openRepo(repoID, true); err != nil {
+	dir, err := s.locator.ProjectRoot("", repoID)
+	if err != nil {
+		return false, fmt.Errorf("resolve project storage: %w", err)
+	}
+	_, statErr := os.Stat(dir)
+	existed := statErr == nil
+	if _, err := s.openRepoTenant("", repoID, true); err != nil {
 		return false, err
 	}
 	return !existed, nil
@@ -212,18 +279,31 @@ func (s *Server) ListRepos() ([]string, error) {
 	return ids, nil
 }
 
-// openRepo returns the store for repoID. When create is false and the repo does
-// not exist yet, errRepoNotFound is returned instead of creating it, so reads
-// never bring a repo into existence.
+// openRepo returns the store for repoID in the default (legacy/self-hosted)
+// tenant. When create is false and the repo does not exist yet, errRepoNotFound
+// is returned instead of creating it, so reads never bring a repo into
+// existence.
 func (s *Server) openRepo(repoID string, create bool) (*store.Store, error) {
+	return s.openRepoTenant("", repoID, create)
+}
+
+// openRepoTenant is openRepo scoped to a tenant, resolving storage through the
+// configured StorageLocator rather than a hard-coded path. This is the one
+// place the core opens a project's store, so every route goes through the
+// locator.
+func (s *Server) openRepoTenant(tenantID, repoID string, create bool) (*store.Store, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if st, ok := s.repos[repoID]; ok {
+	cacheKey := tenantID + "\x00" + repoID
+	if st, ok := s.repos[cacheKey]; ok {
 		return st, nil
 	}
 
-	dir := s.repoDir(repoID)
+	dir, err := s.locator.ProjectRoot(tenantID, repoID)
+	if err != nil {
+		return nil, fmt.Errorf("resolve project storage: %w", err)
+	}
 	if _, err := os.Stat(dir); err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
 			return nil, err
@@ -240,7 +320,7 @@ func (s *Server) openRepo(repoID string, create bool) (*store.Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open repo %q: %w", repoID, err)
 	}
-	s.repos[repoID] = st
+	s.repos[cacheKey] = st
 	return st, nil
 }
 
@@ -250,6 +330,13 @@ func (s *Server) openRepo(repoID string, create bool) (*store.Store, error) {
 // rewrites "a/../b" and "./a" before a handler ever sees them, which would hide
 // traversal attempts from validation.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	requestID := r.Header.Get("X-Request-ID")
+	if requestID == "" {
+		requestID = newRequestID()
+	}
+	w.Header().Set("X-Request-ID", requestID)
+	r = r.WithContext(withRequestID(r.Context(), requestID))
+
 	// Health check so container and orchestrator probes succeed. The exemption is
 	// scoped to exactly "/healthz".
 	if r.URL.Path == "/healthz" {
@@ -262,7 +349,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// The onboarding endpoints expose the open-source binary and a bootstrap
 	// script that carries no secret, never any repo data. This is what makes
 	// `curl -fsSL http://<server>/install | sh` a one-paste onboarding. See
-	// install.go.
+	// install.go. The capabilities document is public for the same reason: it
+	// carries deployment shape and negotiation information, never repository
+	// or identity data.
 	switch r.URL.Path {
 	case "/install", "/install.sh":
 		s.handleInstallScript(w, r)
@@ -270,19 +359,30 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/bin/rgt":
 		s.handleBinary(w, r)
 		return
+	case "/api/v1/capabilities":
+		s.handleCapabilities(w, r)
+		return
 	}
 
 	var principal serverauth.Principal
 	if s.access != nil {
-		var err error
-		principal, err = s.access.Authenticate(r)
-		if err != nil {
+		p, err := s.access.Authenticate(r)
+		switch {
+		case err == nil:
+			if p.Subject == "" {
+				s.logf("access controller returned an empty subject")
+				httpError(w, http.StatusInternalServerError, "authorization failed")
+				return
+			}
+			principal = p
+		case errors.Is(err, serverauth.ErrNoCredentials):
+			// No credentials at all, as opposed to bad ones: the core still
+			// calls Authorize with the explicit anonymous principal, so a
+			// policy can grant a public read. Every default policy denies it,
+			// exactly as a request with bad credentials is denied below.
+			principal = serverauth.Anonymous()
+		default:
 			s.writeAccessError(w, err)
-			return
-		}
-		if principal.Subject == "" {
-			s.logf("access controller returned an empty subject")
-			httpError(w, http.StatusInternalServerError, "authorization failed")
 			return
 		}
 		r = r.WithContext(serverauth.WithPrincipal(r.Context(), principal))
@@ -293,12 +393,38 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+
+	permission := s.permissionForRequest(r, segs)
+	r = r.WithContext(withResourceTenant(r.Context(), permission.Resource.TenantID))
+
 	if s.access != nil {
-		if err := s.access.Authorize(r.Context(), principal, permissionForRequest(r, segs)); err != nil {
+		if err := s.access.Authorize(r.Context(), principal, permission); err != nil {
+			s.audit(r.Context(), principal, permission, denialOutcome(err))
 			s.writeAccessError(w, err)
 			return
 		}
 	}
+
+	if !isMutationAction(permission.Action) {
+		s.dispatch(w, r, segs, permission)
+		return
+	}
+	// Every mutation gets an audit event regardless of outcome, so its result
+	// is captured by wrapping the ResponseWriter rather than threading the
+	// permission down into every handler that can write one.
+	rec := &statusRecorder{ResponseWriter: w}
+	s.dispatch(rec, r, segs, permission)
+	outcome := "allowed"
+	if rec.status >= 400 {
+		outcome = "error"
+	}
+	s.audit(r.Context(), principal, permission, outcome)
+}
+
+// dispatch is the route table. It only ever runs after health/install/
+// capabilities have been served directly and, when an access controller is
+// installed, after the request has been authorized for permission.
+func (s *Server) dispatch(w http.ResponseWriter, r *http.Request, segs []string, permission serverauth.Permission) {
 	if len(segs) == 0 {
 		httpError(w, http.StatusBadRequest, "missing repo id")
 		return
@@ -314,6 +440,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// id is validated, so "api" is never mistaken for a repository.
 	if segs[0] == "api" && len(segs) >= 2 && segs[1] == "skills" {
 		s.handleSkills(w, r, segs)
+		return
+	}
+
+	if segs[0] == "api" && len(segs) >= 2 && segs[1] == "v1" && isVersionedProjectRoute(segs) {
+		s.handleVersionedAPI(w, r, segs, permission)
 		return
 	}
 
@@ -337,6 +468,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", http.MethodGet)
+		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.capabilitiesFn(r))
+}
+
 func (s *Server) writeAccessError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, serverauth.ErrUnauthenticated):
@@ -352,7 +492,27 @@ func (s *Server) writeAccessError(w http.ResponseWriter, err error) {
 	}
 }
 
-func permissionForRequest(r *http.Request, segs []string) serverauth.Permission {
+// permissionForRequest classifies one request into the stable action/resource
+// permission an access controller decides on. It is the route-policy matrix
+// made executable: every route family the server exposes must be classified
+// here, and anything it does not recognize stays fail-closed on ActionRequest.
+//
+// TenantID: an "/api/v1/orgs/{org}/…" URL prefix names its tenant explicitly.
+// Every other route — including every legacy "/{project}/…" route, which has
+// no room in its URL for an org segment — takes the authenticated principal's
+// own TenantID. That is exactly right for self-hosted and open mode (every
+// principal's TenantID is always "", so Resource.TenantID is always "" too,
+// unchanged from before this field existed) and is the correct scope for a
+// managed composition, whose caller is always authenticated into exactly one
+// organization per request. It deliberately does not read the project
+// registry on this hot path: a registry lookup on every object/ref request
+// would be a needless I/O cost for a value single-tenant mode never uses.
+func (s *Server) permissionForRequest(r *http.Request, segs []string) serverauth.Permission {
+	tenantID := ""
+	if principal, ok := serverauth.PrincipalFromContext(r.Context()); ok {
+		tenantID = principal.TenantID
+	}
+
 	permission := serverauth.Permission{
 		Action: serverauth.ActionRequest,
 		Resource: serverauth.Resource{
@@ -365,6 +525,7 @@ func permissionForRequest(r *http.Request, segs []string) serverauth.Permission 
 	}
 	if segs[0] == "repos" && len(segs) == 1 {
 		permission.Resource.Kind = "repositories"
+		permission.Resource.TenantID = tenantID
 		if r.Method == http.MethodGet || r.Method == http.MethodHead {
 			permission.Action = serverauth.ActionRepositoriesList
 		} else if r.Method == http.MethodPost {
@@ -383,8 +544,51 @@ func permissionForRequest(r *http.Request, segs []string) serverauth.Permission 
 		}
 		return permission
 	}
+	if segs[0] == "api" && len(segs) >= 2 && segs[1] == "v1" {
+		if org := splitOrgSegs(segs); org != "" {
+			permission.Resource.Kind = "repositories"
+			permission.Resource.TenantID = org
+			if r.Method == http.MethodGet || r.Method == http.MethodHead {
+				permission.Action = serverauth.ActionRepositoriesList
+			} else if r.Method == http.MethodPost {
+				permission.Action = serverauth.ActionRepositoryCreate
+			}
+			return permission
+		}
+		if len(segs) == 3 && segs[2] == "projects" {
+			permission.Resource.Kind = "repositories"
+			permission.Resource.TenantID = tenantID
+			if r.Method == http.MethodGet || r.Method == http.MethodHead {
+				permission.Action = serverauth.ActionRepositoriesList
+			} else if r.Method == http.MethodPost {
+				permission.Action = serverauth.ActionRepositoryCreate
+			}
+			return permission
+		}
+		if len(segs) == 4 && segs[2] == "projects" {
+			permission.Resource.Kind = "repository"
+			permission.Resource.RepositoryID = segs[3]
+			permission.Resource.Name = segs[3]
+			permission.Resource.TenantID = tenantID
+			switch r.Method {
+			case http.MethodGet, http.MethodHead:
+				permission.Action = serverauth.ActionRepositoryRead
+			case http.MethodPatch:
+				permission.Action = serverauth.ActionRepositoryWrite
+			}
+			return permission
+		}
+		// Every other "/api/v1/…" path belongs to a composition layered on
+		// top of the core (self-hosted's own auth/users/access routes, which
+		// intercept those paths before the core ever sees them). Nothing
+		// reaches here for those in a correctly wired composition, but if it
+		// ever does, ActionRequest keeps it fail-closed rather than silently
+		// open.
+		return permission
+	}
 
 	permission.Resource.RepositoryID = segs[0]
+	permission.Resource.TenantID = tenantID
 	if len(segs) < 2 {
 		return permission
 	}
@@ -402,7 +606,9 @@ func permissionForRequest(r *http.Request, segs []string) serverauth.Permission 
 	case "refs":
 		permission.Resource.Kind = "ref"
 		if len(segs) >= 3 {
-			permission.Resource.Name = strings.Join(segs[2:], "/")
+			ref := strings.Join(segs[2:], "/")
+			permission.Resource.Name = ref
+			permission.Ref = ref
 		}
 		if r.Method == http.MethodPost {
 			permission.Action = serverauth.ActionRefWrite
@@ -451,8 +657,11 @@ func pathSegments(escapedPath string) ([]string, error) {
 	return segs, nil
 }
 
-// handleRepos serves the repo registry: GET lists, POST creates.
+// handleRepos serves the repo registry: GET lists, POST creates. Superseded by
+// the versioned project API (GET/POST /api/v1/projects); kept working for the
+// documented compatibility window with RFC 0004's deprecation headers.
 func (s *Server) handleRepos(w http.ResponseWriter, r *http.Request) {
+	legacyDeprecationHeaders(w)
 	switch r.Method {
 	case http.MethodGet:
 		ids, err := s.ListRepos()
@@ -485,12 +694,18 @@ func (s *Server) handleRepos(w http.ResponseWriter, r *http.Request) {
 			httpError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		principal, _ := serverauth.PrincipalFromContext(r.Context())
+		if err := s.limiter.Check(r.Context(), principal, serverauth.LimitRequest{Kind: serverauth.LimitKindProject, ProjectID: req.RepoID}); err != nil {
+			s.writeLimiterError(w, err)
+			return
+		}
 		created, err := s.CreateRepo(req.RepoID)
 		if err != nil {
 			s.logf("create repo %q: %v", req.RepoID, err)
 			httpError(w, http.StatusInternalServerError, "create repo failed")
 			return
 		}
+		s.ensureLegacyProject(r.Context(), req.RepoID)
 		status := http.StatusOK
 		if created {
 			status = http.StatusCreated
@@ -520,6 +735,7 @@ func (s *Server) filterReadableRepos(r *http.Request, ids []string) ([]string, e
 			Resource: serverauth.Resource{
 				Kind:         "repository",
 				RepositoryID: repoID,
+				TenantID:     principal.TenantID,
 			},
 		})
 		switch {
@@ -609,6 +825,26 @@ func (s *Server) putObject(w http.ResponseWriter, r *http.Request, repoID string
 	if got := hex.EncodeToString(sum[:]); got != string(hash) {
 		httpError(w, http.StatusBadRequest,
 			fmt.Sprintf("content hash mismatch: body hashes to %s", got))
+		return
+	}
+
+	principal, _ := serverauth.PrincipalFromContext(r.Context())
+	tenantID := resourceTenantFromContext(r.Context())
+	if err := s.limiter.Check(r.Context(), principal, serverauth.LimitRequest{
+		Kind: serverauth.LimitKindObject, TenantID: tenantID, ProjectID: repoID, Bytes: int64(len(data)),
+	}); err != nil {
+		s.writeLimiterError(w, err)
+		return
+	}
+
+	action, reason, err := s.ingestFilter.Filter(r.Context(), principal, repoID, string(hash), data)
+	if err != nil {
+		s.logf("ingest filter for object %s in %s: %v", hash, repoID, err)
+		httpError(w, http.StatusInternalServerError, "write object failed")
+		return
+	}
+	if action == IngestReject {
+		writeAPIError(w, http.StatusUnprocessableEntity, reason, "ingest_rejected")
 		return
 	}
 
@@ -718,6 +954,15 @@ func (s *Server) postRef(w http.ResponseWriter, r *http.Request, repoID string, 
 		return
 	}
 
+	principal, _ := serverauth.PrincipalFromContext(r.Context())
+	tenantID := resourceTenantFromContext(r.Context())
+	if err := s.limiter.Check(r.Context(), principal, serverauth.LimitRequest{
+		Kind: serverauth.LimitKindRef, TenantID: tenantID, ProjectID: repoID,
+	}); err != nil {
+		s.writeLimiterError(w, err)
+		return
+	}
+
 	switch err := s.casUpdateRef(st, name, store.Hash(req.Old), store.Hash(req.New)); {
 	case err == nil:
 		writeJSON(w, http.StatusOK, refResponse{Hash: req.New})
@@ -766,7 +1011,7 @@ func (s *Server) casUpdateRef(st *store.Store, name string, oldHash, newHash sto
 // for writes. It writes the error response itself and returns nil on failure.
 func (s *Server) repoForRequest(w http.ResponseWriter, r *http.Request, repoID string) *store.Store {
 	create := r.Method == http.MethodPut || r.Method == http.MethodPost
-	st, err := s.openRepo(repoID, create)
+	st, err := s.openRepoTenant(resourceTenantFromContext(r.Context()), repoID, create)
 	if err != nil {
 		if errors.Is(err, errRepoNotFound) {
 			httpError(w, http.StatusNotFound, "unknown repo "+repoID)
