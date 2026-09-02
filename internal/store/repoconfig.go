@@ -9,9 +9,18 @@ import (
 )
 
 // RemoteConfig holds the remote server settings for this repo.
+//
+// ProjectID is the server-assigned, opaque project identifier RFC 0004's
+// enrollment API introduced (config.RemoteBinding is the authoritative type
+// for it); RepoID is the legacy client-derived identifier written by servers
+// that have not adopted the project API. omitempty on ProjectID matters here:
+// every WriteRepoConfig caller round-trips through this struct, and without
+// it a legacy binding with no project_id would gain an empty
+// `project_id = ""` line on every write.
 type RemoteConfig struct {
-	URL    string `toml:"url"`
-	RepoID string `toml:"repo_id"`
+	URL       string `toml:"url"`
+	ProjectID string `toml:"project_id,omitempty"`
+	RepoID    string `toml:"repo_id,omitempty"`
 }
 
 // CaptureConfig records the layout its owner intentionally uses. It is a

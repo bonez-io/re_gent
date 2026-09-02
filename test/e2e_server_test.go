@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -48,8 +47,17 @@ func TestE2EConnectRegistersWithALiveServer(t *testing.T) {
 
 	assertContains(t, out, "Registered", "connect output")
 
-	if repos := serverRepos(t, srv.URL); !slices.Contains(repos, "acceptance-project") {
-		t.Errorf("server does not know the project after connect.\n/repos returned: %v\nconnect said:\n%s", repos, out)
+	// The server assigns the opaque storage key (RFC 0004): the display name
+	// "acceptance-project" (derived from the folder, since no --as was given)
+	// is what a person reads, but the key the binding and every URL use is
+	// whatever the server generated. Read it back from the binding rather than
+	// assuming it equals the folder name.
+	key := repoIDOf(t, project)
+	if key == "" {
+		t.Fatalf("connect wrote no project identity into .regent/config.toml:\n%s", out)
+	}
+	if !projectListed(t, srv.URL, key, "acceptance-project") {
+		t.Errorf("GET /api/v1/projects does not list a project id=%q display_name=%q after connect:\n%s", key, "acceptance-project", out)
 	}
 }
 
@@ -70,6 +78,10 @@ func TestE2ECapturedWorkReachesTheServer(t *testing.T) {
 
 	env := hermeticEnv(t, srv)
 	e2eRunEnv(t, rgt, project, env, nil, "connect", srv.URL)
+	key := repoIDOf(t, project)
+	if key == "" {
+		t.Fatalf("connect wrote no project identity into .regent/config.toml")
+	}
 
 	// A complete Claude Code turn: prompt, one tool call, assistant reply.
 	const sid = "e2e-server-session"
@@ -95,8 +107,9 @@ func TestE2ECapturedWorkReachesTheServer(t *testing.T) {
 			"last_assistant_message", "done"),
 		"message-hook", "assistant")
 
-	// The colleague's view: what does the server actually hold?
-	sessions := serverSessions(t, srv.URL, "capture-project")
+	// The colleague's view: what does the server actually hold? Keyed by the
+	// project id the server assigned (RFC 0004), not the folder name.
+	sessions := serverSessions(t, srv.URL, key)
 	if len(sessions) == 0 {
 		t.Fatalf("server holds no sessions after a complete captured turn; a teammate would see nothing")
 	}
@@ -124,6 +137,10 @@ func TestE2ETwoIdentitiesAreBothAttributed(t *testing.T) {
 
 	base := hermeticEnv(t, srv)
 	e2eRunEnv(t, rgt, project, base, nil, "connect", srv.URL)
+	key := repoIDOf(t, project)
+	if key == "" {
+		t.Fatalf("connect wrote no project identity into .regent/config.toml")
+	}
 
 	people := []struct{ session, name, email string }{
 		{"e2e-ada-session", "Ada Lovelace", "ada@team.dev"},
@@ -139,7 +156,7 @@ func TestE2ETwoIdentitiesAreBothAttributed(t *testing.T) {
 	// under a reader as the session grows, and points at the wrong person.
 	captureTurn(t, rgt, project, identityEnv(base, people[1].name, people[1].email), people[0].session, "t2", "handover.go")
 
-	sessions := serverSessions(t, srv.URL, "attribution-project")
+	sessions := serverSessions(t, srv.URL, key)
 	if len(sessions) != len(people) {
 		t.Fatalf("server holds %d sessions, want %d: %#v", len(sessions), len(people), sessions)
 	}
@@ -318,6 +335,33 @@ func serverRepos(t *testing.T, baseURL string) []string {
 	}
 	getJSON(t, baseURL+"/repos", &body)
 	return body.Repos
+}
+
+// serverProjects reads the versioned project registry (RFC 0004) — the
+// listing keyed by the server-assigned id rather than the client-derived
+// repo_id the legacy /repos endpoint still speaks.
+func serverProjects(t *testing.T, baseURL string) []map[string]any {
+	t.Helper()
+	var body struct {
+		Projects []map[string]any `json:"projects"`
+	}
+	getJSON(t, baseURL+"/api/v1/projects", &body)
+	return body.Projects
+}
+
+// projectListed reports whether the server's project registry has an entry
+// with exactly this id and display name — the pairing that proves a
+// server-assigned key actually belongs to the project a person named.
+func projectListed(t *testing.T, baseURL, id, displayName string) bool {
+	t.Helper()
+	for _, p := range serverProjects(t, baseURL) {
+		gotID, _ := p["id"].(string)
+		gotName, _ := p["display_name"].(string)
+		if gotID == id && gotName == displayName {
+			return true
+		}
+	}
+	return false
 }
 
 // serverSessions reads the server's session listing — the same data the viewer

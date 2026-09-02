@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/bonez-io/re_gent/internal/cli"
 	"github.com/bonez-io/re_gent/internal/remote"
@@ -163,7 +165,7 @@ func commandNotPulledReporter(w io.Writer) bool {
 	if err != nil || !cfg.Enabled() || cfg.Validate() != nil {
 		return false
 	}
-	reportServerModeCache(w, cfg)
+	reportServerModeCache(w, cfg, jsonOutputRequested())
 	return true
 }
 
@@ -171,11 +173,59 @@ func connectedNotPulledReport(cfg remote.Config) string {
 	return fmt.Sprintf("Connected to %s as %s, not yet pulled.\nThis project's history is recorded on the server; none of it is on this machine yet.\n  - Fetch it: rgt pull", cfg.ServerURL, cfg.Key())
 }
 
+// jsonOutputRequested reports whether the command line asked for --json
+// output. The reporter installed via cli.SetNotPulledReporter is a bare
+// func(io.Writer) bool (see internal/cli/repo.go): it is shared by every
+// command that can hit an empty server-mode cache (today: log, sessions,
+// status), and it is called after cobra has already parsed that command's
+// own flags into unexported locals this package cannot reach — the argument
+// list is the one thing still available here that says what was actually
+// asked for. `rgt log --json` is the motivating case: a NotPulledError from
+// that command must not fall back to a prose report, or a parser piped onto
+// `rgt log --json` breaks on a run where the cache happens to be empty.
+func jsonOutputRequested() bool {
+	for _, arg := range os.Args[1:] {
+		if arg == "--json" || arg == "--json=true" || strings.HasPrefix(arg, "--json=1") {
+			return true
+		}
+	}
+	return false
+}
+
+// notPulledJSON is the document the fallback reporter writes in place of
+// prose when jsonOutputRequested is true: the same empty session/step shape
+// `rgt log --json` and `rgt sessions --format=json` produce when there is
+// genuinely nothing to show, plus a note explaining why. A parser downstream
+// of `rgt log --json` sees one JSON document either way, never a plain-text
+// sentence mixed into a stream it expects to decode.
+type notPulledJSON struct {
+	SessionID string   `json:"session_id"`
+	Sessions  []string `json:"sessions"`
+	Steps     []string `json:"steps"`
+	Note      string   `json:"note"`
+}
+
+// writeNotPulledJSON writes doc's JSON encoding, or — if that somehow fails —
+// a minimal hand-built JSON object carrying the same note, so this path can
+// never fall through to unstructured text once JSON was asked for.
+func writeNotPulledJSON(w io.Writer, note string) {
+	doc := notPulledJSON{Sessions: []string{}, Steps: []string{}, Note: note}
+	if err := json.NewEncoder(w).Encode(doc); err != nil {
+		fmt.Fprintf(w, "{\"note\":%q}\n", note)
+	}
+}
+
 // reportServerModeCache asks the live server before making any claim about
-// history that is absent from this machine's cache.
-func reportServerModeCache(w io.Writer, cfg remote.Config) {
+// history that is absent from this machine's cache. asJSON selects between
+// the prose a person reads and the notPulledJSON document a --json caller
+// needs; every branch below states the same fact, just twice.
+func reportServerModeCache(w io.Writer, cfg remote.Config, asJSON bool) {
 	client, err := remote.NewHTTPClient(cfg)
 	if err != nil {
+		if asJSON {
+			writeNotPulledJSON(w, fmt.Sprintf("cannot check %s for this project's history: %v", cfg.ServerURL, err))
+			return
+		}
 		fmt.Fprintf(w, "Cannot check %s for this project's history: %v.\n", cfg.ServerURL, err)
 		return
 	}
@@ -184,22 +234,38 @@ func reportServerModeCache(w io.Writer, cfg remote.Config) {
 	refs, err := client.ListRefs(ctx, "sessions")
 	switch {
 	case errors.Is(err, remote.ErrNotFound):
+		if asJSON {
+			writeNotPulledJSON(w, fmt.Sprintf("connected to %s as %s, but the server does not know this project; re-register it with: rgt connect %s", cfg.ServerURL, cfg.Key(), cfg.ServerURL))
+			return
+		}
 		fmt.Fprintf(w,
 			"Connected to %s as %s, but the server does not know this project.\n"+
 				"  - Re-register it: rgt connect %s\n",
 			cfg.ServerURL, cfg.Key(), cfg.ServerURL)
 	case err != nil:
+		if asJSON {
+			writeNotPulledJSON(w, fmt.Sprintf("cannot reach %s to check this project's history; this machine's cache is empty: %v", cfg.ServerURL, err))
+			return
+		}
 		fmt.Fprintf(w,
 			"Cannot reach %s to check this project's history; this machine's cache is empty.\n"+
 				"  - Check the server connection, then try: rgt pull\n"+
 				"  - Detail: %v\n",
 			cfg.ServerURL, err)
 	case len(refs) == 0:
+		if asJSON {
+			writeNotPulledJSON(w, fmt.Sprintf("connected to %s as %s; the server knows this project but holds no history yet", cfg.ServerURL, cfg.Key()))
+			return
+		}
 		fmt.Fprintf(w,
 			"Connected to %s as %s; the server knows this project but holds no history yet.\n"+
 				"  - Record a session here, or ask a teammate to deliver one with: rgt sync\n",
 			cfg.ServerURL, cfg.Key())
 	default:
+		if asJSON {
+			writeNotPulledJSON(w, connectedNotPulledReport(cfg))
+			return
+		}
 		fmt.Fprintln(w, connectedNotPulledReport(cfg))
 	}
 }

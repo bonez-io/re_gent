@@ -10,6 +10,7 @@ import (
 	// See e2e_onboarding_test.go: this package builds rgt via `go build`, so
 	// without a compile-time edge to the CLI the test cache serves stale passes.
 	_ "github.com/bonez-io/re_gent/internal/cli"
+	"github.com/bonez-io/re_gent/internal/remotetest"
 )
 
 // Identity is the thing a user never sets and always depends on. These are the
@@ -151,31 +152,47 @@ func TestE2EAnExplicitIdentityIsUsedAndRecorded(t *testing.T) {
 
 	e2eRunEnv(t, rgt, project, env, nil, "connect", srv.URL, "--as", "billing-service")
 
-	if got := repoIDOf(t, project); got != "billing-service" {
-		t.Errorf("project registered as %q, not the requested %q", got, "billing-service")
+	// Against a project-id server (RFC 0004) --as supplies the display name,
+	// not the storage key: the server assigns its own opaque id. The
+	// recorded answer is that id, read back from the binding, paired with
+	// the display name on the server's own listing.
+	key := repoIDOf(t, project)
+	if key == "" {
+		t.Fatalf("connect wrote no project identity for %s", project)
 	}
-	if repos := serverRepos(t, srv.URL); len(repos) != 1 || repos[0] != "billing-service" {
-		t.Errorf("server knows %v, want exactly [billing-service]", repos)
+	if !projectListed(t, srv.URL, key, "billing-service") {
+		t.Errorf("GET /api/v1/projects does not list id=%q display_name=%q", key, "billing-service")
 	}
 
 	// And it sticks: a later connect with no flag must not quietly go back to
-	// the derived name, which would split the history in two.
+	// a different project, which would split the history in two.
 	e2eRunEnv(t, rgt, project, env, nil, "connect", srv.URL)
-	if got := repoIDOf(t, project); got != "billing-service" {
-		t.Errorf("identity reverted to %q on a later connect; the recorded answer was ignored", got)
+	if got := repoIDOf(t, project); got != key {
+		t.Errorf("identity changed from %q to %q on a later connect; the recorded answer was ignored", key, got)
 	}
 }
 
 // An override the server will reject has to fail here, with the reason, rather
 // than 400 mid-connect with a message about a regular expression.
+//
+// The charset restriction this test exercises is specifically the legacy
+// repo_id rule (internal/remote.ValidateRepoID): against a project-id server
+// (RFC 0004) --as is a free-text display name, so "Not/A Valid Id" is a
+// perfectly acceptable project name there and would not be refused at all.
+// startTestServer's real server always advertises "project_ids" (it is the
+// default for both self-hosted and this suite's in-process server), so it
+// cannot exercise this path any more. remotetest.Server can: left without
+// EnableProjectIDs it speaks the legacy protocol, which is exactly the
+// server this test is about.
 func TestE2EAnUnusableExplicitIdentityIsRefusedUpFront(t *testing.T) {
 	rgt := buildTestBinary(t)
-	srv := startTestServer(t)
+	srv := remotetest.New()
+	t.Cleanup(srv.Close)
 	project := gitProject(t, "checkout", "https://github.com/acme/api.git")
 
-	out := e2eRunExpectingFailure(t, rgt, project, "connect", srv.URL, "--as", "Not/A Valid Id")
+	out := e2eRunExpectingFailure(t, rgt, project, "connect", srv.URL(), "--as", "Not/A Valid Id")
 
-	if repos := serverRepos(t, srv.URL); len(repos) != 0 {
+	if repos := serverRepos(t, srv.URL()); len(repos) != 0 {
 		t.Errorf("a rejected identity still registered %v on the server", repos)
 	}
 	if !strings.Contains(out, "Not/A Valid Id") {

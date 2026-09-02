@@ -2,12 +2,82 @@ package cli
 
 import (
 	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/bonez-io/re_gent/internal/config"
+	"github.com/bonez-io/re_gent/internal/remotetest"
 	"github.com/pelletier/go-toml/v2"
 )
+
+// TestInitDoctorRepairPreserveProjectIDBinding closes the RFC 0004 binding
+// gap end to end: connect enrolls the project and writes a project_id
+// binding, and none of init, doctor, or repair may drop it — init because
+// recordCaptureRoot does a read-modify-write of the same config.toml, doctor
+// and repair because they must stay read-only with respect to it. Before
+// store.RemoteConfig carried ProjectID, `rgt init --capture-root` (the one
+// write path among the three) silently rewrote the binding without it, and
+// every command that keys off the binding started treating the project as
+// disconnected.
+func TestInitDoctorRepairPreserveProjectIDBinding(t *testing.T) {
+	srv := remotetest.New()
+	t.Cleanup(srv.Close)
+	srv.EnableProjectIDs()
+
+	project := gitRepoWithCommit(t, "widget-service")
+	setGitRemote(t, project, "https://github.com/acme/widget-service.git")
+
+	if err := runConnect(connectParams{serverURL: srv.URL(), projectRoot: project, httpClient: http.DefaultClient}); err != nil {
+		t.Fatalf("runConnect: %v", err)
+	}
+
+	configPath := filepath.Join(project, ".regent", "config.toml")
+	binding, err := config.LoadRemoteBinding(configPath)
+	if err != nil {
+		t.Fatalf("LoadRemoteBinding: %v", err)
+	}
+	if binding.ProjectID == "" {
+		t.Fatalf("precondition: connect did not write a project_id binding: %#v", binding)
+	}
+	want := binding.ProjectID
+
+	withWorkingDir(t, project)
+
+	initCmd := InitCmd()
+	initCmd.SetArgs([]string{"--skip-hook", "--capture-root", "project"})
+	if err := initCmd.Execute(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if got, err := config.LoadRemoteBinding(configPath); err != nil {
+		t.Fatalf("LoadRemoteBinding after init: %v", err)
+	} else if got.ProjectID != want {
+		t.Errorf("project_id after init = %q, want %q; init dropped the connect-time binding", got.ProjectID, want)
+	}
+
+	// doctor is documented as local-only and read-only; assert that holds for
+	// the binding rather than assuming it.
+	doctorCmd := DoctorCmd()
+	doctorCmd.SetArgs(nil)
+	_ = doctorCmd.Execute() // its exit code reflects wiring, not this assertion
+	if got, err := config.LoadRemoteBinding(configPath); err != nil {
+		t.Fatalf("LoadRemoteBinding after doctor: %v", err)
+	} else if got.ProjectID != want {
+		t.Errorf("project_id after doctor = %q, want %q; doctor touched the binding", got.ProjectID, want)
+	}
+
+	repairCmd := RepairCmd()
+	repairCmd.SetArgs([]string{"blame"})
+	if err := repairCmd.Execute(); err != nil {
+		t.Fatalf("repair blame: %v", err)
+	}
+	if got, err := config.LoadRemoteBinding(configPath); err != nil {
+		t.Fatalf("LoadRemoteBinding after repair: %v", err)
+	} else if got.ProjectID != want {
+		t.Errorf("project_id after repair = %q, want %q; repair touched the binding", got.ProjectID, want)
+	}
+}
 
 func TestInstallCodexHook_MergesProjectConfig(t *testing.T) {
 	root := t.TempDir()
