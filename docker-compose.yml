@@ -26,6 +26,8 @@ services:
     container_name: regent-server
     command: ["--addr", "0.0.0.0:7654", "--data", "/data", "--auth-mode", "self-hosted"]
     environment:
+      # Printed in the first-start ready message; the origin people open.
+      REGENT_PUBLIC_URL: "http://127.0.0.1:${REGENT_WEB_PORT:-8080}"
       # Optional: pin the admin user's initial password instead of letting
       # the server generate a random one. Only takes effect on an empty
       # regent-data volume; a running instance ignores a changed value.

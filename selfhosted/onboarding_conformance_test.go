@@ -238,3 +238,68 @@ func TestLastAdminCannotBeDemoted(t *testing.T) {
 		map[string]string{"role": "member"}, map[string]string{csrfHeaderName: csrf})
 	assertStatus(t, nowDemotable, http.StatusNoContent)
 }
+
+// TestOrgScopedProjectsRouteNamesTheSingleRegistry covers the path the CLI
+// takes after a setup-code exchange: it enrolls through
+// /api/v1/orgs/{slug}/projects (RFC 0005 Appendix A), which on self-hosted
+// must be the same registry as /api/v1/projects rather than a namespace per
+// slug, and any other slug must be concealed as 404.
+func TestOrgScopedProjectsRouteNamesTheSingleRegistry(t *testing.T) {
+	srv, setup, err := New(t.TempDir(), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	cookie, csrf, slug := onboardAdmin(t, srv, setup, "Scoped Org")
+
+	created := serveRequestHeaders(srv, http.MethodPost, "/api/v1/orgs/"+slug+"/setup-codes", "", cookie, map[string]any{}, map[string]string{csrfHeaderName: csrf})
+	assertStatus(t, created, http.StatusCreated)
+	var codeResp struct {
+		Code string `json:"code"`
+	}
+	decodeResponse(t, created, &codeResp)
+	exchanged := serveRequest(srv, http.MethodPost, "/api/v1/auth/setup-code", "", "", map[string]string{"code": codeResp.Code, "machine_name": "laptop"})
+	assertStatus(t, exchanged, http.StatusCreated)
+	var cred struct {
+		Token string `json:"token"`
+		Org   string `json:"org"`
+	}
+	decodeResponse(t, exchanged, &cred)
+	if cred.Org != slug {
+		t.Fatalf("setup-code org = %q, want %q", cred.Org, slug)
+	}
+	bearer := "Bearer " + cred.Token
+	body := map[string]any{"fingerprint": strings.Repeat("ab", 32), "remote": "github.com/acme/arm", "root_commit": strings.Repeat("c", 40), "display_name": "arm"}
+
+	first := serveRequest(srv, http.MethodPost, "/api/v1/orgs/"+slug+"/projects", bearer, "", body)
+	assertStatus(t, first, http.StatusCreated)
+	var firstResp struct {
+		Project struct {
+			ID string `json:"id"`
+		} `json:"project"`
+		ID string `json:"id"`
+	}
+	decodeResponse(t, first, &firstResp)
+	id := firstResp.Project.ID
+	if id == "" {
+		id = firstResp.ID
+	}
+	if id == "" {
+		t.Fatalf("scoped enrollment returned no project id: %s", first.Body.String())
+	}
+
+	again := serveRequest(srv, http.MethodPost, "/api/v1/projects", bearer, "", body)
+	assertStatus(t, again, http.StatusOK)
+	if !strings.Contains(again.Body.String(), id) {
+		t.Fatalf("unscoped re-enrollment did not land on %s: %s", id, again.Body.String())
+	}
+
+	listed := serveRequest(srv, http.MethodGet, "/api/v1/orgs/"+slug+"/projects", bearer, "", nil)
+	assertStatus(t, listed, http.StatusOK)
+	if !strings.Contains(listed.Body.String(), id) {
+		t.Fatalf("scoped list omitted %s: %s", id, listed.Body.String())
+	}
+
+	other := serveRequest(srv, http.MethodPost, "/api/v1/orgs/not-this-org/projects", bearer, "", body)
+	assertStatus(t, other, http.StatusNotFound)
+}

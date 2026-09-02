@@ -246,9 +246,33 @@ func (s *Server) handleOrgRoute(w http.ResponseWriter, r *http.Request, path str
 		s.handleOrgMembers(w, r, slug)
 	case len(segs) == 3 && segs[1] == "members":
 		s.handleOrgMemberItem(w, r, slug, segs[2])
+	case len(segs) >= 2 && segs[1] == "projects":
+		s.handleOrgProjects(w, r, slug, segs[2:])
 	default:
 		writeCodedError(w, http.StatusNotFound, "not found", "not_found")
 	}
+}
+
+// handleOrgProjects serves /api/v1/orgs/{slug}/projects[/...] for the single
+// self-hosted organization by delegating to the core's unscoped project API.
+// The CLI enrolls through the scoped path whenever a setup code or --org
+// names an organization (RFC 0005 Appendix A), and self-hosted keeps every
+// project in the one legacy tenant, so the scoped and unscoped paths must
+// name the same registry rather than a per-slug namespace. A slug that is
+// not this instance's organization is concealed as 404, like any other
+// cross-tenant name.
+func (s *Server) handleOrgProjects(w http.ResponseWriter, r *http.Request, slug string, rest []string) {
+	if _, err := s.identities.getOrganizationBySlug(slug); err != nil {
+		writeCodedError(w, http.StatusNotFound, "not found", "not_found")
+		return
+	}
+	r2 := r.Clone(r.Context())
+	r2.URL.Path = "/api/v1/projects"
+	if len(rest) > 0 {
+		r2.URL.Path += "/" + strings.Join(rest, "/")
+	}
+	r2.URL.RawPath = ""
+	s.ServeHTTP(w, r2)
 }
 
 // orgAuth authenticates the caller and loads the named organization,

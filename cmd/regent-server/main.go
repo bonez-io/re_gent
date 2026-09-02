@@ -107,7 +107,14 @@ func serve(addr, data string, max int64, binaries, skillsDir, authMode, adminUse
 		// force, remains unchanged, without ever repeating the value.
 		switch {
 		case setup.Generated:
-			fmt.Printf("re_gent is ready at http://%s\n", addr)
+			// The address people open is the web origin in front of this
+			// process (Compose publishes it on the host), not the bind
+			// address inside a container, so Compose sets REGENT_PUBLIC_URL.
+			publicURL := strings.TrimSpace(os.Getenv("REGENT_PUBLIC_URL"))
+			if publicURL == "" {
+				publicURL = "http://" + addr
+			}
+			fmt.Printf("re_gent is ready at %s\n", publicURL)
 			fmt.Printf("Sign in as %s with the initial password: %s\n", setup.AdminUsername, setup.AdminPassword)
 			fmt.Println("This password must be replaced on first sign-in.")
 		case setup.PasswordChangeRequired:
