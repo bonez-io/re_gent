@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -176,5 +177,22 @@ func TestSecureCookieJarCarriesSecureCookiesOverPlainHTTP(t *testing.T) {
 	next, _ := url.Parse("http://127.0.0.1:7655/api/v1/auth/tokens")
 	if got := jar.Cookies(next); len(got) != 1 || got[0].Value != "s" {
 		t.Fatalf("secure cookie was not carried over plain http: %v", got)
+	}
+}
+
+func TestAuthMeResponseAcceptsBothIdentityShapes(t *testing.T) {
+	var legacy authMeResponse
+	if err := json.Unmarshal([]byte(`{"viewer":{"id":"usr_1","username":"shay","display_name":"Shay"}}`), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if got := legacy.identity(); got.ID != "usr_1" || got.Username != "shay" {
+		t.Fatalf("legacy shape: %+v", got)
+	}
+	var managed authMeResponse
+	if err := json.Unmarshal([]byte(`{"user":{"id":"usr_2","display_name":"lead","email":"lead@acme.test"},"orgs":[]}`), &managed); err != nil {
+		t.Fatal(err)
+	}
+	if got := managed.identity(); got.ID != "usr_2" || got.Username != "lead@acme.test" {
+		t.Fatalf("managed shape should fall back to the email as the username: %+v", got)
 	}
 }

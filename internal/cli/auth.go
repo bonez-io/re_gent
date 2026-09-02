@@ -33,12 +33,30 @@ type authViewer struct {
 	ID            string `json:"id"`
 	Username      string `json:"username"`
 	DisplayName   string `json:"display_name"`
+	Email         string `json:"email"`
 	InstanceOwner bool   `json:"instance_owner"`
 }
 
 type authMeResponse struct {
+	// Viewer is the RFC 0003 shape; User is the RFC 0005 Appendix A shape
+	// that self-hosted (alongside viewer) and managed (alone) return. A
+	// managed user has no username, only an email, so identity() fills the
+	// gap from there rather than treating the response as broken.
 	Viewer     authViewer `json:"viewer"`
+	User       authViewer `json:"user"`
 	AuthMethod string     `json:"auth_method"`
+}
+
+// identity returns whichever of the two identity shapes the server filled in.
+func (m authMeResponse) identity() authViewer {
+	v := m.Viewer
+	if v.ID == "" {
+		v = m.User
+	}
+	if v.Username == "" {
+		v.Username = v.Email
+	}
+	return v
 }
 
 type authLoginParams struct {
@@ -391,10 +409,11 @@ func verifyAuthToken(client *http.Client, serverURL, tokenValue string) (authVie
 	if err := json.NewDecoder(bytes.NewReader(body)).Decode(&me); err != nil {
 		return authViewer{}, fmt.Errorf("decode authentication response: %w", err)
 	}
-	if me.Viewer.ID == "" || me.Viewer.Username == "" {
-		return authViewer{}, errors.New("authentication response omitted viewer identity")
+	viewer := me.identity()
+	if viewer.ID == "" {
+		return authViewer{}, errors.New("authentication response omitted the signed-in identity")
 	}
-	return me.Viewer, nil
+	return viewer, nil
 }
 
 func readLoginToken(cmd *cobra.Command, tokenStdin bool) (string, error) {
