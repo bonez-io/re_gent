@@ -419,15 +419,12 @@ func (s *identityStore) ensureInitialAdmin(requestedUsername, requestedPassword 
 		}
 		return adminSetup{Username: existingUsername, PasswordChangeNeeded: required == 1}, nil
 	case errors.Is(err, sql.ErrNoRows):
-		// Fresh instance: fall through and create the admin below.
+		// Fresh instance, or an instance bootstrapped before passwords
+		// existed: fall through.
 	default:
 		return adminSetup{}, fmt.Errorf("read instance state: %w", err)
 	}
 
-	username, _, err := validateUserInput(requestedUsername, requestedUsername)
-	if err != nil {
-		return adminSetup{}, fmt.Errorf("invalid admin username %q: %w", requestedUsername, err)
-	}
 	password := requestedPassword
 	generated := false
 	if password == "" {
@@ -442,6 +439,45 @@ func (s *identityStore) ensureInitialAdmin(requestedUsername, requestedPassword 
 		return adminSetup{}, err
 	}
 	now := s.now()
+
+	// Upgrade path: a data directory from the bootstrap-token era already
+	// has an instance owner but no instance_state row and no password.
+	// Creating a second owner would violate the one-owner rule (and did,
+	// crash-looping the server on every pre-RFC-0005 volume), so the
+	// existing owner is adopted as the admin: they get the initial password
+	// printed exactly as a fresh install would, must replace it on first
+	// browser sign-in, and their existing tokens keep working, because the
+	// password gate applies to browser sessions only.
+	var ownerID, ownerUsername string
+	switch err := tx.QueryRow("SELECT id, username FROM users WHERE instance_owner=1 LIMIT 1").Scan(&ownerID, &ownerUsername); {
+	case err == nil:
+		if _, err := tx.Exec(`INSERT INTO passwords(user_id, hash, created_at, updated_at) VALUES (?, ?, ?, ?)
+ON CONFLICT(user_id) DO UPDATE SET hash=excluded.hash, updated_at=excluded.updated_at`, ownerID, hash, formatTime(now), formatTime(now)); err != nil {
+			return adminSetup{}, fmt.Errorf("store adopted owner password: %w", err)
+		}
+		if _, err := tx.Exec(`UPDATE users SET password_change_required=1, org_role='admin' WHERE id=?`, ownerID); err != nil {
+			return adminSetup{}, fmt.Errorf("adopt owner as admin: %w", err)
+		}
+		if _, err := tx.Exec(`INSERT INTO instance_state(singleton, initial_admin_username, initial_admin_password_hash, created_at)
+VALUES (1, ?, ?, ?)`, ownerUsername, hash, formatTime(now)); err != nil {
+			return adminSetup{}, fmt.Errorf("store instance state: %w", err)
+		}
+		if err := appendAuditTx(tx, ownerID, "instance.adopt_owner", "user", ownerID, "success", now); err != nil {
+			return adminSetup{}, err
+		}
+		if err := tx.Commit(); err != nil {
+			return adminSetup{}, err
+		}
+		return adminSetup{Username: ownerUsername, Password: password, Generated: generated, PasswordChangeNeeded: true}, nil
+	case errors.Is(err, sql.ErrNoRows):
+	default:
+		return adminSetup{}, fmt.Errorf("read instance owner: %w", err)
+	}
+
+	username, _, err := validateUserInput(requestedUsername, requestedUsername)
+	if err != nil {
+		return adminSetup{}, fmt.Errorf("invalid admin username %q: %w", requestedUsername, err)
+	}
 	userID, err := newID("usr")
 	if err != nil {
 		return adminSetup{}, err
@@ -530,7 +566,12 @@ WHERE c.secret_hash=? AND c.kind=? AND c.revoked_at IS NULL AND u.disabled_at IS
 	}
 	auth.user.CreatedAt, _ = parseTime(createdAt)
 	auth.user.InstanceOwner = instanceOwner == 1
-	auth.passwordChangeRequired = passwordChangeRequired == 1
+	// The initial-password gate is a browser-session concern: it exists so
+	// the printed password cannot be used for anything but replacing itself.
+	// Tokens are only ever minted after that replacement on a fresh install,
+	// and on an upgraded install they predate passwords entirely and must
+	// keep the owner's hooks capturing, so they are never gated.
+	auth.passwordChangeRequired = passwordChangeRequired == 1 && wantKind == "session"
 	auth.csrf = csrf.String
 	if wantKind == "session" && isUnsafeMethod(r.Method) {
 		provided := r.Header.Get(csrfHeaderName)

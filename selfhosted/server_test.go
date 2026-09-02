@@ -417,3 +417,65 @@ func decodeResponse(t *testing.T, recorder *httptest.ResponseRecorder, dst any) 
 		t.Fatalf("decode response: %v; body=%s", err, recorder.Body.String())
 	}
 }
+
+// TestUpgradeAdoptsExistingOwner covers a data directory from the
+// bootstrap-token era: an instance owner exists, no instance_state row, no
+// password. The server must adopt that owner as the admin instead of trying
+// to create a second owner, print an initial password for them, and keep
+// their existing tokens working so hooks never stop capturing mid-upgrade.
+func TestUpgradeAdoptsExistingOwner(t *testing.T) {
+	dir := t.TempDir()
+	srv, setup, err := New(dir, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie, csrf, _ := onboardAdmin(t, srv, setup, "Legacy Org")
+	pat := mintOwnerPAT(t, srv, cookie, csrf)
+	// Reshape the store into what a pre-RFC-0005 instance left behind.
+	for _, stmt := range []string{
+		"DELETE FROM instance_state",
+		"DELETE FROM passwords",
+		"DELETE FROM organizations",
+		"UPDATE users SET password_change_required=0",
+	} {
+		if _, err := srv.identities.db.Exec(stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	if err := srv.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	srv, setup, err = New(dir, "", "")
+	if err != nil {
+		t.Fatalf("upgrade start failed: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	if !setup.Generated || setup.AdminUsername != "admin" || setup.AdminPassword == "" {
+		t.Fatalf("expected the existing owner adopted with a printed password, got %+v", setup)
+	}
+	// The old token still works on a data route.
+	assertStatus(t, serveRequest(srv, http.MethodGet, "/api/v1/projects", pat, "", nil), http.StatusOK)
+	// The printed password signs in and is flagged for replacement.
+	login := serveRequest(srv, http.MethodPost, "/api/v1/auth/login", "", "", map[string]string{"username": "admin", "password": setup.AdminPassword})
+	assertStatus(t, login, http.StatusCreated)
+	var body struct {
+		PasswordChangeRequired bool `json:"password_change_required"`
+	}
+	decodeResponse(t, login, &body)
+	if !body.PasswordChangeRequired {
+		t.Fatalf("adopted owner should be required to replace the initial password: %s", login.Body.String())
+	}
+	// A second restart does not reprint or rotate.
+	if err := srv.Close(); err != nil {
+		t.Fatal(err)
+	}
+	srv2, setup2, err := New(dir, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv2.Close() })
+	if setup2.Generated || setup2.AdminPassword != "" || !setup2.PasswordChangeRequired {
+		t.Fatalf("restart should keep the same initial password in force without reprinting: %+v", setup2)
+	}
+}
