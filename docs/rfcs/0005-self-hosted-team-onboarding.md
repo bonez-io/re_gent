@@ -151,9 +151,10 @@ checked in this order:
 Otherwise the callback ends on a page that says the account is not invited
 and shows the admin's contact. GitHub sign-in reads only the user's id,
 login, and verified emails, plus organization membership when rule 3 is
-configured. It works over plain http on a LAN because GitHub redirects the
-browser, not the server; the callback URL is whatever server address screen
-1 recorded. The admin account keeps its password as the break-glass method
+configured. GitHub redirects the browser, not the server, so the callback URL is
+whatever server address screen 1 recorded. Note the browser-session limit
+below: the callback must land on an https origin or on localhost for the
+session cookie to be accepted. The admin account keeps its password as the break-glass method
 regardless of which methods are on.
 
 Email delivery: optional SMTP settings on this screen. When configured,
@@ -187,6 +188,18 @@ Settings and the docs.
 
 Personal access tokens remain available under Settings for CI and scripts,
 and are the only thing that page shows.
+
+## Browser sessions need https or localhost
+
+The session cookie is `__Host-` prefixed and `Secure`, as RFC 0003 requires.
+Browsers accept such a cookie only on an https origin or on localhost, so a
+team server reached as `http://192.168.1.10:8080` signs in from the CLI but
+not from the browser. The supported shapes are: the Compose default on the
+machine that runs it (localhost), the production Compose with
+`REGENT_DOMAIN` and managed TLS, or any TLS-terminating proxy in front. The
+CLI is unaffected: it presents the cookie to its own cookie jar as if the
+origin were https, because it already sends bearer tokens over the same
+connection and the user chose that address.
 
 ## Storage
 

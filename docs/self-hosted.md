@@ -230,6 +230,12 @@ database and records the issuance as an operator audit event.
 
 ## Security notes and current limits
 
+- **Browser sign-in needs https or localhost.** The session cookie is marked
+  Secure, so a server opened as `http://<lan-ip>:8080` works from the CLI
+  but the browser will not keep the session. Use the production compose file
+  with `REGENT_DOMAIN`, or put a TLS proxy in front, for anything beyond the
+  machine that runs Compose.
+
 - The Go server is not published on a host port in the production profile.
   Caddy is the only public service and terminates TLS automatically.
 - `/healthz`, `/install`, `/install.sh`, `/bin/rgt`, `/api/v1/capabilities`,
