@@ -2,12 +2,16 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/bonez-io/re_gent/internal/index"
+	"github.com/bonez-io/re_gent/internal/server"
 	"github.com/bonez-io/re_gent/internal/store"
 )
 
@@ -59,7 +63,7 @@ func TestInsightEnable_WritesConfigIndexesAndReportsMissingProvider(t *testing.T
 	if !cfg.Insight.Enabled || cfg.Capture.Root != "project" {
 		t.Fatalf("config after enable: %#v", cfg)
 	}
-	for _, want := range []string{"Insight enabled", "No model provider", "[insight.model]", "1 of 1 messages", "no read pipeline"} {
+	for _, want := range []string{"Insight enabled", "No model provider", "[insight.model]", "1 of 1 messages"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("enable output missing %q:\n%s", want, out)
 		}
@@ -88,18 +92,58 @@ func TestInsightEnable_WritesConfigIndexesAndReportsMissingProvider(t *testing.T
 	}
 }
 
-func TestInsightEnable_RefusesServerMode(t *testing.T) {
+func TestInsightServerMode_TalksToTheServer(t *testing.T) {
 	s := insightTestRepo(t)
-	if err := s.WriteRepoConfig(store.RepoConfig{Remote: store.RemoteConfig{URL: "https://regent.example.com", RepoID: "repo-1"}}); err != nil {
+	dataDir := t.TempDir()
+	srv, err := server.New(dataDir)
+	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := runInsight(t, "enable")
-	if err == nil || !strings.Contains(err.Error(), "local mode only") {
-		t.Fatalf("expected server-mode refusal, got err=%v out=%s", err, out)
+	ts := httptest.NewServer(srv)
+	t.Cleanup(ts.Close)
+	body, _ := json.Marshal(map[string]string{"repo_id": "proj"})
+	resp, err := http.Post(ts.URL+"/repos", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if err := s.WriteRepoConfig(store.RepoConfig{Remote: store.RemoteConfig{URL: ts.URL, RepoID: "proj"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runInsight(t, "status")
+	if err != nil {
+		t.Fatalf("status: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Insight: off") || !strings.Contains(out, "project") {
+		t.Fatalf("server status:\n%s", out)
+	}
+	out, err = runInsight(t, "enable")
+	if err != nil {
+		t.Fatalf("enable: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "enabled on the server") || !strings.Contains(out, "insight.toml") {
+		t.Fatalf("enable output:\n%s", out)
 	}
 	cfg, _ := s.ReadRepoConfig()
 	if cfg.Insight.Enabled {
-		t.Fatal("refusal must not write the switch")
+		t.Fatal("server mode must not write the local switch")
+	}
+	out, _ = runInsight(t, "status")
+	if !strings.Contains(out, "enabled=true") {
+		t.Fatalf("status after enable:\n%s", out)
+	}
+	out, err = runCmd(t, WorkCmd(), "list")
+	if err != nil || !strings.Contains(out, "No work items yet") {
+		t.Fatalf("work list: %v\n%s", err, out)
+	}
+	out, err = runCmd(t, SearchCmd(), "anything")
+	if err != nil || !strings.Contains(out, "Nothing matched") {
+		t.Fatalf("search: %v\n%s", err, out)
+	}
+	out, err = runInsight(t, "disable")
+	if err != nil || !strings.Contains(out, "disabled on the server") {
+		t.Fatalf("disable: %v\n%s", err, out)
 	}
 }
 

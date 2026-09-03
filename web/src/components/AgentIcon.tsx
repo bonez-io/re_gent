@@ -31,8 +31,11 @@ const TINT: Record<string, string> = {
 /** Tint for an origin's mark; unrecognized origins stay muted rather than borrowing a brand. */
 export const agentColor = (origin?: string) => TINT[origin ?? ''] ?? 'var(--ink-3)'
 
-/** Human-readable vendor name for an origin, falling back to a title-cased guess. */
+/** Human-readable vendor name for an origin, falling back to a title-cased guess.
+ *  "sync" is not an agent at all — it marks lines captured from a workspace snapshot
+ *  taken outside any agent turn, so it reads as "baseline" everywhere origin is shown. */
 export function agentLabel(origin?: string): string {
+  if (origin === 'sync') return 'baseline'
   const known = origin ? AGENTS[origin] : undefined
   if (known) return known.label
   const guess = (origin ?? '').replace(/[_-]+/g, ' ').trim()

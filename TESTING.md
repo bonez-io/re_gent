@@ -72,6 +72,113 @@ printf '{"session_id":"claude-manual","cwd":"%s","last_assistant_message":"done"
 
 Expected result: one step is created for the turn, with `origin: claude_code`.
 
+## Searchable Sessions (insight)
+
+This exercises RFC 0007 end to end with a local model, so it needs no key.
+It assumes [Ollama](https://ollama.com) is running with a chat-capable model
+(any instruct model works; `qwen2.5:3b` or larger reads better) and,
+optionally, an embedding model such as `nomic-embed-text`.
+
+Insight is off by default and has two halves: the repository switch in
+`.regent/config.toml` (committed) and your provider in `~/.regent/config.toml`
+(private). Use a scratch `HOME` so your real config is untouched:
+
+```bash
+export HOME=$(mktemp -d)
+mkdir -p "$HOME/.regent"
+cat > "$HOME/.regent/config.toml" <<'EOF'
+[insight.model]
+provider = "openai-compatible"
+model = "qwen2.5:3b"
+base_url = "http://localhost:11434/v1"
+
+[insight.embedding]            # optional; without it search is full-text only
+provider = "openai-compatible"
+model = "nomic-embed-text"
+base_url = "http://localhost:11434/v1"
+EOF
+
+cd "$tmp"
+"$RGT" insight enable          # writes [insight] enabled = true, indexes existing messages
+"$RGT" insight status          # "Insight: on", provider named, queue empty
+```
+
+Record a turn the way the Claude hooks do (the user prompt, a tool batch as
+in Manual Claude Turn so the turn has a step and a changed file, then the
+assistant message), and watch the worker the Stop hook spawned:
+
+```bash
+printf '{"session_id":"claude-manual","turn_id":"t1","cwd":"%s","prompt":"add exponential backoff to Retry in queue.go for https://github.com/acme/demo/issues/42"}' "$PWD" \
+  | "$RGT" message-hook user
+printf '{"session_id":"claude-manual","turn_id":"t1","cwd":"%s","last_assistant_message":"Done: Retry now backs off 100ms, 200ms, 400ms."}' "$PWD" \
+  | "$RGT" message-hook assistant
+
+until [ ! -f .regent/insight.lock ]; do sleep 1; done   # the detached worker released its lock
+cat .regent/log/insight.log                              # one line per work item read, or the failure
+"$RGT" insight status                                    # "1 done" in the queue, 1 work item read
+"$RGT" work list
+"$RGT" work show <id>                                    # goal, approach, outcome, entities with evidence, files
+"$RGT" search "backoff"                                  # the item, matched by text and (with embeddings) meaning
+"$RGT" search --entity acme/demo#42                      # the issue URL became an entity with no model involved
+"$RGT" search --file queue.go
+```
+
+Expected result: one work item for the session, `status` set by the model,
+the issue URL present as an `issue` entity with source `deterministic`, the
+edited file under "Files changed" (only when the turn had a tool batch: a
+turn with no tools has no step, so no files), and every model-added entity
+carrying an evidence step you can `rgt show`. If the embedding endpoint is
+not available, the log says so, the work items are stored without vectors,
+and `rgt insight status` reports how many are unembedded; search is then
+full-text only.
+
+### Server mode
+
+In a repository connected to a server, the same commands talk to the server,
+which mirrors every pushed session into its own per-project index and reads
+it there. Configure the server's providers once, in `insight.toml` under its
+data directory (`/data` in the container; `REGENT_INSIGHT_CONFIG` overrides
+the path), with the server's environment carrying the named keys:
+
+```toml
+[model]
+provider = "anthropic"
+model = "claude-haiku-4-5-20251001"
+api_key_env = "ANTHROPIC_API_KEY"
+
+[embedding]
+provider = "openai-compatible"
+model = "text-embedding-3-small"
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+```
+
+Restart the server so it reads the file, then from the connected repository:
+
+```bash
+rgt insight enable        # sets the project switch on the server; it mirrors what was pushed and starts reading
+rgt insight status        # "project enabled=true", providers named, queue and coverage from the server
+rgt work list             # after the server's worker finished (docker logs show "insight <project>: ... done")
+rgt search "backoff"
+```
+
+Only pushed steps reach the server, so a turn that used no tools (no step)
+is not read there; `rgt insight run` asks the server to read anything pushed
+since, and `rgt insight rebuild` re-reads every pushed session.
+
+Worth checking on purpose:
+
+- A second turn on a different topic produces a second item and closes the
+  first (`rgt work list` shows both; the first is no longer "open").
+- `rgt insight run` while the detached worker is running says so and exits.
+- `rgt insight rebuild` then `rgt insight run` reads every session again
+  from its first message and replaces the items.
+- With no `[insight.model]` in your config, `rgt insight status` says
+  "idle" and the hooks queue nothing.
+- With a `[insight.scrub] patterns = ["acme"]` line in `.regent/config.toml`,
+  the request the model sees has `[REDACTED:pattern]` where the text was
+  (check by pointing `command` at `tee`).
+
 ## Manual Codex Turn
 
 This exercises the Codex hook adapter without starting Codex.

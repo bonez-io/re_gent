@@ -1,6 +1,8 @@
 # RFC 0007: Searchable sessions
 
-- Status: Draft, decisions locked; S1 (schema, queue, worker, config) landed
+- Status: Draft, decisions locked; S1, S3, S4, the CLI half of S5 (`rgt
+  search`, `rgt work`) and server mode landed; `rgt related`, capture-time
+  scrub (S2), the skill (S6) and Cursor (S7) are open
 - Owners: re_gent maintainers
 - Last updated: 2026-09-03
 - Builds on: [RFC 0004](./0004-managed-service-identity-and-enrollment.md)
@@ -244,8 +246,11 @@ enable` and `rgt insight rebuild`, both of which rebuild the three indexes;
 than silent. External-content FTS is keyed by rowid, which a `VACUUM` may
 renumber; `rebuild` is the remedy, and nothing in re_gent runs `VACUUM`.
 
-Files are not entities. A work item's files are `work_item_steps ⋈
-step_files`, which is exact, needs no model, and is what `rgt blame` already
+Files are not entities. A work item's files are the paths its steps changed
+against their parents, stored in `work_item_files(work_item_id, path)` at
+write time. (`step_files` holds each step's whole tree, not its changes, so
+the join the first draft proposed would have named every file in the
+workspace.) This is exact, needs no model, and is what `rgt blame` already
 keys on. A `symbol` entity is the model saying "this symbol mattered here";
 `rgt related --symbol` uses blame first and that entity second.
 
@@ -255,7 +260,8 @@ second, which is more than a repository will have for a long time.
 `sqlite-vec` or any ANN index is deferred until a real repository shows the
 scan on a profile.
 
-None of this is pushed in server mode in v1; see below.
+In server mode the same tables live in the server's per-project index, filled
+by mirroring pushed refs; nothing derived is pushed from a client.
 
 ## Search
 
@@ -309,11 +315,20 @@ OpenCode, and Pi. Cursor is a reader, not a hook host; see below.
 
 ## What is out of v1
 
-- **Server mode.** In server mode the index is a machine-local cache and the
-  server is the source of truth, so the worker would have to run on the
-  server, against organization-configured providers, on ingest. That is a
-  follow-up to this RFC; v1 is local mode only, and `rgt insight enable`
-  refuses in a server-mode repository with a message saying so.
+- ~~**Server mode.**~~ In. The server keeps a per-project `index.db` beside
+  its objects and refs, mirrors every pushed session ref into it
+  (`internal/insight/mirror`: new steps indexed, messages rebuilt from each
+  step's conversation blob), runs the same worker in-process on ingest with
+  providers from `<data dir>/insight.toml` (`[model]`, `[embedding]`, same
+  shape as the per-user tables; `REGENT_INSIGHT_CONFIG` overrides the path),
+  and serves `GET insight/status`, `POST insight/settings`, `POST
+  insight/run`, `POST insight/rebuild`, `GET search`, `GET work`, `GET
+  work/{id}` under `/{project}/api/`. The per-project switch lives in that
+  index (`rgt insight enable` in a server-mode repository sets it on the
+  server; the committed `[insight]` table is not consulted). `rgt search`,
+  `rgt work`, and `rgt insight` call those routes when the repository is
+  connected. One limit: a turn that used no tools writes no step and is not
+  pushed, so the server cannot read it; locally it is.
 - **Entity-to-entity relations** (this PR closes that ticket). Both link to
   the same work item; that is enough to find them together. A graph comes
   when a query needs it.
@@ -346,10 +361,10 @@ and suit the delegated-worker pattern (disjoint file allowlists).
 | Stream | Work | Reuses | Days |
 |---|---|---|---|
 | S1 Schema, queue, worker, config — **landed** | tables + migration, `insight_jobs`, lock file, `rgt insight` verbs, `[insight]` tables in both config files, key-by-env; `internal/insight` with the `Processor` seam S4 plugs into | `migrateSchema`, `config`, `store.RepoConfig`, `LogHookError` | 3 |
-| S2 Scrub | policy that composes `redact` + user patterns; capture-time hook through a repository `publicgate.Checker`; egress pass in the worker | `internal/redact`, `internal/publicgate` | 2 |
-| S3 Providers | `anthropic` messages, `openai-compatible` chat + embeddings, `command` runner; timeouts, retry, token budget | — | 3 |
-| S4 Read: work items and entities | Appendix A prompt, boundary and continuation, rolling `approach`, deterministic URL/git entities, evidence enforcement, dedupe, fixtures from recorded sessions | `treediff.LineDiff`, `step_files`, `messages` | 5–6 |
-| S5 Search | three FTS5 tables, cosine + RRF, `rgt search`, `rgt related` via blame join, `rgt work`, not-yet-indexed results | `rgt blame` | 3–4 |
+| S2 Scrub — egress half **landed** in `pipeline.Scrubber` | policy that composes `redact` + user patterns; capture-time hook through a repository `publicgate.Checker` (open); egress pass in the worker | `internal/redact`, `internal/publicgate` | 2 |
+| S3 Providers — **landed** (`internal/insight/provider`) | `anthropic` messages, `openai-compatible` chat + embeddings, `command` runner; timeouts, retry, token budget | — | 3 |
+| S4 Read: work items and entities — **landed** (`internal/insight/pipeline`) | Appendix A prompt, boundary and continuation, rolling `approach`, deterministic URL/git entities, evidence enforcement, dedupe, fixtures from recorded sessions | `treediff.LineDiff`, `step_files`, `messages` | 5–6 |
+| S5 Search — `rgt search` and `rgt work` **landed**; `rgt related` open | three FTS5 tables, cosine + RRF, `rgt search`, `rgt related` via blame join, `rgt work`, not-yet-indexed results | `rgt blame` | 3–4 |
 | S6 Skill and docs | `related-work`, `context-primer` update, README/FAQ, `rgt insight status` output | skills embed | 2 |
 | S7 Cursor importer | `state.vscdb` reader, `cursor` origin, no trees | capture `Recorder` | 2 |
 

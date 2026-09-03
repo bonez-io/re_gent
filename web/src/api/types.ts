@@ -18,6 +18,9 @@ export type CapabilitiesResponse = {
   /** Self-hosted only; absent once onboarding is done. */
   onboarding?: OnboardingState
   features: string[]
+  /** Managed only. When true, GitHub and Google sign-in are provisioned and operated by
+   *  re_gent itself — the org has nothing to configure. */
+  identity_managed?: boolean
 }
 
 export type AccessUser = {
@@ -109,13 +112,21 @@ export type StepListResponse = { steps: LogStep[] }
 /** GET /<repo>/api/diff?step=<hash> — the per-file diff a step introduced over its parent. */
 export type StepDiffResponse = { step_hash: string; parent_hash: string; total_files: number; files: FileDiff[] }
 export type FileSummary = { path: string; mode?: number; size?: number; blob_hash: string; blame_hash?: string }
-export type FilesResponse = { step_hash: string; tree_hash: string; total_files: number; files: FileSummary[] }
+/** `source` distinguishes a tree captured from a live agent turn ("session") from one
+ *  read straight off disk with no step behind it yet ("sync") — e.g. a repo that has been
+ *  connected but has not completed a captured turn. Absent on older servers. */
+export type FilesResponse = { step_hash: string; tree_hash: string; total_files: number; files: FileSummary[]; source?: 'session' | 'sync' }
 export type BlameResponse = {
   step_hash: string
   path: string
   blob_hash: string
   lines: Array<{ number: number; content: string; step_hash?: string; origin?: string; timestamp?: string }>
 }
+
+/** GET /<repo>/api/feed — a long-pollable stream of newly captured steps, used by the
+ *  onboarding tutorial to detect when a guided prompt has landed. */
+export type FeedStep = { hash: string; session_id: string; origin: string; turn_id: string; timestamp: string; files: string[]; prompt: string }
+export type FeedResponse = { cursor: string; steps: FeedStep[] }
 
 export type Conversation = {
   id: string

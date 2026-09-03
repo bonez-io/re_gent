@@ -121,6 +121,50 @@ export const ManagedShowsFixedProviders: Story = {
   },
 }
 
+/** GitHub issue: when the capabilities document carries `identity_managed: true`, GitHub
+ *  and Google read as managed by re_gent rather than the generic "not configurable" copy —
+ *  still non-editable, with no client-id fields or configure affordances either way. */
+export const ManagedShowsIdentityManagedByRegent: Story = {
+  render: () => <Managed><UsersScreen /></Managed>,
+  beforeEach({ msw }) {
+    msw.use(
+      http.get('/api/v1/orgs/:slug', () => HttpResponse.json({ ...org, slug: 'acme' })),
+      http.get('/api/v1/orgs/:slug/connections', () => HttpResponse.json(connectionsSnapshot)),
+      http.get('/api/v1/orgs/:slug/invitations', () => HttpResponse.json([])),
+      http.get('/api/v1/capabilities', () => HttpResponse.json({ deployment: 'managed', api_version: 'v1', auth_methods: ['github', 'google'], auth_starts: {}, features: [], identity_managed: true })),
+    )
+  },
+  play: async ({ canvas }) => {
+    await expect(await canvas.findByText('GitHub')).toBeVisible()
+    await expect(canvas.getByText('Google')).toBeVisible()
+    // The capabilities fetch that decides this text lands after the initial render.
+    await waitFor(() => expect(canvas.getAllByText('On · managed by re_gent')).toHaveLength(2), { timeout: 3000 })
+    await expect(canvas.queryByText('On · not configurable')).not.toBeInTheDocument()
+    await expect(canvas.queryByPlaceholderText('Client ID')).not.toBeInTheDocument()
+  },
+}
+
+/** Creating an invitation the server actually emailed shows "Email sent" alongside the link. */
+export const CreateInvitationShowsEmailSent: Story = {
+  render: () => <SelfHosted><UsersScreen /></SelfHosted>,
+  beforeEach({ msw }) {
+    msw.use(
+      http.get('/api/v1/auth/me', () => HttpResponse.json(me)),
+      http.get('/api/v1/orgs/:slug', () => HttpResponse.json(org)),
+      http.get('/api/v1/orgs/:slug/auth-methods', () => HttpResponse.json(authMethods)),
+      http.get('/api/v1/orgs/:slug/connections', () => HttpResponse.json(connectionsSnapshot)),
+      http.get('/api/v1/orgs/:slug/invitations', () => HttpResponse.json([])),
+      http.post('/api/v1/orgs/:slug/invitations', () => HttpResponse.json({ id: 'inv_new', link: 'http://127.0.0.1:8081/invitations/tok_new', expires_at: new Date(Date.now() + 7 * 86_400_000).toISOString(), emailed: true })),
+    )
+  },
+  play: async ({ canvas }) => {
+    await userEvent.type(await canvas.findByRole('textbox', { name: 'Email' }), 'new-teammate@example.com')
+    await userEvent.click(canvas.getByRole('button', { name: 'Invite' }))
+    await expect(await canvas.findByText('Email sent')).toBeVisible()
+    await expect(canvas.getByText('http://127.0.0.1:8081/invitations/tok_new')).toBeVisible()
+  },
+}
+
 export const ContinueAdvancesToDone: Story = {
   render: () => <SelfHosted><UsersScreen /></SelfHosted>,
   beforeEach({ msw }) {

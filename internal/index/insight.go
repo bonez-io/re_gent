@@ -319,8 +319,11 @@ type InsightCoverage struct {
 	MessagesIndexed int
 	Sessions        int
 	WorkItems       int
-	Entities        int
-	Embeddings      int
+	// WorkItemsEmbedded counts work items with at least one vector, under
+	// any provider; Embeddings counts vectors.
+	WorkItemsEmbedded int
+	Entities          int
+	Embeddings        int
 }
 
 // InsightCoverage counts base rows against derived rows.
@@ -337,6 +340,7 @@ func (idx *DB) InsightCoverage() (InsightCoverage, error) {
 		{`SELECT COUNT(*) FROM messages_fts_docsize`, &c.MessagesIndexed},
 		{`SELECT COUNT(*) FROM sessions`, &c.Sessions},
 		{`SELECT COUNT(*) FROM work_items`, &c.WorkItems},
+		{`SELECT COUNT(DISTINCT owner_id) FROM embeddings WHERE owner_kind = 'work_item'`, &c.WorkItemsEmbedded},
 		{`SELECT COUNT(*) FROM entities`, &c.Entities},
 		{`SELECT COUNT(*) FROM embeddings`, &c.Embeddings},
 	}

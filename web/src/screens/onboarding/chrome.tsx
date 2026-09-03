@@ -2,15 +2,21 @@ import type { ReactNode } from 'react'
 import type { OnboardingState } from '../../api/types'
 import type { Deployment } from './path'
 
-const stepsFor: Record<Deployment, Array<{ key: OnboardingState; label: string }>> = {
+// The guided tutorial sits between "connect" and "users" in the progress bar even though
+// it has no corresponding server onboarding state (see path.ts's tutorialPathFor).
+export type OnboardingStep = OnboardingState | 'tutorial'
+
+const stepsFor: Record<Deployment, Array<{ key: OnboardingStep; label: string }>> = {
   'self-hosted': [
     { key: 'admin_password', label: 'Organization & admin' },
     { key: 'connect', label: 'Connect' },
+    { key: 'tutorial', label: 'Tutorial' },
     { key: 'users', label: 'Users' },
     { key: 'done', label: 'Done' },
   ],
   managed: [
     { key: 'connect', label: 'Connect' },
+    { key: 'tutorial', label: 'Tutorial' },
     { key: 'users', label: 'Users' },
     { key: 'done', label: 'Done' },
   ],
@@ -18,7 +24,7 @@ const stepsFor: Record<Deployment, Array<{ key: OnboardingState; label: string }
 
 export function OnboardingLayout({ deployment, current, title, description, children, wide }: {
   deployment: Deployment
-  current: OnboardingState
+  current: OnboardingStep
   title: string
   description: string
   children: ReactNode

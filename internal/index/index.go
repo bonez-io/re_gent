@@ -197,6 +197,13 @@ func createInsightSchema(db *sql.DB) error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_work_item_steps_step ON work_item_steps(step_id);
 
+	CREATE TABLE IF NOT EXISTS work_item_files (
+		work_item_id TEXT NOT NULL,
+		path         TEXT NOT NULL,
+		PRIMARY KEY (work_item_id, path)
+	);
+	CREATE INDEX IF NOT EXISTS idx_work_item_files_path ON work_item_files(path);
+
 	CREATE TABLE IF NOT EXISTS entities (
 		id   TEXT PRIMARY KEY,
 		type TEXT NOT NULL,
@@ -246,6 +253,12 @@ func createInsightSchema(db *sql.DB) error {
 	CREATE TABLE IF NOT EXISTS insight_meta (
 		key   TEXT PRIMARY KEY,
 		value TEXT NOT NULL
+	);
+
+	CREATE TABLE IF NOT EXISTS insight_cursors (
+		session_id       TEXT PRIMARY KEY,
+		last_message_seq INTEGER NOT NULL DEFAULT -1,
+		updated_at       INTEGER NOT NULL
 	);
 
 	CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(

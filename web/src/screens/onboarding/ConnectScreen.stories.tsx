@@ -14,6 +14,7 @@ function SelfHosted({ children }: PropsWithChildren) {
   return <QueryClientProvider client={client}><MemoryRouter initialEntries={['/setup/connect']}>
     <Routes>
       <Route path="/setup/connect" element={children} />
+      <Route path="/setup/tutorial" element={<div>Tutorial screen reached</div>} />
       <Route path="/setup/users" element={<div>Users screen reached</div>} />
     </Routes>
   </MemoryRouter></QueryClientProvider>
@@ -117,6 +118,26 @@ export const ContinueAdvancesToUsers: Story = {
     await expect(await canvas.findByRole('button', { name: 'Continue' })).toBeEnabled()
     await userEvent.click(canvas.getByRole('button', { name: 'Continue' }))
     await waitFor(async () => expect(await canvas.findByText('Users screen reached')).toBeVisible())
+  },
+}
+
+/** With a repository already connected, Continue shows the guided tutorial before Users,
+ *  carrying the connected project's id on the URL. */
+export const ContinueAdvancesToTutorialWhenConnected: Story = {
+  render: () => <SelfHosted><ConnectScreen /></SelfHosted>,
+  beforeEach({ msw }) {
+    msw.use(
+      http.get('/api/v1/auth/me', () => HttpResponse.json(me)),
+      http.get('/api/v1/orgs/:slug', () => HttpResponse.json(org)),
+      http.post('/api/v1/orgs/:slug/setup-codes', () => HttpResponse.json({ code: 'SETUP1', expires_at: new Date(Date.now() + 900_000).toISOString(), command: 'curl -fsSL http://127.0.0.1:8081/install | sh && rgt connect http://127.0.0.1:8081 --setup SETUP1' })),
+      connectionsFeed(sampleConnection, 300),
+      http.post('/api/v1/orgs/:slug/onboarding', () => HttpResponse.json({ ...org, onboarding: 'users' })),
+    )
+  },
+  play: async ({ canvas }) => {
+    await waitFor(() => expect(canvas.getByText('girlfriend-assistant')).toBeVisible(), { timeout: 3000 })
+    await userEvent.click(canvas.getByRole('button', { name: 'Continue' }))
+    await waitFor(async () => expect(await canvas.findByText('Tutorial screen reached')).toBeVisible())
   },
 }
 
