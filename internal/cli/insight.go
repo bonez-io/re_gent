@@ -119,9 +119,11 @@ func printInsightStatus(w io.Writer, s *store.Store, idx *index.DB) error {
 	if cov.Entities == 1 {
 		entities = "1 entity"
 	}
-	fmt.Fprintf(w, "  read         %s, %s, %s across %s\n",
-		plural(cov.WorkItems, "work item"), entities,
-		plural(cov.Embeddings, "embedding"), plural(cov.Sessions, "session"))
+	fmt.Fprintf(w, "  read         %s (%d embedded), %s across %s\n",
+		plural(cov.WorkItems, "work item"), cov.WorkItemsEmbedded, entities, plural(cov.Sessions, "session"))
+	if settingsErr == nil && settings.HasEmbedding() && cov.WorkItemsEmbedded < cov.WorkItems {
+		fmt.Fprintf(w, "               %s\n", style.DimText(fmt.Sprintf("%d work items have no vector; see log/%s for the embedding error, then `rgt insight rebuild`", cov.WorkItems-cov.WorkItemsEmbedded, insight.LogFileName)))
+	}
 	return nil
 }
 

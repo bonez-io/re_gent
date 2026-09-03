@@ -305,6 +305,10 @@ explicitly with `NO_COLOR=1`.
 | `rgt show <step>` | Display full context for a step (tool call + conversation) |
 | `rgt blame <path>[:<line>]` | Show per-line provenance for a file |
 | `rgt repair blame` | Recompute every stored blame map with the current diff. `rgt blame` is annotated at write time, so a diff fix does not reach maps already on disk; `rgt show` diffs at query time and needs no repair. Idempotent and safe to interrupt. |
+| `rgt insight enable` / `disable` / `status` | Turn on the searchable-sessions layer for this repository (RFC 0007). Off by default. Each person also configures a model provider in `~/.regent/config.toml`; `status` says what would be called and how much has been read. |
+| `rgt insight run [--detach]` / `rebuild` | Drain the read queue now, or re-index full-text search and queue every session to be read again. Hooks queue and spawn the worker on their own once insight is on. |
+| `rgt search "<query>" [--file] [--entity] [--status] [--session] [--since] [--json]` | Find work items by meaning, text, entity, or file. Full-text always; semantic when an embedding provider is configured. Sessions no work item covers yet are listed as "not yet read". |
+| `rgt work list` / `rgt work show <id>` | List work items (goal, approach, outcome, status) and inspect one with its entities, evidence steps, and files. |
 | `rgt cat <hash>` | Inspect any object by hash (debugging tool; runnable but not listed in `rgt --help`) |
 | `rgt push` | Push session history to a repo on a server (`--url`, `--repo`, `--session`) |
 | `rgt version` | Print version information |
