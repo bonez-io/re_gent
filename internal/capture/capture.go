@@ -911,9 +911,37 @@ func computeBlameForStep(s *store.Store, parentHash, currentStepHash, treeHash s
 		}
 	}
 
+	// The workspace sync baseline (see WorkspaceSync) is loaded once, lazily,
+	// and only if some entry turns out to need it: most steps have a parent
+	// whose tree already covers every path (snapshotWorkspace captures the
+	// whole working tree every turn, not just what an agent touched), so the
+	// baseline usually goes unused after the first step of a session. When
+	// there is no sync ref at all — a project that has never run one, or the
+	// same call computing blame for a sync step's own step, where the ref
+	// still points at this step's parent — every lookup reports ok=false and
+	// behaviour is byte-identical to before this baseline existed.
+	var baselineTip store.Hash
+	var baselineTree *store.Tree
+	var baselineLoaded bool
+	loadBaseline := func() (store.Hash, *store.Tree) {
+		if !baselineLoaded {
+			baselineTip, baselineTree, _ = loadWorkspaceSyncBaseline(s)
+			baselineLoaded = true
+		}
+		return baselineTip, baselineTree
+	}
+
 	var problems []error
 	for _, entry := range tree.Entries {
 		parentEntry, hasParentEntry := parentEntries[entry.Path]
+
+		var baselineBlob store.Hash
+		var baselineBlame *store.BlameMap
+		var hasBaseline bool
+		if !hasParentEntry {
+			tip, btree := loadBaseline()
+			baselineBlob, baselineBlame, hasBaseline = baselineEntry(s, tip, btree, entry.Path)
+		}
 
 		if hasParentEntry && parentEntry.Blob == entry.Blob {
 			oldBlame, err := s.ReadBlameForFile(parentHash, entry.Path)
@@ -927,9 +955,22 @@ func computeBlameForStep(s *store.Store, parentHash, currentStepHash, treeHash s
 			continue
 		}
 
+		// No parent entry, but the workspace baseline already has this exact
+		// content: every line is unchanged relative to it, so its blame map
+		// (attributing lines to the sync step, or to whatever wrote them
+		// before it) carries straight through, the same as the parent
+		// fast-path above.
+		if !hasParentEntry && hasBaseline && baselineBlob == entry.Blob && baselineBlame != nil {
+			if err := emit(currentStepHash, entry.Path, baselineBlame); err != nil {
+				problems = append(problems, fmt.Errorf("copy baseline blame for %s: %w", entry.Path, err))
+			}
+			continue
+		}
+
 		var oldContent []byte
 		var oldBlame *store.BlameMap
-		if hasParentEntry {
+		switch {
+		case hasParentEntry:
 			oldContent, err = s.ReadBlob(parentEntry.Blob)
 			if err != nil {
 				problems = append(problems, fmt.Errorf("read parent blob for %s: %w", entry.Path, err))
@@ -939,6 +980,13 @@ func computeBlameForStep(s *store.Store, parentHash, currentStepHash, treeHash s
 			if err != nil {
 				problems = append(problems, fmt.Errorf("read parent blame for %s: %w", entry.Path, err))
 			}
+		case hasBaseline:
+			oldContent, err = s.ReadBlob(baselineBlob)
+			if err != nil {
+				problems = append(problems, fmt.Errorf("read baseline blob for %s: %w", entry.Path, err))
+				continue
+			}
+			oldBlame = baselineBlame
 		}
 
 		newContent, err := s.ReadBlob(entry.Blob)

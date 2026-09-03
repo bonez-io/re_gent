@@ -452,6 +452,15 @@ func configureHooksTo(projectRoot string, targets []agentTarget, opts hookOption
 			reportGitHookWiredTo(out, outcome)
 			reportGitHookSkippedTo(out, outcome)
 		}
+		// Same opt-out, same failure discipline: post-commit refreshing the
+		// workspace baseline is a convenience over capture, never a reason for
+		// init or connect to fail.
+		if outcome, gitErr := wirePostCommitHook(projectRoot); gitErr != nil {
+			Verbosef(out, "  Git post-commit hook not configured: %v\n", gitErr)
+		} else {
+			reportPostCommitHookWiredTo(out, outcome)
+			reportPostCommitHookSkippedTo(out, outcome)
+		}
 	}
 	return hookOutcome{installed: installed}, err
 }

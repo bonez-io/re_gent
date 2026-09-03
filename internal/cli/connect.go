@@ -300,6 +300,11 @@ func connectHere(serverURL, dir, repoID string, noGitHook bool, agent agentTarge
 		flow.Detail("Server", cfg.URL)
 		flow.Detail("Project", cfg.RepoID)
 	}
+	// A baseline snapshot of the working tree, taken once hooks are wired, so
+	// the Files view is never empty before the first captured agent step
+	// (issue #106). Best-effort: see runBaselineSync.
+	runBaselineSync(out, dir)
+
 	if canPrompt {
 		shareWithTeam([]string{dir})
 	}
@@ -633,6 +638,12 @@ func connectWireHooksForTargetTo(projectRoot string, noGitHook bool, target agen
 		} else {
 			reportGitHookWiredTo(out, outcome)
 			reportGitHookSkippedTo(out, outcome)
+		}
+		if outcome, err := wirePostCommitHook(projectRoot); err != nil {
+			Verbosef(out, "  Git post-commit hook not configured: %v\n", err)
+		} else {
+			reportPostCommitHookWiredTo(out, outcome)
+			reportPostCommitHookSkippedTo(out, outcome)
 		}
 	}
 	// Agents read their hook config at session startup, so a session that was

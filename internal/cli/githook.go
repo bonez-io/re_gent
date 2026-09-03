@@ -46,7 +46,26 @@ const (
 
 	// gitHookOptOutEnv disables the sync at push time without touching the
 	// hook. Mirrors REGENT_SERVER_URL="" — the documented kill-switch pattern.
+	// The post-commit hook honours the same variable: one switch turns off
+	// every git-triggered sync, push and commit alike, rather than each
+	// hook needing its own name to remember.
 	gitHookOptOutEnv = "REGENT_GIT_SYNC_ON_PUSH"
+
+	// gitPostCommitHookName is the second Git hook re_gent installs into,
+	// alongside pre-push. Where pre-push drains the server-mode delivery
+	// queue, post-commit refreshes the workspace baseline (see
+	// internal/capture.WorkspaceSync) so the Files view reflects a commit
+	// without waiting on the next agent turn.
+	//
+	// It reuses gitHookPrevSuffix and gitHookVerb: the suffix is appended to
+	// a different hook filename ("post-commit" vs "pre-push"), so the two
+	// preserved-hook backups never collide even sharing the literal string,
+	// and the verb is the same hidden `rgt git-hook <name>` entry point both
+	// scripts invoke.
+	gitPostCommitHookName = "post-commit"
+
+	// gitPostCommitMarker mirrors gitHookMarker for the post-commit hook.
+	gitPostCommitMarker = "# >>> re_gent post-commit >>>"
 )
 
 // gitHookOutcome says what wiring the Git hook did, so callers can report the
@@ -85,6 +104,27 @@ func wireGitHook(projectRoot string) (gitHookOutcome, error) {
 		return gitHookOutcome{Skipped: reason}, nil
 	}
 	outcome, err := installGitHook(hooksDir, hookBinary())
+	if err != nil {
+		return outcome, err
+	}
+	return outcome, nil
+}
+
+// wirePostCommitHook installs the post-commit hook for projectRoot, mirroring
+// wireGitHook step for step. It is a separate hook, not a flag folded into
+// pre-push's script, because the two fire on different Git events with
+// different jobs: post-commit refreshes the workspace baseline on every
+// commit; pre-push drains the server-mode delivery queue on every push. A
+// project can have either, both, or (opted out) neither.
+func wirePostCommitHook(projectRoot string) (gitHookOutcome, error) {
+	if optedOutOfGitHook(os.LookupEnv) {
+		return gitHookOutcome{Skipped: gitHookOptOutEnv + "=0 is set"}, nil
+	}
+	hooksDir, reason := gitHooksDir(projectRoot)
+	if reason != "" {
+		return gitHookOutcome{Skipped: reason}, nil
+	}
+	outcome, err := installPostCommitHook(hooksDir, hookBinary())
 	if err != nil {
 		return outcome, err
 	}
@@ -325,6 +365,120 @@ func gitHookScript(binary string) string {
 	return b.String()
 }
 
+// installPostCommitHook mirrors installGitHook for the post-commit hook: the
+// same three-state preserve/rewrite/refuse logic, targeting a different hook
+// name and a different script.
+func installPostCommitHook(hooksDir, binary string) (gitHookOutcome, error) {
+	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+		return gitHookOutcome{}, fmt.Errorf("create %s: %w", hooksDir, err)
+	}
+	hookPath := filepath.Join(hooksDir, gitPostCommitHookName)
+	prevPath := hookPath + gitHookPrevSuffix
+
+	existing, err := os.ReadFile(hookPath)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		// nothing to preserve
+	case err != nil:
+		return gitHookOutcome{}, fmt.Errorf("read %s: %w", hookPath, err)
+	case isRegentPostCommitHook(existing):
+		// ours already; fall through to rewrite
+	default:
+		if pathExists(prevPath) {
+			return gitHookOutcome{}, fmt.Errorf(
+				"both %s and %s exist and neither is re_gent's; refusing to guess which to keep — move one aside and re-run",
+				hookPath, prevPath)
+		}
+		if err := os.Rename(hookPath, prevPath); err != nil {
+			return gitHookOutcome{}, fmt.Errorf("preserve existing hook: %w", err)
+		}
+	}
+
+	script := postCommitHookScript(binary)
+	if err := writeExecutable(hookPath, script); err != nil {
+		return gitHookOutcome{}, err
+	}
+	return gitHookOutcome{Path: hookPath, Chained: pathExists(prevPath)}, nil
+}
+
+// removePostCommitHook mirrors removeGitHook for the post-commit hook.
+func removePostCommitHook(projectRoot string) (bool, error) {
+	hooksDir, reason := gitHooksDir(projectRoot)
+	if reason != "" {
+		return false, nil
+	}
+	hookPath := filepath.Join(hooksDir, gitPostCommitHookName)
+	prevPath := hookPath + gitHookPrevSuffix
+
+	existing, err := os.ReadFile(hookPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read %s: %w", hookPath, err)
+	}
+	if !isRegentPostCommitHook(existing) {
+		return false, nil
+	}
+	if err := os.Remove(hookPath); err != nil {
+		return false, fmt.Errorf("remove %s: %w", hookPath, err)
+	}
+	if pathExists(prevPath) {
+		if err := os.Rename(prevPath, hookPath); err != nil {
+			return true, fmt.Errorf("restore previous hook: %w", err)
+		}
+	}
+	return true, nil
+}
+
+// isRegentPostCommitHook mirrors isRegentGitHook for the post-commit hook.
+func isRegentPostCommitHook(content []byte) bool {
+	return bytes.Contains(content, []byte(gitPostCommitMarker))
+}
+
+// postCommitHookScript renders the post-commit script for a given binary.
+//
+// It follows the same three steps as gitHookScript — run any preserved
+// previous hook first, invoke the rgt subcommand unless opted out, exit 0
+// unconditionally — with one deliberate difference: the rgt invocation is
+// backgrounded and detached ( "$rgt" ... & ) rather than run inline. A commit
+// happens far more often than a push, and unlike pre-push there is no server
+// round trip whose latency the user is already waiting through — hashing a
+// large working tree is the only cost here, and `git commit` must never be
+// made to wait on it. `runGitPostCommitHook` (githook_cmd.go) also bounds its
+// own wait, so this is belt and braces, not the only guard.
+//
+// A post-commit hook's non-zero exit does not abort anything (git has
+// already committed by the time this runs), but this still exits 0 for the
+// same reason gitHookScript does: consistency, and no risk of a stray
+// warning in Git's own output.
+func postCommitHookScript(binary string) string {
+	var b strings.Builder
+	b.WriteString("#!/bin/sh\n")
+	b.WriteString(gitPostCommitMarker + "\n")
+	b.WriteString("# Installed by re_gent. Runs any post-commit hook that was here before, then\n")
+	b.WriteString("# refreshes the workspace baseline in the background. Never blocks the commit.\n")
+	b.WriteString("# Remove with `rgt disconnect`; disable with " + gitHookOptOutEnv + "=0.\n")
+	b.WriteString(`prev="${0%/*}/` + gitPostCommitHookName + gitHookPrevSuffix + `"` + "\n")
+	b.WriteString(`if [ -x "$prev" ]; then` + "\n")
+	b.WriteString(`  "$prev" "$@" || exit $?` + "\n")
+	b.WriteString("fi\n")
+	b.WriteString(`if [ "${` + gitHookOptOutEnv + `:-1}" != "0" ]; then` + "\n")
+	args := gitHookVerb + " " + gitPostCommitHookName + ` "$@" </dev/null`
+	if filepath.IsAbs(binary) {
+		q := shellQuote(binary)
+		b.WriteString("  if [ -x " + q + " ]; then ( " + q + " " + args + " >/dev/null 2>&1 & )\n")
+		b.WriteString("  elif command -v rgt >/dev/null 2>&1; then ( rgt " + args + " >/dev/null 2>&1 & )\n")
+		b.WriteString("  fi\n")
+	} else {
+		b.WriteString("  if command -v rgt >/dev/null 2>&1; then ( rgt " + args + " >/dev/null 2>&1 & ); fi\n")
+	}
+	b.WriteString("fi\n")
+	b.WriteString("exit 0\n")
+	b.WriteString("# <<< re_gent post-commit <<<\n")
+	return b.String()
+}
+
 // writeExecutable writes content to path with the executable bit set, via a
 // temp file and rename so a crash never leaves a half-written hook that Git
 // would then try to run.
@@ -423,6 +577,70 @@ func gitHookFinding(projectRoot string) (doctorFinding, bool) {
 	detail := hookPath
 	if pathExists(hookPath + gitHookPrevSuffix) {
 		detail += " (chains your previous pre-push hook)"
+	}
+	return doctorFinding{Name: name, OK: true, Detail: detail}, true
+}
+
+// reportPostCommitHookWiredTo mirrors reportGitHookWiredTo for the
+// post-commit hook.
+func reportPostCommitHookWiredTo(out io.Writer, o gitHookOutcome) {
+	if o.Path == "" {
+		return
+	}
+	fmt.Fprintf(out, "  %s  %s  Git post-commit hook configured\n", style.Brand("│"), style.Success(""))
+	Verbosef(out, "    path: %s\n", o.Path)
+	if o.Chained {
+		fmt.Fprintln(out, "    your existing post-commit hook was kept and still runs first")
+		Verbosef(out, "    previous hook: %s\n",
+			filepath.Base(o.Path)+gitHookPrevSuffix)
+	}
+}
+
+// reportPostCommitHookSkippedTo mirrors reportGitHookSkippedTo for the
+// post-commit hook.
+func reportPostCommitHookSkippedTo(out io.Writer, o gitHookOutcome) {
+	if o.Skipped == "" {
+		return
+	}
+	Verbosef(out, "  %s Git post-commit hook not configured: %s\n", style.DimText("-"), o.Skipped)
+}
+
+// postCommitHookFinding is doctor's view of the post-commit hook, mirroring
+// gitHookFinding. It is a distinct finding rather than folded into "git push
+// sync": the two hooks answer different questions ("does a commit refresh the
+// baseline" vs "does a push deliver the queue"), and a project can have
+// either without the other.
+func postCommitHookFinding(projectRoot string) (doctorFinding, bool) {
+	const name = "git commit workspace sync"
+
+	if !pathExists(filepath.Join(projectRoot, ".git")) {
+		return doctorFinding{}, false
+	}
+	if optedOutOfGitHook(os.LookupEnv) {
+		return doctorFinding{Name: name, OK: true,
+			Detail: "disabled by " + gitHookOptOutEnv + "=0"}, true
+	}
+	hooksDir, reason := gitHooksDir(projectRoot)
+	if reason != "" {
+		return doctorFinding{Name: name, OK: false, Severity: severityWarning, Detail: reason}, true
+	}
+	hookPath := filepath.Join(hooksDir, gitPostCommitHookName)
+	content, err := os.ReadFile(hookPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return doctorFinding{Name: name, OK: false, Severity: severityWarning,
+			Detail: "no post-commit hook; the workspace baseline refreshes on agent turns but not on git commit — run rgt connect (or rgt init) to wire it"}, true
+	}
+	if err != nil {
+		return doctorFinding{Name: name, OK: false, Severity: severityWarning,
+			Detail: fmt.Sprintf("cannot read %s: %v", hookPath, err)}, true
+	}
+	if !isRegentPostCommitHook(content) {
+		return doctorFinding{Name: name, OK: false, Severity: severityWarning,
+			Detail: fmt.Sprintf("%s exists but is not re_gent's; rgt connect keeps it and runs it first", hookPath)}, true
+	}
+	detail := hookPath
+	if pathExists(hookPath + gitHookPrevSuffix) {
+		detail += " (chains your previous post-commit hook)"
 	}
 	return doctorFinding{Name: name, OK: true, Detail: detail}, true
 }

@@ -560,13 +560,26 @@ func fetchObject(ctx context.Context, cache *store.Store, client Client, h store
 
 // SessionRefs lists the session refs present in a cache, in stable order.
 func SessionRefs(cache *store.Store) ([]string, error) {
-	refs, err := cache.ListRefs("sessions")
+	return refsUnder(cache, "sessions")
+}
+
+// SyncRefs lists the workspace-sync refs present in a cache, in stable order.
+// Today there is exactly one (see internal/capture.WorkspaceSyncRef,
+// "sync/workspace"), but repair and pull enumerate it the same way they
+// enumerate session refs rather than hard-coding the one name, so a second
+// sync ref (a future per-worktree baseline, say) needs no change here.
+func SyncRefs(cache *store.Store) ([]string, error) {
+	return refsUnder(cache, "sync")
+}
+
+func refsUnder(cache *store.Store, dir string) ([]string, error) {
+	refs, err := cache.ListRefs(dir)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return nil, fmt.Errorf("list session refs: %w", err)
+		return nil, fmt.Errorf("list %s refs: %w", dir, err)
 	}
 	out := make([]string, 0, len(refs))
 	for name := range refs {
-		out = append(out, "sessions/"+name)
+		out = append(out, dir+"/"+name)
 	}
 	sort.Strings(out)
 	return out, nil

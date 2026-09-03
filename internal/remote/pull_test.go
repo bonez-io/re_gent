@@ -167,3 +167,23 @@ func TestServerSessionRefsNamesEverySessionTheServerHolds(t *testing.T) {
 		t.Fatalf("ServerSessionRefs = %v, want [%s]", refs, testRef)
 	}
 }
+
+// TestServerSyncRefsNamesWhatTheServerHolds mirrors the session discovery
+// test for the workspace-sync ref, so a fresh clone's `rgt pull` (no
+// arguments) finds the baseline too, not only sessions.
+func TestServerSyncRefsNamesWhatTheServerHolds(t *testing.T) {
+	teammate := newFixture(t)
+	teammate.addSyncStep(t, map[string]string{"a.txt": "one"})
+	if _, err := Push(context.Background(), teammate.cache, teammate.cli, teammate.spool, syncRef); err != nil {
+		t.Fatalf("teammate push: %v", err)
+	}
+
+	me := newFixtureOn(t, teammate.srv)
+	refs, err := ServerSyncRefs(context.Background(), me.cli)
+	if err != nil {
+		t.Fatalf("ServerSyncRefs: %v", err)
+	}
+	if len(refs) != 1 || refs[0] != syncRef {
+		t.Fatalf("ServerSyncRefs = %v, want [%s]", refs, syncRef)
+	}
+}

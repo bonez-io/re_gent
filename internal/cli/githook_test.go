@@ -667,3 +667,247 @@ func TestConfigureHooksInstallsGitHookAndHonoursOptOut(t *testing.T) {
 		}
 	})
 }
+
+// --- post-commit hook: workspace baseline refresh ---
+
+func TestPostCommitHookIsWrittenIntoDotGitHooks(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+
+	outcome, err := wirePostCommitHook(root)
+	if err != nil {
+		t.Fatalf("wirePostCommitHook: %v", err)
+	}
+	want := filepath.Join(root, ".git", "hooks", "post-commit")
+	if outcome.Path != want {
+		t.Fatalf("Path = %s, want %s", outcome.Path, want)
+	}
+	if outcome.Chained {
+		t.Error("Chained = true with no previous hook")
+	}
+
+	info, err := os.Stat(want)
+	if err != nil {
+		t.Fatalf("hook not on disk: %v", err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Errorf("hook is not executable: %v", info.Mode())
+	}
+	content, _ := os.ReadFile(want)
+	if !isRegentPostCommitHook(content) {
+		t.Error("written hook does not carry the re_gent marker")
+	}
+	if !strings.Contains(string(content), gitHookVerb+" "+gitPostCommitHookName) {
+		t.Errorf("hook does not invoke `rgt %s %s`:\n%s", gitHookVerb, gitPostCommitHookName, content)
+	}
+	// The whole point of backgrounding: the rgt invocation must be inside a
+	// detached "( ... & )" subshell, not run inline the way pre-push's is.
+	if !strings.Contains(string(content), "& )") {
+		t.Errorf("post-commit hook does not background the rgt call:\n%s", content)
+	}
+}
+
+// A pre-existing post-commit hook keeps every power it had: it runs first,
+// with the same arguments, and its non-zero exit still propagates — even
+// though Git itself does not act on a post-commit hook's exit code, the
+// contract mirrors pre-push's for predictability.
+func TestPostCommitHookPreservesAndChainsAnExistingHook(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	hookPath := filepath.Join(root, ".git", "hooks", "post-commit")
+	userHook := "#!/bin/sh\necho user-hook-ran \"$@\"\nexit 3\n"
+	mustWrite(t, hookPath, userHook)
+	if err := os.Chmod(hookPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	outcome, err := wirePostCommitHook(root)
+	if err != nil {
+		t.Fatalf("wirePostCommitHook: %v", err)
+	}
+	if !outcome.Chained {
+		t.Fatal("Chained = false, but a previous hook existed")
+	}
+
+	prev, err := os.ReadFile(hookPath + gitHookPrevSuffix)
+	if err != nil {
+		t.Fatalf("previous hook not preserved: %v", err)
+	}
+	if string(prev) != userHook {
+		t.Errorf("previous hook altered:\n got %q\nwant %q", prev, userHook)
+	}
+
+	out, code := runHook(t, hookPath)
+	if code != 3 {
+		t.Errorf("exit = %d, want 3 propagated from the user's hook\n%s", code, out)
+	}
+	if !strings.Contains(out, "user-hook-ran") {
+		t.Errorf("user hook did not run first:\n%s", out)
+	}
+}
+
+// The pre-push and post-commit hooks preserve previous hooks under backup
+// filenames that must not collide with each other, even sharing the literal
+// suffix, because they preserve different source files (pre-push vs
+// post-commit).
+func TestPrePushAndPostCommitPreservedHooksDoNotCollide(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	hooksDir := filepath.Join(root, ".git", "hooks")
+	mustWrite(t, filepath.Join(hooksDir, "pre-push"), "#!/bin/sh\necho pre-push-user\n")
+	mustWrite(t, filepath.Join(hooksDir, "post-commit"), "#!/bin/sh\necho post-commit-user\n")
+	if err := os.Chmod(filepath.Join(hooksDir, "pre-push"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(hooksDir, "post-commit"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := wireGitHook(root); err != nil {
+		t.Fatalf("wireGitHook: %v", err)
+	}
+	if _, err := wirePostCommitHook(root); err != nil {
+		t.Fatalf("wirePostCommitHook: %v", err)
+	}
+
+	prePushPrev, err := os.ReadFile(filepath.Join(hooksDir, "pre-push"+gitHookPrevSuffix))
+	if err != nil || !strings.Contains(string(prePushPrev), "pre-push-user") {
+		t.Fatalf("pre-push's preserved hook = %q, %v", prePushPrev, err)
+	}
+	postCommitPrev, err := os.ReadFile(filepath.Join(hooksDir, "post-commit"+gitHookPrevSuffix))
+	if err != nil || !strings.Contains(string(postCommitPrev), "post-commit-user") {
+		t.Fatalf("post-commit's preserved hook = %q, %v", postCommitPrev, err)
+	}
+}
+
+// The property everything else depends on, mirroring
+// TestGitHookRegentBlockAlwaysExitsZero: whatever rgt does, the Regent block
+// exits 0.
+func TestPostCommitHookRegentBlockAlwaysExitsZero(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	hooksDir := filepath.Join(root, ".git", "hooks")
+
+	outcome, err := installPostCommitHook(hooksDir, filepath.Join(root, "no-such-rgt"))
+	if err != nil {
+		t.Fatalf("installPostCommitHook: %v", err)
+	}
+	out, code := runHook(t, outcome.Path)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0\n%s", code, out)
+	}
+}
+
+func TestPostCommitHookOptOutEnvSkipsRegentAtRunTime(t *testing.T) {
+	root := t.TempDir()
+	chdir(t, root)
+	env := func(k string) (string, bool) {
+		if k == gitHookOptOutEnv {
+			return "0", true
+		}
+		return "", false
+	}
+	var out bytes.Buffer
+	// No .regent/ anywhere: if the opt-out were not honoured, this would still
+	// print nothing (runWorkspaceSyncLocal fails quietly), so the real
+	// assertion is that opting out returns before even trying.
+	runGitPostCommitHook(&out, env)
+	if out.Len() != 0 {
+		t.Errorf("printed despite opt-out:\n%s", out.String())
+	}
+}
+
+// A never-panics contract, pinned the same way TestGitPrePushHookRecoversFromPanic is.
+func TestPostCommitHookRecoversFromPanic(t *testing.T) {
+	root := t.TempDir()
+	chdir(t, root)
+	env := func(k string) (string, bool) { return "", false }
+	var out bytes.Buffer
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("panic escaped runGitPostCommitHook: %v", r)
+		}
+	}()
+	runGitPostCommitHook(&out, env)
+}
+
+func TestRemovePostCommitHookRestoresThePreviousHookExactly(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	hookPath := filepath.Join(root, ".git", "hooks", "post-commit")
+	userHook := "#!/bin/sh\necho user-hook-ran\n"
+	mustWrite(t, hookPath, userHook)
+	if err := os.Chmod(hookPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := wirePostCommitHook(root); err != nil {
+		t.Fatalf("wirePostCommitHook: %v", err)
+	}
+	removed, err := removePostCommitHook(root)
+	if err != nil {
+		t.Fatalf("removePostCommitHook: %v", err)
+	}
+	if !removed {
+		t.Fatal("removePostCommitHook reported nothing removed")
+	}
+
+	content, err := os.ReadFile(hookPath)
+	if err != nil {
+		t.Fatalf("hook not restored: %v", err)
+	}
+	if string(content) != userHook {
+		t.Errorf("restored hook = %q, want %q", content, userHook)
+	}
+	if pathExists(hookPath + gitHookPrevSuffix) {
+		t.Error("backup file left behind after restore")
+	}
+}
+
+func TestDoctorReportsPostCommitHookWiring(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+
+	f, present := postCommitHookFinding(root)
+	if !present {
+		t.Fatal("expected a post-commit finding in a Git repo")
+	}
+	if f.OK {
+		t.Error("expected OK=false before wiring")
+	}
+
+	if _, err := wirePostCommitHook(root); err != nil {
+		t.Fatalf("wirePostCommitHook: %v", err)
+	}
+	f, present = postCommitHookFinding(root)
+	if !present || !f.OK {
+		t.Fatalf("finding after wiring = %+v, present=%v", f, present)
+	}
+}
+
+// rgt init and rgt connect share configureHooksTo, so pinning init's side
+// (as TestConfigureHooksInstallsGitHookAndHonoursOptOut does for pre-push)
+// covers connect's too.
+func TestConfigureHooksInstallsPostCommitHookAndHonoursOptOut(t *testing.T) {
+	t.Run("installs", func(t *testing.T) {
+		root := t.TempDir()
+		gitInit(t, root)
+		if _, err := configureHooks(root, []agentTarget{agentClaude}, hookOptions{}); err != nil {
+			t.Fatalf("configureHooks: %v", err)
+		}
+		if !pathExists(filepath.Join(root, ".git", "hooks", "post-commit")) {
+			t.Error("init's decision layer did not wire the post-commit hook")
+		}
+	})
+
+	t.Run("noGitHook suppresses the post-commit hook too", func(t *testing.T) {
+		root := t.TempDir()
+		gitInit(t, root)
+		if _, err := configureHooks(root, []agentTarget{agentClaude}, hookOptions{noGitHook: true}); err != nil {
+			t.Fatalf("configureHooks: %v", err)
+		}
+		if pathExists(filepath.Join(root, ".git", "hooks", "post-commit")) {
+			t.Error("post-commit hook written despite noGitHook")
+		}
+	})
+}

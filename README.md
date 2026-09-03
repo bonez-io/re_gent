@@ -310,7 +310,29 @@ explicitly with `NO_COLOR=1`.
 | `rgt version` | Print version information |
 | `rgt completion` | Generate shell completion scripts |
 | `rgt sync` | Deliver queued server-mode capture (`--status`, `--pull`, `--repair`) |
+| `rgt sync --workspace` | Refresh the workspace baseline (`refs/sync/workspace`) from the current git working tree. Also run automatically by `rgt init`/`rgt connect`, the `post-commit` git hook, and (before draining the queue) the `pre-push` git hook. |
 | `rgt pull [ref]` | Fetch the project's history from the server into this machine's cache. With no ref it asks the server what exists. |
+
+---
+
+## Workspace baseline
+
+A tree only otherwise exists as a step snapshot, so the Files view and `rgt blame` are empty until
+the first captured agent step — a long wait on a repository an agent barely touches. `rgt init` and
+`rgt connect` take one snapshot of the git working tree right after hooks are wired, so there is
+something to see immediately, and it stays current afterwards:
+
+- `rgt sync --workspace` refreshes it on demand.
+- A `post-commit` git hook refreshes it automatically in the background after every commit.
+- The `pre-push` git hook refreshes it too, before draining the server-mode delivery queue.
+
+The baseline is a step like any other, chained onto its own ref (`refs/sync/workspace`) rather than
+a session's — `rgt sessions` and the sessions API never list it. Its `origin` is `sync`, so `rgt
+blame` and the Files/blame APIs can distinguish "outside an agent turn" from an agent's own work, and
+an agent's first step inherits blame for whatever it did not touch from this baseline instead of
+claiming every pre-existing line in the repository. Opt out with the same switch that disables the
+`pre-push` hook: `REGENT_GIT_SYNC_ON_PUSH=0`, or `rgt init --no-git-hook` / `rgt connect
+--no-git-hook` to skip installing either git hook up front.
 
 ---
 

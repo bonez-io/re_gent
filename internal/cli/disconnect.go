@@ -102,6 +102,12 @@ func disconnectProject(root string) error {
 	if _, err := removeGitHook(root); err != nil {
 		return fmt.Errorf("remove git hook: %w", err)
 	}
+	// The post-commit hook goes too: disconnect removes re_gent's hooks so
+	// nothing is captured, and a baseline refreshing on every commit is still
+	// capture.
+	if _, err := removePostCommitHook(root); err != nil {
+		return fmt.Errorf("remove post-commit hook: %w", err)
+	}
 	return nil
 }
 

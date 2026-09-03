@@ -14,6 +14,11 @@ import (
 // server as well as in a local store.
 const sessionRefDir = "sessions"
 
+// syncRefDir is the ref directory the workspace-sync baseline lives under
+// (see internal/capture.WorkspaceSyncRefDir), on the server as well as in a
+// local store.
+const syncRefDir = "sync"
+
 // PullStatus is what a pull decided to do with one ref.
 type PullStatus int
 
@@ -156,13 +161,24 @@ func localTip(cache *store.Store, refName string) (store.Hash, error) {
 // takes a ref name the caller must already know, which a machine that has
 // pushed nothing does not — the local spool records only what this machine sent.
 func ServerSessionRefs(ctx context.Context, client Client) ([]string, error) {
-	refs, err := client.ListRefs(ctx, sessionRefDir)
+	return serverRefsUnder(ctx, client, sessionRefDir)
+}
+
+// ServerSyncRefs asks the server which workspace-sync refs it holds, fully
+// qualified and in stable order. The mirror of ServerSessionRefs for the
+// baseline chain, so `rgt pull` with no arguments discovers it too.
+func ServerSyncRefs(ctx context.Context, client Client) ([]string, error) {
+	return serverRefsUnder(ctx, client, syncRefDir)
+}
+
+func serverRefsUnder(ctx context.Context, client Client, dir string) ([]string, error) {
+	refs, err := client.ListRefs(ctx, dir)
 	if err != nil {
-		return nil, fmt.Errorf("list server sessions: %w", err)
+		return nil, fmt.Errorf("list server %s refs: %w", dir, err)
 	}
 	out := make([]string, 0, len(refs))
 	for name := range refs {
-		out = append(out, sessionRefDir+"/"+name)
+		out = append(out, dir+"/"+name)
 	}
 	sort.Strings(out)
 	return out, nil

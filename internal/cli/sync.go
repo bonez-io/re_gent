@@ -22,10 +22,11 @@ import (
 const manualSyncTimeout = 60 * time.Second
 
 type syncOptions struct {
-	status bool
-	pull   bool
-	repair bool
-	ref    string
+	status    bool
+	pull      bool
+	repair    bool
+	workspace bool
+	ref       string
 }
 
 // SyncCmd is the manual escape hatch for server mode: it drains work the hooks
@@ -51,6 +52,9 @@ func SyncCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if opts.workspace {
+				return runSyncWorkspace(cmd.OutOrStdout(), cwd)
+			}
 			cfg, err := remote.LoadConfigForCWD(remote.OSEnv, cwd)
 			if err != nil {
 				return err
@@ -62,7 +66,39 @@ func SyncCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.status, "status", false, "report queued work without contacting the server")
 	cmd.Flags().BoolVar(&opts.pull, "pull", false, "rebuild the local cache from the server")
 	cmd.Flags().BoolVar(&opts.repair, "repair", false, "re-verify the whole history on the server and re-upload anything missing")
+	cmd.Flags().BoolVar(&opts.workspace, "workspace", false, "refresh the workspace baseline (refs/sync/workspace) from the git working tree")
 	return cmd
+}
+
+// runSyncWorkspace is `rgt sync --workspace`. Unlike the rest of this command
+// it works in local mode too: the baseline this writes is what makes the
+// Files view non-empty before the first captured agent step, and that is
+// just as true for a project that has never configured a server. In server
+// mode, once the baseline is written, this delegates to the same plain push
+// runPush uses so it delivers immediately when the server is reachable —
+// mirroring `rgt sync`'s own contract for a command a person is waiting on —
+// while runWorkspaceSync itself never delivers eagerly (see its doc comment):
+// only one place gets to report "delivered".
+func runSyncWorkspace(out io.Writer, cwd string) error {
+	res, err := runWorkspaceSync(cwd)
+	if err != nil {
+		return fmt.Errorf("workspace sync: %w", err)
+	}
+	if res.Wrote {
+		fmt.Fprintf(out, "Workspace baseline updated: %d file(s), now at %s\n", res.FileCount, shortHash(store.Hash(res.StepHash)))
+	} else {
+		fmt.Fprintf(out, "Workspace baseline unchanged: %d file(s), already at %s\n", res.FileCount, shortHash(store.Hash(res.StepHash)))
+	}
+
+	cfg, cfgErr := remote.LoadConfigForCWD(remote.OSEnv, cwd)
+	if cfgErr != nil || !cfg.Enabled() || cfg.Validate() != nil {
+		return nil // local mode: nothing further to deliver
+	}
+	// Named explicitly: runSync with no ref drains Status's queue, which
+	// deliberately excludes refs/sync/* (see the comment on Spool.Status), so
+	// an empty ref here would silently deliver nothing and still claim
+	// "up to date".
+	return runSync(out, cfg, syncOptions{ref: capture.WorkspaceSyncRef})
 }
 
 func runSync(out io.Writer, cfg remote.Config, opts syncOptions) error {
@@ -136,6 +172,11 @@ func runRepair(ctx context.Context, out io.Writer, cache *store.Store, client re
 	return nil
 }
 
+// repairTargets defaults to session refs only, deliberately excluding
+// refs/sync/*: repair ends in the same CAS ref update a push does, and the
+// workspace-sync ref routinely "diverges" between ordinary machines that have
+// never shared a baseline (see the comment on Spool.Status). Name it
+// explicitly — `rgt sync --repair sync/workspace` — to repair it anyway.
 func repairTargets(cache *store.Store, ref string) ([]string, error) {
 	if ref != "" {
 		return []string{qualifyRef(ref)}, nil

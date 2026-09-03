@@ -191,6 +191,11 @@ commands. With no URL, init keeps its local-only behavior below.`,
 				}
 			}
 
+			// A baseline snapshot of the working tree, taken once hooks are
+			// wired, so the Files view is never empty before the first
+			// captured agent step (issue #106). Best-effort: see runBaselineSync.
+			runBaselineSync(out, cwd)
+
 			// The summary reports what was installed, not what was detected,
 			// and the exit code follows it. A run that wired nothing must not
 			// look like a success to a script, a devcontainer, or a teammate.
