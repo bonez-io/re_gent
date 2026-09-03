@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/bonez-io/re_gent/internal/capture"
+	"github.com/bonez-io/re_gent/internal/insight"
 	"github.com/bonez-io/re_gent/internal/remote"
 	"github.com/bonez-io/re_gent/internal/remote/remotecapture"
 	"github.com/spf13/cobra"
@@ -137,7 +138,17 @@ func openHookRecorder(cwd string) (*capture.Recorder, bool, error) {
 	} else if err != nil {
 		logServerModeFallback(cfg, err)
 	}
-	return capture.Open(cwd)
+	recorder, ok, err := capture.Open(cwd)
+	if err != nil || !ok {
+		return recorder, ok, err
+	}
+	// Insight is local mode only in v1 (RFC 0007): the server-mode path above
+	// returns before this line, so a server-mode repository never queues.
+	enqueuer := &insight.Enqueuer{Store: recorder.Store, Index: recorder.Index, CWD: cwd}
+	recorder.OnTurnFinalized = func(turn capture.TurnFinalized) error {
+		return enqueuer.Enqueue(insight.Turn{SessionID: turn.SessionID, TurnID: turn.TurnID, StepID: turn.Step})
+	}
+	return recorder, true, nil
 }
 
 func logServerModeFallback(cfg remote.Config, err error) {

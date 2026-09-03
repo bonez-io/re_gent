@@ -1,6 +1,6 @@
 # RFC 0007: Searchable sessions
 
-- Status: Draft, decisions locked
+- Status: Draft, decisions locked; S1 (schema, queue, worker, config) landed
 - Owners: re_gent maintainers
 - Last updated: 2026-09-03
 - Builds on: [RFC 0004](./0004-managed-service-identity-and-enrollment.md)
@@ -92,6 +92,9 @@ Per repository, `.regent/config.toml`:
 ```toml
 [insight]
 enabled = true
+# how long a session may be silent before its open work item is closed as
+# wip without a model call
+work_item_idle = "2h"
 
 [insight.scrub]
 # what capture stores. "off" stores raw bytes as today.
@@ -116,6 +119,7 @@ provider = "anthropic"            # anthropic | openai-compatible | command
 model = "claude-haiku-4-5-20251001"
 api_key_env = "ANTHROPIC_API_KEY" # the variable's name, never its value
 base_url = ""                     # openai-compatible only; ollama is http://localhost:11434/v1
+command = []                      # command only, e.g. ["claude", "-p", "--output-format", "json"]
 max_input_tokens = 24000          # per call, after scrub; the worker truncates oldest-first
 
 [insight.embedding]
@@ -147,10 +151,18 @@ Stop hook ──► RecordAssistantAndFinalize ──► INSERT insight_jobs ─
 worker: lock ─► drain ─► gather ─► scrub ─► read (model) ─► link ─► embed ─► commit
 ```
 
-**Enqueue.** `RecordAssistantAndFinalize` inserts `(kind='turn', session_id,
-step_id)` and, if no worker holds `.regent/insight.lock`, spawns
-`rgt insight run --detach`. The insert and the spawn are both best-effort;
-either failing is a log line, not an error return.
+**Enqueue.** `RecordAssistantAndFinalize` reports the finished turn to the
+command edge (`Recorder.OnTurnFinalized`), which inserts `(kind='turn',
+session_id, step_id, turn_id)` — step empty for a turn that only talked — and,
+if no live process holds `.regent/insight.lock`, starts `rgt insight run` as a
+detached process (`Setsid`, output to `.regent/log/insight.log`). The insert
+and the spawn are both best-effort; either failing is a line in
+`hook-error.log`, not an error return. The edge installs the callback only on
+the local-mode path, which is how server mode stays out by construction. A
+turn queued twice (a recovered Stop) is one job; a worker that dies mid-job
+leaves it `running`, and the next worker returns it to the queue. Retries go
+behind fresh jobs, three attempts then `failed`, so one job that keeps
+failing never blocks the rest.
 
 **Gather.** The worker loads the session's open work item (if any) and the
 turns since its last processed step: user prompts, assistant text, reasoning
@@ -216,12 +228,21 @@ work_item_entities(work_item_id, entity_id, role, confidence, source,
                    PRIMARY KEY (work_item_id, entity_id, role))
 embeddings(owner_kind, owner_id, provider, model, dim, vector BLOB, updated_at,
            PRIMARY KEY (owner_kind, owner_id, provider, model))
-insight_jobs(id INTEGER PK, kind, session_id, step_id, state, attempts,
-             last_error, created_at, updated_at)
+insight_jobs(id INTEGER PK, kind, session_id, step_id, turn_id, state, attempts,
+             last_error, created_at, updated_at)   -- kind: turn | session
+insight_meta(key TEXT PK, value)                   -- enabled_at, fts_rebuilt_at, counters
 messages_fts    -- FTS5 external-content table over messages.content_text
 work_items_fts  -- FTS5 over goal, approach, outcome
 entities_fts    -- FTS5 over name, ref
 ```
+
+The FTS tables are kept current by triggers from the moment the schema
+exists, so a message is findable as soon as it is recorded, insight enabled
+or not. Rows recorded before the schema existed are reached by `rgt insight
+enable` and `rgt insight rebuild`, both of which rebuild the three indexes;
+`rgt insight status` reports "N of M messages" so the gap is visible rather
+than silent. External-content FTS is keyed by rowid, which a `VACUUM` may
+renumber; `rebuild` is the remedy, and nothing in re_gent runs `VACUUM`.
 
 Files are not entities. A work item's files are `work_item_steps ⋈
 step_files`, which is exact, needs no model, and is what `rgt blame` already
@@ -324,7 +345,7 @@ and suit the delegated-worker pattern (disjoint file allowlists).
 
 | Stream | Work | Reuses | Days |
 |---|---|---|---|
-| S1 Schema, queue, worker, config | tables + migration, `insight_jobs`, lock file, `rgt insight` verbs, `[insight]` tables in both config files, key-by-env | `migrateSchema`, `config`, `store.RepoConfig`, `LogHookError` | 3 |
+| S1 Schema, queue, worker, config — **landed** | tables + migration, `insight_jobs`, lock file, `rgt insight` verbs, `[insight]` tables in both config files, key-by-env; `internal/insight` with the `Processor` seam S4 plugs into | `migrateSchema`, `config`, `store.RepoConfig`, `LogHookError` | 3 |
 | S2 Scrub | policy that composes `redact` + user patterns; capture-time hook through a repository `publicgate.Checker`; egress pass in the worker | `internal/redact`, `internal/publicgate` | 2 |
 | S3 Providers | `anthropic` messages, `openai-compatible` chat + embeddings, `command` runner; timeouts, retry, token budget | — | 3 |
 | S4 Read: work items and entities | Appendix A prompt, boundary and continuation, rolling `approach`, deterministic URL/git entities, evidence enforcement, dedupe, fixtures from recorded sessions | `treediff.LineDiff`, `step_files`, `messages` | 5–6 |
@@ -364,11 +385,13 @@ should not be the one delegated blind.
 
 ## Open questions
 
-1. Should `[insight] enabled = true` in a committed config enable it for every
-   contributor who has providers configured, or should each user also opt in
-   locally? Proposal: the repo enables, the user's provider config is the
-   opt-in — no providers, nothing runs.
-2. Default `work_item_idle`. Two hours is a guess.
+1. ~~Should `[insight] enabled = true` in a committed config enable it for
+   every contributor who has providers configured, or should each user also
+   opt in locally?~~ Settled in S1 as proposed: the repository enables, the
+   user's `[insight.model]` is the opt-in (`Settings.Active()`). No provider,
+   nothing queued, nothing sent.
+2. Default `work_item_idle`. Two hours is a guess; S1 ships it as the default
+   and reads `[insight] work_item_idle` when set.
 3. Whether `command` providers get the scrubbed request on stdin or a path to
    a temp file. Stdin, unless a real agent CLI cannot take it.
 4. Whether `wip` items older than some age should be auto-closed as

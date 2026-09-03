@@ -1,6 +1,9 @@
 package store
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -114,5 +117,40 @@ func TestWriteRepoConfig_Idempotent(t *testing.T) {
 	}
 	if got.Remote.RepoID != cfg.Remote.RepoID {
 		t.Errorf("RepoID: got %q, want %q", got.Remote.RepoID, cfg.Remote.RepoID)
+	}
+}
+
+func TestRepoConfig_InsightTableIsOmittedUntilUsed(t *testing.T) {
+	s, err := Init(t.TempDir())
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := s.WriteRepoConfig(RepoConfig{Capture: CaptureConfig{Root: "project"}}); err != nil {
+		t.Fatalf("WriteRepoConfig: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(s.Root, "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "insight") {
+		t.Fatalf("zero insight config must not be written:\n%s", raw)
+	}
+
+	want := InsightConfig{
+		Enabled:      true,
+		WorkItemIdle: "90m",
+		Scrub:        InsightScrubConfig{Capture: "secrets", Patterns: []string{"ACME", `client-\w+`}},
+		Model:        InsightModelOverride{Provider: "command"},
+	}
+	if err := s.WriteRepoConfig(RepoConfig{Capture: CaptureConfig{Root: "project"}, Insight: want}); err != nil {
+		t.Fatalf("WriteRepoConfig: %v", err)
+	}
+	got, err := s.ReadRepoConfig()
+	if err != nil {
+		t.Fatalf("ReadRepoConfig: %v", err)
+	}
+	if got.Capture.Root != "project" || !got.Insight.Enabled || got.Insight.WorkItemIdle != "90m" ||
+		got.Insight.Scrub.Capture != "secrets" || len(got.Insight.Scrub.Patterns) != 2 || got.Insight.Model.Provider != "command" {
+		t.Fatalf("round trip: %#v", got)
 	}
 }
