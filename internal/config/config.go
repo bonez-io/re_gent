@@ -30,6 +30,54 @@ type UserConfig struct {
 	Auth        Auth         `toml:"auth"`
 	Credentials []Credential `toml:"credentials,omitempty"`
 	Server      Server       `toml:"server"`
+	// Insight holds the providers RFC 0007's worker calls. It lives here,
+	// in the 0600 file, and never in a repository's committed config: it
+	// names endpoints and the *names* of key variables, and a repository
+	// must not decide which endpoint a contributor's sessions are sent to.
+	Insight InsightUserConfig `toml:"insight,omitempty"`
+}
+
+// InsightUserConfig is the per-user [insight] table: the model that reads
+// sessions and the embedding provider that makes them searchable.
+type InsightUserConfig struct {
+	Model     InsightModelConfig     `toml:"model,omitempty"`
+	Embedding InsightEmbeddingConfig `toml:"embedding,omitempty"`
+}
+
+// InsightModelConfig is [insight.model].
+type InsightModelConfig struct {
+	// Provider is "anthropic", "openai-compatible", or "command".
+	Provider string `toml:"provider,omitempty"`
+	// Model is the provider's model name; unused by "command".
+	Model string `toml:"model,omitempty"`
+	// APIKeyEnv is the name of the environment variable holding the key.
+	// The value is read at call time and is never written to disk by re_gent.
+	APIKeyEnv string `toml:"api_key_env,omitempty"`
+	// BaseURL is the endpoint for "openai-compatible" providers, e.g. an
+	// Ollama server at http://localhost:11434/v1.
+	BaseURL string `toml:"base_url,omitempty"`
+	// Command is the program and arguments a "command" provider runs, with
+	// the request on stdin and the JSON reply expected on stdout.
+	Command []string `toml:"command,omitempty"`
+	// MaxInputTokens bounds one request after scrubbing; the worker drops
+	// the oldest turns first to fit. Zero means the default.
+	MaxInputTokens int `toml:"max_input_tokens,omitempty"`
+}
+
+// InsightEmbeddingConfig is [insight.embedding].
+type InsightEmbeddingConfig struct {
+	// Provider is "openai-compatible" or "command". Anthropic has no
+	// embeddings endpoint.
+	Provider string `toml:"provider,omitempty"`
+	Model    string `toml:"model,omitempty"`
+	BaseURL  string `toml:"base_url,omitempty"`
+	// APIKeyEnv names the environment variable holding the key, if any.
+	APIKeyEnv string   `toml:"api_key_env,omitempty"`
+	Command   []string `toml:"command,omitempty"`
+	// Dimensions is the vector size the model returns. Zero means "whatever
+	// the first reply has"; a stored vector is keyed by provider and model,
+	// so a change here starts a new set rather than corrupting the old one.
+	Dimensions int `toml:"dimensions,omitempty"`
 }
 
 // Server remembers the team server this machine was last set up against, so

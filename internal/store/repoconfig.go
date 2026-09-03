@@ -34,10 +34,52 @@ type CaptureConfig struct {
 	Root string `toml:"root"`
 }
 
+// InsightConfig is the committed [insight] table of .regent/config.toml
+// (RFC 0007): the policy that travels with the repository. Providers,
+// endpoints, and key names live in the per-user config, never here.
+//
+// omitempty matters: a repository that never enabled insight must not gain
+// an `[insight]` table every time connect or init rewrites the file.
+type InsightConfig struct {
+	// Enabled turns the derived layer on for this repository. It is the
+	// repository's half of the switch; a contributor with no provider
+	// configured in ~/.regent/config.toml runs nothing.
+	Enabled bool `toml:"enabled"`
+	// WorkItemIdle is how long a session may be silent before its open work
+	// item is closed as wip without a model call, e.g. "2h". Empty means the
+	// default.
+	WorkItemIdle string `toml:"work_item_idle,omitempty"`
+	// Scrub is what capture stores and what every provider request is
+	// cleaned with.
+	Scrub InsightScrubConfig `toml:"scrub,omitempty"`
+	// Model may pin a provider *name* for this repository only, so a public
+	// repository can say "local" without carrying a URL.
+	Model InsightModelOverride `toml:"model,omitempty"`
+}
+
+// InsightScrubConfig is [insight.scrub].
+type InsightScrubConfig struct {
+	// Capture is what the hooks store: "off" (raw bytes, today's behaviour),
+	// "secrets" (tool I/O and messages rewritten through redact), or
+	// "secrets+paths" (also home directories and usernames). Files are never
+	// rewritten.
+	Capture string `toml:"capture,omitempty"`
+	// Patterns are regular expressions scrubbed at capture (when on) and on
+	// every provider request (always).
+	Patterns []string `toml:"patterns,omitempty"`
+}
+
+// InsightModelOverride is the committed [insight.model] table: the provider
+// name only.
+type InsightModelOverride struct {
+	Provider string `toml:"provider,omitempty"`
+}
+
 // RepoConfig is the machine-written section of .regent/config.toml.
 type RepoConfig struct {
 	Remote  RemoteConfig  `toml:"remote"`
 	Capture CaptureConfig `toml:"capture"`
+	Insight InsightConfig `toml:"insight,omitempty"`
 }
 
 // ReadRepoConfig reads the re_gent-managed sections of .regent/config.toml.

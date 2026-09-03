@@ -147,8 +147,166 @@ func createSchema(db *sql.DB) error {
 		return err
 	}
 
+	if err := createInsightSchema(db); err != nil {
+		return err
+	}
+
 	// Migrate existing tables (add columns if missing)
 	return migrateSchema(db)
+}
+
+// createInsightSchema adds the derived tables RFC 0007 builds over the
+// capture tables above: work items, entities, embeddings, the insight job
+// queue, and the full-text indexes search reads.
+//
+// Everything here is derived and rebuildable from the capture tables and the
+// object store; nothing capture writes depends on it. The FTS tables are
+// external-content FTS5 over their base tables, kept current by triggers, so
+// a message is searchable the moment it is recorded whether or not insight is
+// enabled. Rows recorded before this schema existed are not in the index
+// until RebuildMessagesFTS runs (`rgt insight enable` and `rgt insight
+// rebuild` both run it); InsightCoverage reports the gap rather than hiding
+// it.
+func createInsightSchema(db *sql.DB) error {
+	schema := `
+	CREATE TABLE IF NOT EXISTS work_items (
+		id                     TEXT PRIMARY KEY,
+		session_id             TEXT NOT NULL,
+		origin                 TEXT NOT NULL,
+		start_step_id          TEXT,
+		end_step_id            TEXT,
+		start_ts               INTEGER NOT NULL,
+		end_ts                 INTEGER,
+		goal                   TEXT NOT NULL DEFAULT '',
+		approach               TEXT NOT NULL DEFAULT '',
+		outcome                TEXT NOT NULL DEFAULT '',
+		status                 TEXT NOT NULL DEFAULT 'wip',
+		continues_work_item_id TEXT,
+		model_provider         TEXT,
+		model_name             TEXT,
+		prompt_version         TEXT,
+		updated_at             INTEGER NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_work_items_session ON work_items(session_id, start_ts);
+	CREATE INDEX IF NOT EXISTS idx_work_items_status ON work_items(status, updated_at);
+
+	CREATE TABLE IF NOT EXISTS work_item_steps (
+		work_item_id TEXT NOT NULL,
+		step_id      TEXT NOT NULL,
+		PRIMARY KEY (work_item_id, step_id)
+	);
+	CREATE INDEX IF NOT EXISTS idx_work_item_steps_step ON work_item_steps(step_id);
+
+	CREATE TABLE IF NOT EXISTS work_item_files (
+		work_item_id TEXT NOT NULL,
+		path         TEXT NOT NULL,
+		PRIMARY KEY (work_item_id, path)
+	);
+	CREATE INDEX IF NOT EXISTS idx_work_item_files_path ON work_item_files(path);
+
+	CREATE TABLE IF NOT EXISTS entities (
+		id   TEXT PRIMARY KEY,
+		type TEXT NOT NULL,
+		name TEXT NOT NULL,
+		ref  TEXT
+	);
+	CREATE UNIQUE INDEX IF NOT EXISTS idx_entities_type_ref ON entities(type, ref) WHERE ref IS NOT NULL;
+	CREATE INDEX IF NOT EXISTS idx_entities_type_name ON entities(type, name);
+
+	CREATE TABLE IF NOT EXISTS work_item_entities (
+		work_item_id     TEXT NOT NULL,
+		entity_id        TEXT NOT NULL,
+		role             TEXT NOT NULL,
+		confidence       REAL NOT NULL DEFAULT 1.0,
+		source           TEXT NOT NULL,
+		evidence_step_id TEXT NOT NULL,
+		PRIMARY KEY (work_item_id, entity_id, role)
+	);
+	CREATE INDEX IF NOT EXISTS idx_work_item_entities_entity ON work_item_entities(entity_id);
+
+	CREATE TABLE IF NOT EXISTS embeddings (
+		owner_kind TEXT NOT NULL,
+		owner_id   TEXT NOT NULL,
+		provider   TEXT NOT NULL,
+		model      TEXT NOT NULL,
+		dim        INTEGER NOT NULL,
+		vector     BLOB NOT NULL,
+		updated_at INTEGER NOT NULL,
+		PRIMARY KEY (owner_kind, owner_id, provider, model)
+	);
+
+	CREATE TABLE IF NOT EXISTS insight_jobs (
+		id         INTEGER PRIMARY KEY AUTOINCREMENT,
+		kind       TEXT NOT NULL,
+		session_id TEXT NOT NULL,
+		step_id    TEXT,
+		turn_id    TEXT,
+		state      TEXT NOT NULL DEFAULT 'queued',
+		attempts   INTEGER NOT NULL DEFAULT 0,
+		last_error TEXT,
+		created_at INTEGER NOT NULL,
+		updated_at INTEGER NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_insight_jobs_state ON insight_jobs(state, id);
+	CREATE INDEX IF NOT EXISTS idx_insight_jobs_session ON insight_jobs(session_id, state);
+
+	CREATE TABLE IF NOT EXISTS insight_meta (
+		key   TEXT PRIMARY KEY,
+		value TEXT NOT NULL
+	);
+
+	CREATE TABLE IF NOT EXISTS insight_cursors (
+		session_id       TEXT PRIMARY KEY,
+		last_message_seq INTEGER NOT NULL DEFAULT -1,
+		updated_at       INTEGER NOT NULL
+	);
+
+	CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+		content_text, content='messages', content_rowid='rowid'
+	);
+	CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages BEGIN
+		INSERT INTO messages_fts(rowid, content_text) VALUES (new.rowid, new.content_text);
+	END;
+	CREATE TRIGGER IF NOT EXISTS messages_fts_ad AFTER DELETE ON messages BEGIN
+		INSERT INTO messages_fts(messages_fts, rowid, content_text) VALUES ('delete', old.rowid, old.content_text);
+	END;
+	CREATE TRIGGER IF NOT EXISTS messages_fts_au AFTER UPDATE OF content_text ON messages BEGIN
+		INSERT INTO messages_fts(messages_fts, rowid, content_text) VALUES ('delete', old.rowid, old.content_text);
+		INSERT INTO messages_fts(rowid, content_text) VALUES (new.rowid, new.content_text);
+	END;
+
+	CREATE VIRTUAL TABLE IF NOT EXISTS work_items_fts USING fts5(
+		goal, approach, outcome, content='work_items', content_rowid='rowid'
+	);
+	CREATE TRIGGER IF NOT EXISTS work_items_fts_ai AFTER INSERT ON work_items BEGIN
+		INSERT INTO work_items_fts(rowid, goal, approach, outcome) VALUES (new.rowid, new.goal, new.approach, new.outcome);
+	END;
+	CREATE TRIGGER IF NOT EXISTS work_items_fts_ad AFTER DELETE ON work_items BEGIN
+		INSERT INTO work_items_fts(work_items_fts, rowid, goal, approach, outcome) VALUES ('delete', old.rowid, old.goal, old.approach, old.outcome);
+	END;
+	CREATE TRIGGER IF NOT EXISTS work_items_fts_au AFTER UPDATE OF goal, approach, outcome ON work_items BEGIN
+		INSERT INTO work_items_fts(work_items_fts, rowid, goal, approach, outcome) VALUES ('delete', old.rowid, old.goal, old.approach, old.outcome);
+		INSERT INTO work_items_fts(rowid, goal, approach, outcome) VALUES (new.rowid, new.goal, new.approach, new.outcome);
+	END;
+
+	CREATE VIRTUAL TABLE IF NOT EXISTS entities_fts USING fts5(
+		name, ref, content='entities', content_rowid='rowid'
+	);
+	CREATE TRIGGER IF NOT EXISTS entities_fts_ai AFTER INSERT ON entities BEGIN
+		INSERT INTO entities_fts(rowid, name, ref) VALUES (new.rowid, new.name, new.ref);
+	END;
+	CREATE TRIGGER IF NOT EXISTS entities_fts_ad AFTER DELETE ON entities BEGIN
+		INSERT INTO entities_fts(entities_fts, rowid, name, ref) VALUES ('delete', old.rowid, old.name, old.ref);
+	END;
+	CREATE TRIGGER IF NOT EXISTS entities_fts_au AFTER UPDATE OF name, ref ON entities BEGIN
+		INSERT INTO entities_fts(entities_fts, rowid, name, ref) VALUES ('delete', old.rowid, old.name, old.ref);
+		INSERT INTO entities_fts(rowid, name, ref) VALUES (new.rowid, new.name, new.ref);
+	END;
+	`
+	if _, err := db.Exec(schema); err != nil {
+		return fmt.Errorf("create insight schema: %w", err)
+	}
+	return nil
 }
 
 // migrateSchema adds new columns to existing tables

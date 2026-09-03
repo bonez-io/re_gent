@@ -44,6 +44,13 @@ type Recorder struct {
 	// its Store; an edge may arrange to deliver those recorded bytes elsewhere.
 	Delivery Delivery
 
+	// OnTurnFinalized, when set, is told about every turn the Stop hook
+	// finalizes, after the step (if any) is written and indexed. The command
+	// edge uses it to queue RFC 0007 insight work. It runs synchronously in
+	// the hook, so it must stay cheap; errors it returns are logged, never
+	// returned to the host.
+	OnTurnFinalized func(TurnFinalized) error
+
 	// scannedTranscripts remembers which (session, turn, transcript) triples this
 	// process already scanned for assistant text, so a multi-tool batch costs one
 	// transcript read instead of one per tool.
@@ -62,6 +69,30 @@ type Delivery interface {
 type turnScope struct {
 	id       string
 	allTurns bool
+}
+
+// TurnFinalized describes one turn the Stop hook completed. Step is empty
+// when the turn used no tools and so wrote no step; the turn's messages are
+// still recorded and still worth reading.
+type TurnFinalized struct {
+	SessionID string
+	Origin    string
+	TurnID    string
+	Step      store.Hash
+}
+
+func (r *Recorder) notifyTurnFinalized(session SessionMetadata, scope turnScope, step store.Hash) {
+	if r.OnTurnFinalized == nil {
+		return
+	}
+	if err := r.OnTurnFinalized(TurnFinalized{
+		SessionID: session.SessionID,
+		Origin:    session.Origin,
+		TurnID:    scope.id,
+		Step:      step,
+	}); err != nil {
+		LogHookError(r.Store.Root, fmt.Sprintf("turn finalized hook: %v", err))
+	}
 }
 
 type SessionMetadata struct {
@@ -295,6 +326,7 @@ func (r *Recorder) RecordAssistantAndFinalize(event AssistantResponse) error {
 					LogHookError(r.Store.Root, fmt.Sprintf("archive transcript: %v", err))
 				}
 			}
+			r.notifyTurnFinalized(session, scope, existingStep)
 			return nil
 		}
 	}
@@ -340,6 +372,7 @@ func (r *Recorder) RecordAssistantAndFinalize(event AssistantResponse) error {
 		}
 	}
 
+	r.notifyTurnFinalized(session, scope, stepHash)
 	return nil
 }
 

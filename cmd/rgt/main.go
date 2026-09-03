@@ -10,6 +10,9 @@ import (
 	"strings"
 
 	"github.com/bonez-io/re_gent/internal/cli"
+	// The read pipeline registers itself as the insight processor; without
+	// this import hooks queue jobs and the worker says it has no pipeline.
+	_ "github.com/bonez-io/re_gent/internal/insight/pipeline"
 	"github.com/bonez-io/re_gent/internal/remote"
 	"github.com/bonez-io/re_gent/internal/store"
 	"github.com/spf13/cobra"
@@ -102,6 +105,9 @@ func newRootCommand() *cobra.Command {
 	rootCmd.AddCommand(cli.SessionsCmd())
 	rootCmd.AddCommand(cli.RewindCmd())
 	rootCmd.AddCommand(cli.RepairCmd())
+	rootCmd.AddCommand(cli.InsightCmd())
+	rootCmd.AddCommand(cli.SearchCmd())
+	rootCmd.AddCommand(cli.WorkCmd())
 	rootCmd.AddCommand(cli.SkillCmd())
 	rootCmd.AddCommand(cli.SyncCmd())
 	rootCmd.AddCommand(cli.HookCmd())

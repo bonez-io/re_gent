@@ -132,6 +132,12 @@ func TestSecureSelfHostedLifecycle(t *testing.T) {
 
 	readerAuth := "Bearer " + created.InitialToken
 	assertStatus(t, serveRequest(srv, http.MethodGet, "/alpha/api/status", readerAuth, "", nil), http.StatusOK)
+	// /api/feed (the first-run tutorial's long-poll, issue #107) is served by
+	// the same public server core as /api/status and classified by the same
+	// history:read action (internal/server permissionForRequest), so a
+	// project reader can call it exactly like every other read route — no
+	// selfhosted-specific wiring was needed to cover it.
+	assertStatus(t, serveRequest(srv, http.MethodGet, "/alpha/api/feed", readerAuth, "", nil), http.StatusOK)
 	assertStatus(t, serveRequest(srv, http.MethodPut, "/alpha/objects/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", readerAuth, "", []byte("content")), http.StatusForbidden)
 	assertStatus(t, serveRequest(srv, http.MethodGet, "/missing/api/status", readerAuth, "", nil), http.StatusNotFound)
 
@@ -213,6 +219,7 @@ func TestAnonymousIdentityAndDataRoutesAreDenied(t *testing.T) {
 		{http.MethodGet, "/api/v1/users"},
 		{http.MethodGet, "/alpha/api/v1/access/members"},
 		{http.MethodGet, "/alpha/api/status"},
+		{http.MethodGet, "/alpha/api/feed"},
 		{http.MethodGet, "/api/v1/orgs/whatever"},
 		{http.MethodPost, "/api/v1/admin/backup"},
 	}
