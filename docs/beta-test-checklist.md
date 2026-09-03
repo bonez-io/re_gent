@@ -17,8 +17,8 @@ Prerequisites: Docker Desktop running, `bin/rgt` built (`make bin/rgt`),
 - [ ] A2 `curl -s http://127.0.0.1:8081/api/v1/capabilities | jq` shows
       `"deployment":"self-hosted"` and `"onboarding":"admin_password"`.
 - [ ] A3 Open http://127.0.0.1:8081. Sign in as `admin` with the printed
-      password. (UI wizard pending: until it lands, run screen 1 with
-      `scripts/dev-bootstrap.sh`, which does the same calls.)
+      password. The wizard opens on screen 1: organization, new password,
+      defaults. (`scripts/dev-bootstrap.sh` does the same calls headlessly.)
 - [ ] A4 After screen 1, the printed password is refused (401) and
       capabilities show `"onboarding":"connect"`.
 - [ ] A5 Restart with `docker compose restart server`. Logs say the initial
@@ -75,14 +75,16 @@ Prerequisites: Docker Desktop running, `bin/rgt` built (`make bin/rgt`),
 - [ ] E1 In `~/Projects/re_gent-cloud`: `docker compose -f deploy/docker-compose.dev.yml -p regent-cloud --env-file .env up -d --build`.
       `curl -s http://127.0.0.1:8091/api/v1/capabilities | jq` shows
       `"deployment":"managed"` and `dev` among `auth_methods`.
-- [ ] E2 Open http://127.0.0.1:8091, choose "Dev sign-in", enter any email.
-      `GET /api/v1/auth/me` shows the user with `orgs: []`.
-- [ ] E3 `POST /api/v1/orgs {"slug":"acme","display_name":"Acme"}`. `auth/me`
-      now lists `acme` with role `owner`.
-- [ ] E4 Setup code, `rgt connect http://127.0.0.1:8091 --setup <code>`,
-      connections feed shows the repo with its display name.
-- [ ] E5 Invite `dana@…`; sign in as dana through the invitation link; dana
-      is `member` of `acme`.
+- [ ] E2 Open http://127.0.0.1:8091, enter any email under "Dev sign-in".
+      You land on "Create an organization".
+- [ ] E3 Create the organization. The wizard opens on "Connect repositories"
+      with a command block and "Listening for connected projects".
+- [ ] E4 Run the command block's `rgt connect … --setup <code>` in a clone.
+      The repository appears on the screen within two seconds, with its
+      display name. Continue.
+- [ ] E5 On "Users", invite `dana@…` and copy the link. Sign out, open the
+      link, "Continue with Dev". dana lands in the app as a `member` and is
+      not sent into the wizard.
 - [ ] E6 Sign in as an uninvited user. `auth/me` has no orgs;
       `GET /api/v1/orgs/acme/projects` is 404.
 - [ ] E7 That user creates `other`, mints a code, enrolls the same repository.
