@@ -63,8 +63,10 @@ func wireAgentsTo(projectRoot string, targets []agentTarget, out io.Writer) ([]a
 			installed = append(installed, agentCodex)
 
 		case agentOpenCode:
+			// OpenCode's plugin needs npm and the registry; neither is a
+			// reason to leave Claude Code or Codex unwired. Report and go on.
 			if err := installOpenCodeHook(projectRoot); err != nil {
-				failures = append(failures, fmt.Errorf("configure OpenCode plugin: %w", err))
+				fmt.Fprintf(out, "  ⚠ OpenCode plugin not installed: %v\n    Re-run with --verbose for the npm output.\n", err)
 				continue
 			}
 			reportWiredTo(out, "OpenCode", filepath.Join(projectRoot, "opencode.jsonc"))
@@ -449,6 +451,15 @@ func configureHooksTo(projectRoot string, targets []agentTarget, opts hookOption
 		} else {
 			reportGitHookWiredTo(out, outcome)
 			reportGitHookSkippedTo(out, outcome)
+		}
+		// Same opt-out, same failure discipline: post-commit refreshing the
+		// workspace baseline is a convenience over capture, never a reason for
+		// init or connect to fail.
+		if outcome, gitErr := wirePostCommitHook(projectRoot); gitErr != nil {
+			Verbosef(out, "  Git post-commit hook not configured: %v\n", gitErr)
+		} else {
+			reportPostCommitHookWiredTo(out, outcome)
+			reportPostCommitHookSkippedTo(out, outcome)
 		}
 	}
 	return hookOutcome{installed: installed}, err

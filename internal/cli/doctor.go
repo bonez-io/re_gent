@@ -116,6 +116,9 @@ func diagnose(projectRoot string) []doctorFinding {
 		if f, present := gitHookFinding(projectRoot); present {
 			findings = append(findings, f)
 		}
+		if f, present := postCommitHookFinding(projectRoot); present {
+			findings = append(findings, f)
+		}
 	}
 
 	if !agentsChecked {

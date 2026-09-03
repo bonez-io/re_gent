@@ -241,3 +241,43 @@ func TestSpoolStatusIsComputedOffline(t *testing.T) {
 		t.Fatalf("status = %+v, want clean", status)
 	}
 }
+
+// TestSpoolStatusExcludesWorkspaceSyncRef locks in a deliberate exclusion:
+// Status must never report the workspace-sync ref as pending work, and a
+// cache holding only an unpushed sync step must read as clean. Two ordinary
+// machines that have never shared a baseline each write their own rootless
+// sync/workspace chain, so folding it into the same automatic queue every
+// git hook and agent turn drains would surface that ordinary state as
+// perpetual "queued" status and, worse, as delivery failures the moment two
+// such machines' pushes disagree — see the comment on Spool.Status for the
+// incident this test was added to guard against. Delivering the sync ref
+// stays possible, just never automatic: `rgt sync --workspace` targets it
+// explicitly (see TestFlushDeliversWorkspaceSyncRefWhenTargetedExplicitly in
+// push_test.go).
+func TestSpoolStatusExcludesWorkspaceSyncRef(t *testing.T) {
+	f := newFixture(t)
+	f.addSyncStep(t, map[string]string{"a.txt": "one", "b.txt": "baseline"})
+
+	status, err := f.spool.Status(f.cache)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if !status.Clean() {
+		t.Fatalf("status = %+v, want clean with only an unpushed sync step", status)
+	}
+	for _, lag := range status.Refs {
+		if lag.Ref == syncRef {
+			t.Fatalf("status.Refs unexpectedly includes %s: %+v", syncRef, status.Refs)
+		}
+	}
+
+	// A session alongside it must still be reported normally.
+	f.addStep(t, map[string]string{"a.txt": "one"}, "first")
+	status, err = f.spool.Status(f.cache)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if status.PendingRefs != 1 {
+		t.Fatalf("status = %+v, want exactly 1 pending ref (the session)", status)
+	}
+}

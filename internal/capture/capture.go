@@ -44,6 +44,13 @@ type Recorder struct {
 	// its Store; an edge may arrange to deliver those recorded bytes elsewhere.
 	Delivery Delivery
 
+	// OnTurnFinalized, when set, is told about every turn the Stop hook
+	// finalizes, after the step (if any) is written and indexed. The command
+	// edge uses it to queue RFC 0007 insight work. It runs synchronously in
+	// the hook, so it must stay cheap; errors it returns are logged, never
+	// returned to the host.
+	OnTurnFinalized func(TurnFinalized) error
+
 	// scannedTranscripts remembers which (session, turn, transcript) triples this
 	// process already scanned for assistant text, so a multi-tool batch costs one
 	// transcript read instead of one per tool.
@@ -62,6 +69,30 @@ type Delivery interface {
 type turnScope struct {
 	id       string
 	allTurns bool
+}
+
+// TurnFinalized describes one turn the Stop hook completed. Step is empty
+// when the turn used no tools and so wrote no step; the turn's messages are
+// still recorded and still worth reading.
+type TurnFinalized struct {
+	SessionID string
+	Origin    string
+	TurnID    string
+	Step      store.Hash
+}
+
+func (r *Recorder) notifyTurnFinalized(session SessionMetadata, scope turnScope, step store.Hash) {
+	if r.OnTurnFinalized == nil {
+		return
+	}
+	if err := r.OnTurnFinalized(TurnFinalized{
+		SessionID: session.SessionID,
+		Origin:    session.Origin,
+		TurnID:    scope.id,
+		Step:      step,
+	}); err != nil {
+		LogHookError(r.Store.Root, fmt.Sprintf("turn finalized hook: %v", err))
+	}
 }
 
 type SessionMetadata struct {
@@ -295,6 +326,7 @@ func (r *Recorder) RecordAssistantAndFinalize(event AssistantResponse) error {
 					LogHookError(r.Store.Root, fmt.Sprintf("archive transcript: %v", err))
 				}
 			}
+			r.notifyTurnFinalized(session, scope, existingStep)
 			return nil
 		}
 	}
@@ -340,6 +372,7 @@ func (r *Recorder) RecordAssistantAndFinalize(event AssistantResponse) error {
 		}
 	}
 
+	r.notifyTurnFinalized(session, scope, stepHash)
 	return nil
 }
 
@@ -878,9 +911,37 @@ func computeBlameForStep(s *store.Store, parentHash, currentStepHash, treeHash s
 		}
 	}
 
+	// The workspace sync baseline (see WorkspaceSync) is loaded once, lazily,
+	// and only if some entry turns out to need it: most steps have a parent
+	// whose tree already covers every path (snapshotWorkspace captures the
+	// whole working tree every turn, not just what an agent touched), so the
+	// baseline usually goes unused after the first step of a session. When
+	// there is no sync ref at all — a project that has never run one, or the
+	// same call computing blame for a sync step's own step, where the ref
+	// still points at this step's parent — every lookup reports ok=false and
+	// behaviour is byte-identical to before this baseline existed.
+	var baselineTip store.Hash
+	var baselineTree *store.Tree
+	var baselineLoaded bool
+	loadBaseline := func() (store.Hash, *store.Tree) {
+		if !baselineLoaded {
+			baselineTip, baselineTree, _ = loadWorkspaceSyncBaseline(s)
+			baselineLoaded = true
+		}
+		return baselineTip, baselineTree
+	}
+
 	var problems []error
 	for _, entry := range tree.Entries {
 		parentEntry, hasParentEntry := parentEntries[entry.Path]
+
+		var baselineBlob store.Hash
+		var baselineBlame *store.BlameMap
+		var hasBaseline bool
+		if !hasParentEntry {
+			tip, btree := loadBaseline()
+			baselineBlob, baselineBlame, hasBaseline = baselineEntry(s, tip, btree, entry.Path)
+		}
 
 		if hasParentEntry && parentEntry.Blob == entry.Blob {
 			oldBlame, err := s.ReadBlameForFile(parentHash, entry.Path)
@@ -894,9 +955,22 @@ func computeBlameForStep(s *store.Store, parentHash, currentStepHash, treeHash s
 			continue
 		}
 
+		// No parent entry, but the workspace baseline already has this exact
+		// content: every line is unchanged relative to it, so its blame map
+		// (attributing lines to the sync step, or to whatever wrote them
+		// before it) carries straight through, the same as the parent
+		// fast-path above.
+		if !hasParentEntry && hasBaseline && baselineBlob == entry.Blob && baselineBlame != nil {
+			if err := emit(currentStepHash, entry.Path, baselineBlame); err != nil {
+				problems = append(problems, fmt.Errorf("copy baseline blame for %s: %w", entry.Path, err))
+			}
+			continue
+		}
+
 		var oldContent []byte
 		var oldBlame *store.BlameMap
-		if hasParentEntry {
+		switch {
+		case hasParentEntry:
 			oldContent, err = s.ReadBlob(parentEntry.Blob)
 			if err != nil {
 				problems = append(problems, fmt.Errorf("read parent blob for %s: %w", entry.Path, err))
@@ -906,6 +980,13 @@ func computeBlameForStep(s *store.Store, parentHash, currentStepHash, treeHash s
 			if err != nil {
 				problems = append(problems, fmt.Errorf("read parent blame for %s: %w", entry.Path, err))
 			}
+		case hasBaseline:
+			oldContent, err = s.ReadBlob(baselineBlob)
+			if err != nil {
+				problems = append(problems, fmt.Errorf("read baseline blob for %s: %w", entry.Path, err))
+				continue
+			}
+			oldBlame = baselineBlame
 		}
 
 		newContent, err := s.ReadBlob(entry.Blob)

@@ -285,12 +285,43 @@ func (st Status) Clean() bool {
 // Status computes the outbox status from durable state only: local refs in the
 // cache compared against the recorded high-water marks. No network is used, so
 // this works while offline.
+//
+// It walks "sessions" only, deliberately not "sync" (see
+// internal/capture.WorkspaceSyncRef). Sessions have one writer and a single
+// linear history, so CAS-refusing a diverged push is the correct conflict
+// signal. The workspace-sync ref does not: every machine that has ever run
+// `rgt init`/`rgt connect` or fired a git hook writes its own root sync step
+// with no shared ancestor, so two ordinary machines "diverge" on it as their
+// normal starting state, not as an error. Folding it into the same automatic
+// queue that git hooks and every agent turn drain made that ordinary state
+// surface as delivery failures and pull refusals — see the incident that
+// added this comment. Delivering the sync ref stays possible, just not
+// automatic: `rgt sync --workspace` (and `rgt sync sync/workspace`, `rgt pull
+// sync/workspace`, `rgt sync --repair sync/workspace`) target it explicitly,
+// where a real divergence is reported the same way an explicit push to any
+// other ref would report one — a decision for whoever typed the command, not
+// something a hook silently forces.
 func (s *Spool) Status(cache *store.Store) (Status, error) {
 	var st Status
 
-	refs, err := cache.ListRefs("sessions")
+	if err := s.collectRefLags(cache, "sessions", &st); err != nil {
+		return st, err
+	}
+
+	objects, err := s.PendingObjects()
+	if err != nil {
+		return st, err
+	}
+	st.LooseObjects = objects
+	return st, nil
+}
+
+// collectRefLags appends one RefLag to st for every ref found under dir, in
+// stable (sorted) order.
+func (s *Spool) collectRefLags(cache *store.Store, dir string, st *Status) error {
+	refs, err := cache.ListRefs(dir)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return st, fmt.Errorf("list cached session refs: %w", err)
+		return fmt.Errorf("list cached %s refs: %w", dir, err)
 	}
 
 	names := make([]string, 0, len(refs))
@@ -300,10 +331,10 @@ func (s *Spool) Status(cache *store.Store) (Status, error) {
 	sort.Strings(names)
 
 	for _, name := range names {
-		refName := "sessions/" + filepath.ToSlash(name)
+		refName := dir + "/" + filepath.ToSlash(name)
 		pushed, err := s.PushedTip(refName)
 		if err != nil {
-			return st, err
+			return err
 		}
 		lag := RefLag{Ref: refName, Local: refs[name], Pushed: pushed, Steps: -1}
 		if n, err := countSteps(cache, refs[name], pushed); err == nil {
@@ -319,13 +350,7 @@ func (s *Spool) Status(cache *store.Store) (Status, error) {
 		}
 		st.Refs = append(st.Refs, lag)
 	}
-
-	objects, err := s.PendingObjects()
-	if err != nil {
-		return st, err
-	}
-	st.LooseObjects = objects
-	return st, nil
+	return nil
 }
 
 // countSteps counts steps from tip back to (but excluding) stop.

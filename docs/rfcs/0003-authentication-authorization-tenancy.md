@@ -168,6 +168,13 @@ conformance tests in the same change as the route.
 | `/api/v1/auth/tokens/*` | `token:read` | `token:write` | authenticated subject |
 | `/api/v1/users` | `user:list` | `user:create` | self-hosted instance |
 | `/{project}/api/v1/access/members/*` | `member:read` | `member:write` | project + member |
+| `/api/v1/auth/login`, `/api/v1/auth/setup-code`, `/api/v1/auth/{provider}/start|callback`, `/api/v1/invitations/{token}[/accept]` | public, rate limited | public, rate limited | credential issuance (RFC 0005) |
+| `/api/v1/auth/password`, `/api/v1/auth/logout` | none | authenticated subject | authenticated subject |
+| `/api/v1/onboarding/admin` | none | initial-password session only | self-hosted instance, once |
+| `/api/v1/orgs/{slug}` | organization member | organization admin | organization |
+| `/api/v1/orgs/{slug}/onboarding`, `/auth-methods`, `/setup-codes`, `/invitations/*` | organization admin | organization admin | organization |
+| `/api/v1/orgs/{slug}/connections`, `/members` | organization member | `member:write` (admin) | organization |
+| `/api/v1/admin/backup` | none | organization admin | self-hosted instance |
 | settings/search/export routes | explicit action required | explicit action required | tenant/project |
 | admin routes | none for normal members | explicit operator action | operator control plane |
 

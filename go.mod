@@ -12,6 +12,7 @@ require (
 	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
 	github.com/sergi/go-diff v1.3.1
 	github.com/spf13/cobra v1.8.0
+	golang.org/x/crypto v0.31.0
 	lukechampine.com/blake3 v1.2.1
 	modernc.org/sqlite v1.28.0
 )
@@ -40,7 +41,7 @@ require (
 	golang.org/x/mod v0.17.0 // indirect
 	golang.org/x/sync v0.15.0 // indirect
 	golang.org/x/sys v0.33.0 // indirect
-	golang.org/x/text v0.3.8 // indirect
+	golang.org/x/text v0.21.0 // indirect
 	golang.org/x/tools v0.21.1-0.20240508182429-e35e4ccd0d2d // indirect
 	lukechampine.com/uint128 v1.2.0 // indirect
 	modernc.org/cc/v3 v3.40.0 // indirect

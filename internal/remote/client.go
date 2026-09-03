@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bonez-io/re_gent/internal/store"
@@ -76,9 +77,19 @@ type Client interface {
 //	PUT  /repos/{repo}/refs/{ref...}    -> 200 | 409 | 422
 type HTTPClient struct {
 	baseURL string
-	repoID  string
-	token   string
-	http    *http.Client
+	// repoID is the routing key interpolated into every object/ref/history
+	// URL. Despite the name it holds whatever Config.Key() resolved to: a
+	// legacy repo_id against an old server, or a project_id (RFC 0004)
+	// against one that has adopted the project API. The wire protocol does
+	// not care which — "Object/ref/history routes accept a prj_… id wherever
+	// a repo id is used today" — so one field and one name serve both.
+	repoID string
+	http   *http.Client
+
+	mu           sync.Mutex
+	token        string
+	refreshToken string
+	onRefresh    func(accessToken, refreshToken string, expiresIn int)
 }
 
 // NewHTTPClient builds a Client for cfg. The configuration is validated up
@@ -88,14 +99,45 @@ func NewHTTPClient(cfg Config) (*HTTPClient, error) {
 		return nil, err
 	}
 	return &HTTPClient{
-		baseURL: strings.TrimRight(cfg.ServerURL, "/"),
-		repoID:  cfg.RepoID,
-		token:   cfg.Token,
+		baseURL:      strings.TrimRight(cfg.ServerURL, "/"),
+		repoID:       cfg.Key(),
+		token:        cfg.Token,
+		refreshToken: cfg.RefreshToken,
 		// No client-level timeout: every call carries a context deadline, which
 		// also covers retries. A Client.Timeout here would silently split that
 		// budget per attempt.
 		http: &http.Client{},
 	}, nil
+}
+
+// SetRefresh equips the client to recover from an expired access token
+// without failing the call: on a 401 whose body carries
+// {"code":"token_expired"}, the client exchanges refreshToken for a new pair
+// via POST /api/v1/auth/token/refresh and retries the request once. onRefresh,
+// when non-nil, is called with the new pair so the caller can persist it (the
+// client itself never writes to disk) — a refresh that succeeds but is never
+// persisted just means the next process refreshes again, which is safe but
+// wasteful, so callers should wire onRefresh whenever they have somewhere to
+// put it.
+func (c *HTTPClient) SetRefresh(refreshToken string, onRefresh func(accessToken, refreshToken string, expiresIn int)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.refreshToken = refreshToken
+	c.onRefresh = onRefresh
+}
+
+// CurrentToken returns the access token the client is presenting right now,
+// which may have changed since construction if a refresh happened.
+func (c *HTTPClient) CurrentToken() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.token
+}
+
+func (c *HTTPClient) currentAuth() (token, refreshToken string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.token, c.refreshToken
 }
 
 func (c *HTTPClient) objectURL(h store.Hash) string {
@@ -264,9 +306,45 @@ func (c *HTTPClient) UpdateRef(ctx context.Context, name string, expected, next 
 }
 
 // do performs one request with retries, translating HTTP status codes into
-// sentinel errors. Only network errors and 5xx are retried; 4xx are terminal.
+// sentinel errors. Only network errors and 5xx are retried; 4xx are terminal
+// — except a 401 that names "token_expired", which is refreshed and retried
+// exactly once (see refreshedOnce below), because that failure mode gets
+// better by trying again and every other 4xx does not.
+// APIGet fetches GET {server}/{repo}/api/{path} and decodes the JSON reply
+// into out. path may carry a query string.
+func (c *HTTPClient) APIGet(ctx context.Context, path string, out any) error {
+	return c.apiJSON(ctx, http.MethodGet, path, nil, out)
+}
+
+// APIPost sends in as JSON to POST {server}/{repo}/api/{path} and decodes
+// the reply into out (nil to discard it).
+func (c *HTTPClient) APIPost(ctx context.Context, path string, in, out any) error {
+	body, err := json.Marshal(in)
+	if err != nil {
+		return fmt.Errorf("encode request: %w", err)
+	}
+	return c.apiJSON(ctx, http.MethodPost, path, body, out)
+}
+
+func (c *HTTPClient) apiJSON(ctx context.Context, method, path string, body []byte, out any) error {
+	url := fmt.Sprintf("%s/%s/api/%s", c.baseURL, c.repoID, strings.TrimLeft(path, "/"))
+	resp, err := c.do(ctx, method, url, body)
+	if err != nil {
+		return err
+	}
+	defer closeBody(resp)
+	if out == nil {
+		return nil
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(out); err != nil {
+		return fmt.Errorf("decode %s %s: %w", method, redactURL(url), err)
+	}
+	return nil
+}
+
 func (c *HTTPClient) do(ctx context.Context, method, url string, body []byte) (*http.Response, error) {
 	var lastErr error
+	refreshedOnce := false
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
@@ -283,8 +361,9 @@ func (c *HTTPClient) do(ctx context.Context, method, url string, body []byte) (*
 		if err != nil {
 			return nil, fmt.Errorf("build request: %w", err)
 		}
-		if c.token != "" {
-			req.Header.Set("Authorization", "Bearer "+c.token)
+		token, _ := c.currentAuth()
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
 		}
 		if body != nil {
 			req.Header.Set("Content-Type", "application/octet-stream")
@@ -303,6 +382,17 @@ func (c *HTTPClient) do(ctx context.Context, method, url string, body []byte) (*
 			continue
 		}
 
+		if resp.StatusCode == http.StatusUnauthorized {
+			if !refreshedOnce && authErrorCode(resp) == "token_expired" {
+				if _, ok := c.attemptRefresh(ctx); ok {
+					refreshedOnce = true
+					attempt-- // this attempt did not consume a retry: retry immediately, no backoff.
+					continue
+				}
+			}
+			return nil, ErrUnauthorized
+		}
+
 		statusErr := statusError(resp)
 		if statusErr == nil {
 			return resp, nil
@@ -316,6 +406,53 @@ func (c *HTTPClient) do(ctx context.Context, method, url string, body []byte) (*
 	}
 
 	return nil, lastErr
+}
+
+// authErrorCode reads and closes a 401 response body, returning the server's
+// {"code":"..."} value or "" if the body is absent, oversized, or not JSON.
+// 401 never carries anything statusError would otherwise report (it maps
+// straight to ErrUnauthorized with no detail), so consuming the body here
+// costs nothing the caller needed.
+func authErrorCode(resp *http.Response) string {
+	defer closeBody(resp)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+	if err != nil {
+		return ""
+	}
+	var body struct {
+		Code string `json:"code"`
+	}
+	if json.Unmarshal(data, &body) != nil {
+		return ""
+	}
+	return body.Code
+}
+
+// attemptRefresh exchanges the client's refresh token for a new pair,
+// updates the token presented on the retry, and — when the caller wired one
+// — hands the new pair to onRefresh to persist. A missing refresh token, or a
+// refresh call that itself fails, reports ok=false and changes nothing.
+func (c *HTTPClient) attemptRefresh(ctx context.Context) (accessToken string, ok bool) {
+	_, refreshToken := c.currentAuth()
+	if refreshToken == "" {
+		return "", false
+	}
+	pair, err := RefreshTokens(ctx, c.http, c.baseURL, refreshToken)
+	if err != nil || pair.AccessToken == "" {
+		return "", false
+	}
+	c.mu.Lock()
+	c.token = pair.AccessToken
+	if pair.RefreshToken != "" {
+		c.refreshToken = pair.RefreshToken
+	}
+	onRefresh := c.onRefresh
+	nextRefresh := c.refreshToken
+	c.mu.Unlock()
+	if onRefresh != nil {
+		onRefresh(pair.AccessToken, nextRefresh, pair.ExpiresIn)
+	}
+	return pair.AccessToken, true
 }
 
 // statusError maps a response status to a sentinel error, or nil for success.

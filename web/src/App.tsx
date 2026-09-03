@@ -4,7 +4,7 @@ import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } fr
 import { ApiError, OfflineError, api } from './api/client'
 import { logToTranscript, transcriptToEntries } from './api/adapters'
 import { languageForPath } from './lib/highlight'
-import type { AuthMeResponse, StatusResponse } from './api/types'
+import type { AuthMeResponse, CapabilitiesResponse, StatusResponse } from './api/types'
 import { AgentIcon, agentColor, agentLabel } from './components/AgentIcon'
 import { BlameView } from './components/BlameView'
 import { ConversationTranscript } from './components/ConversationTranscript'
@@ -14,6 +14,7 @@ import { ResizeHandle } from './components/ResizeHandle'
 import { SessionSearch } from './components/SessionSearch'
 import { TeamDashboard } from './components/TeamDashboard'
 import { usePersistentPanelSize } from './lib/panelSize'
+import { OnboardingRoutes, onboardingPathFor, setupGateDismissed } from './screens/onboarding'
 import { SettingsScreen, type SettingsSection } from './screens/SettingsScreen'
 import { SkillsScreen } from './screens/SkillsScreen'
 
@@ -45,56 +46,274 @@ function Empty({ title, detail }: { title: string; detail: string }) {
   return <div className="m-auto max-w-md px-6 py-12 text-center"><img src="/favicon.svg" alt="" className="mx-auto mb-2 size-8 opacity-70" /><h2 className="m-0 text-[15px] font-semibold">{title}</h2><p className="mt-1 text-[12px] leading-5 text-ink-3">{detail}</p></div>
 }
 
+// Routes an anonymous visitor can always reach, regardless of sign-in state:
+// an invitation link, and the two plain-text landing pages OAuth callbacks send people to.
+const isPublicPath = (pathname: string) => pathname.startsWith('/invitations/') || pathname === '/not-invited' || pathname === '/sign-in-error'
+// The onboarding wizard itself must render even while its own state is not yet "done" —
+// otherwise AuthGate would redirect it back to itself in a loop.
+const isSetupPath = (pathname: string) => pathname === '/setup' || pathname.startsWith('/setup/') || /^\/o\/[^/]+\/setup(\/|$)/.test(pathname)
+
 function AuthGate({ children }: { children: React.ReactNode }) {
   const queryClient = useQueryClient()
+  const location = useLocation()
   const capabilities = useQuery({ queryKey: ['capabilities'], queryFn: api.capabilities, retry: false })
   const secure = Boolean(capabilities.data)
   const legacyOpen = capabilities.error instanceof ApiError && [400, 404].includes(capabilities.error.status)
-  const me = useQuery({ queryKey: ['auth-me'], queryFn: api.me, enabled: secure && !capabilities.data?.bootstrap_required, retry: false })
+  const me = useQuery({ queryKey: ['auth-me'], queryFn: api.me, enabled: secure, retry: false })
+  const refreshMe = () => queryClient.invalidateQueries({ queryKey: ['auth-me'] })
+
+  if (isPublicPath(location.pathname)) return children
 
   if (capabilities.isPending) return <main className="flex min-h-screen bg-page text-ink"><Pending label="Reading server capabilities…" /></main>
   if (legacyOpen) return children
   if (capabilities.error) return <main className="flex min-h-screen bg-page text-ink"><Problem error={capabilities.error} onRetry={() => capabilities.refetch()} /></main>
-  if (capabilities.data?.bootstrap_required) return <BootstrapScreen onReady={async () => { await queryClient.invalidateQueries({ queryKey: ['capabilities'] }); await queryClient.invalidateQueries({ queryKey: ['auth-me'] }) }} />
+  const caps = capabilities.data!
+
   if (me.isPending) return <main className="flex min-h-screen bg-page text-ink"><Pending label="Restoring your session…" /></main>
-  if (me.error instanceof ApiError && [401, 403].includes(me.error.status)) return <LoginScreen onReady={() => queryClient.invalidateQueries({ queryKey: ['auth-me'] })} />
+  if (me.error instanceof ApiError && [401, 403].includes(me.error.status)) {
+    const inviteToken = new URLSearchParams(location.search).get('invite')
+    if (inviteToken) return <InvitationScreen token={inviteToken} />
+    return <SignInScreen capabilities={caps} onReady={refreshMe} />
+  }
   if (me.error) return <main className="flex min-h-screen bg-page text-ink"><Problem error={me.error} onRetry={() => me.refetch()} /></main>
+  const meData = me.data!
+  const orgs = meData.orgs ?? []
+
+  if (caps.deployment === 'managed' && orgs.length === 0) return <CreateOrgScreen onReady={refreshMe} />
+
+  // The wizard is admin work: members land in the app even while their
+  // organization is still being set up by someone else.
+  const canRunSetup = !orgs[0] || ['owner', 'admin'].includes(orgs[0].role ?? '')
+  const onboardingState = caps.deployment === 'managed' ? orgs[0]?.onboarding : caps.onboarding
+  if (canRunSetup && onboardingState && onboardingState !== 'done' && !isSetupPath(location.pathname) && !setupGateDismissed(orgs[0]?.slug ?? '')) {
+    const org = orgs[0]
+    return <Navigate replace to={org ? onboardingPathFor(org, caps.deployment) : '/setup'} />
+  }
+
   return children
 }
 
-function LoginScreen({ onReady }: { onReady: () => Promise<unknown> }) {
+// A relative provider-start URL (from capabilities.auth_starts) plus the query params it
+// accepts: `return` (where the browser lands after the round trip) and `invite`, both signed
+// into server-side state so they survive the redirect.
+function withAuthParams(url: string, returnTo: string, invite?: string, extra?: Record<string, string>) {
+  const params = new URLSearchParams(extra)
+  params.set('return', returnTo)
+  if (invite) params.set('invite', invite)
+  return `${url}${url.includes('?') ? '&' : '?'}${params.toString()}`
+}
+
+function providerLabel(key: string) {
+  if (key === 'github') return 'GitHub'
+  if (key === 'google') return 'Google'
+  return key.charAt(0).toUpperCase() + key.slice(1)
+}
+
+// Preserves the page the visitor was trying to reach (as `return`) and any invitation
+// token already on the URL, stripped from the query string so it isn't duplicated.
+function useReturnTarget() {
+  const location = useLocation()
+  const params = new URLSearchParams(location.search)
+  const invite = params.get('invite') || undefined
+  params.delete('invite')
+  params.delete('return')
+  const query = params.toString()
+  return { returnTo: location.pathname + (query ? `?${query}` : ''), invite }
+}
+
+function SignInScreen({ capabilities, onReady }: { capabilities: CapabilitiesResponse; onReady: () => Promise<unknown> }) {
+  const { returnTo, invite } = useReturnTarget()
+  const navigate = useNavigate()
+  const [devEmail, setDevEmail] = useState('')
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
   const [token, setToken] = useState('')
-  const login = useMutation({ mutationFn: () => api.login(token), onSuccess: async () => { setToken(''); await onReady() } })
-  return <main className="flex min-h-screen items-center justify-center bg-page p-4 text-ink"><form onSubmit={(event) => { event.preventDefault(); login.mutate() }} className="w-full max-w-sm overflow-hidden rounded-[8px] border border-line bg-canvas shadow-raised">
-    <header className="border-b border-line px-5 py-4"><div className="flex items-center gap-2"><img src="/favicon.svg" alt="" className="size-7" /><h1 className="m-0 text-[16px] font-semibold">Sign in to re_gent</h1></div><p className="mb-0 mt-2 text-[11.5px] leading-5 text-ink-3">Use a personal access token. It is exchanged for a secure browser session and is not stored by the UI.</p></header>
-    <div className="p-5"><label className="text-[11px] font-medium text-ink-2" htmlFor="login-token">Personal access token</label><input id="login-token" type="password" autoComplete="off" required value={token} onChange={(event) => setToken(event.target.value)} className="mt-1.5 h-10 w-full rounded-[4px] border-0 bg-field px-3 font-mono text-[12px] shadow-hairline outline-none focus:ring-1 focus:ring-accent" />
-      {login.error && <p role="alert" className="mb-0 mt-2 text-[11px] text-red">{login.error.message}</p>}
-      <button type="submit" disabled={login.isPending} className="mt-4 h-10 w-full rounded-[4px] bg-accent text-[12px] font-medium text-page disabled:opacity-50">{login.isPending ? 'Signing in…' : 'Sign in'}</button>
-      <p className="mb-0 mt-3 text-[10.5px] leading-4 text-ink-3">CLI: <code>rgt auth login &lt;server-url&gt;</code></p>
+
+  const passwordLogin = useMutation({
+    mutationFn: () => api.passwordLogin(username, password),
+    onSuccess: async (response) => {
+      setPassword('')
+      await onReady()
+      // The initial admin password is still in force: send them straight into the wizard
+      // that replaces it, rather than into a product screen guarded by a password we know
+      // is about to be revoked.
+      if (response.password_change_required) navigate(onboardingPathFor({ slug: '', onboarding: 'admin_password' }, capabilities.deployment))
+    },
+  })
+  const tokenLogin = useMutation({ mutationFn: () => api.login(token), onSuccess: async () => { setToken(''); await onReady() } })
+
+  const providerEntries = Object.entries(capabilities.auth_starts ?? {}).filter(([key]) => key !== 'dev')
+  const devStart = capabilities.auth_starts?.dev
+  const hasPassword = capabilities.auth_methods.includes('password')
+  const legacyOnly = providerEntries.length === 0 && !devStart && !hasPassword
+
+  return <main className="flex min-h-screen items-center justify-center bg-page p-4 text-ink"><section className="w-full max-w-sm overflow-hidden rounded-[8px] border border-line bg-canvas shadow-raised">
+    <header className="border-b border-line px-5 py-4"><div className="flex items-center gap-2"><img src="/favicon.svg" alt="" className="size-7" /><h1 className="m-0 text-[16px] font-semibold">Sign in to re_gent</h1></div></header>
+    <div className="grid gap-3 p-5">
+      {providerEntries.map(([key, url]) => <a key={key} href={withAuthParams(url, returnTo, invite)} className="flex h-10 w-full items-center justify-center rounded-[4px] bg-field text-[12.5px] font-medium shadow-hairline hover:bg-hover-2">Continue with {providerLabel(key)}</a>)}
+
+      {devStart && <form onSubmit={(event) => { event.preventDefault(); window.location.assign(withAuthParams(devStart, returnTo, invite, { email: devEmail })) }} className={`grid gap-1.5 ${providerEntries.length ? 'border-t border-line pt-3' : ''}`}>
+        <label className="text-[11px] font-medium text-ink-2" htmlFor="dev-email">Dev sign-in</label>
+        <div className="flex gap-1.5">
+          <input id="dev-email" type="email" required placeholder="you@example.com" value={devEmail} onChange={(event) => setDevEmail(event.target.value)} className="h-9 min-w-0 flex-1 rounded-[4px] border-0 bg-field px-2.5 text-[12px] shadow-hairline outline-none focus:ring-1 focus:ring-accent" />
+          <button type="submit" className="h-9 shrink-0 rounded-[4px] bg-field px-3 text-[11.5px] font-medium shadow-hairline hover:bg-hover-2">Continue</button>
+        </div>
+      </form>}
+
+      {hasPassword && <form onSubmit={(event) => { event.preventDefault(); passwordLogin.mutate() }} className={`grid gap-1.5 ${providerEntries.length || devStart ? 'border-t border-line pt-3' : ''}`}>
+        <label className="text-[11px] font-medium text-ink-2" htmlFor="signin-username">Username</label>
+        <input id="signin-username" required autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} className="h-9 rounded-[4px] border-0 bg-field px-2.5 text-[12px] shadow-hairline outline-none focus:ring-1 focus:ring-accent" />
+        <label className="text-[11px] font-medium text-ink-2" htmlFor="signin-password">Password</label>
+        <input id="signin-password" type="password" required autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} className="h-9 rounded-[4px] border-0 bg-field px-2.5 text-[12px] shadow-hairline outline-none focus:ring-1 focus:ring-accent" />
+        {passwordLogin.error && <p role="alert" className="m-0 text-[11px] text-red">{passwordLogin.error.message}</p>}
+        <button type="submit" disabled={passwordLogin.isPending} className="mt-1 h-9 rounded-[4px] bg-accent text-[12px] font-medium text-page disabled:opacity-50">{passwordLogin.isPending ? 'Signing in…' : 'Sign in'}</button>
+      </form>}
+
+      {legacyOnly && <form onSubmit={(event) => { event.preventDefault(); tokenLogin.mutate() }} className="grid gap-1.5">
+        <label className="text-[11px] font-medium text-ink-2" htmlFor="login-token">Personal access token</label>
+        <input id="login-token" type="password" autoComplete="off" required value={token} onChange={(event) => setToken(event.target.value)} className="h-10 w-full rounded-[4px] border-0 bg-field px-3 font-mono text-[12px] shadow-hairline outline-none focus:ring-1 focus:ring-accent" />
+        {tokenLogin.error && <p role="alert" className="m-0 text-[11px] text-red">{tokenLogin.error.message}</p>}
+        <button type="submit" disabled={tokenLogin.isPending} className="mt-1 h-10 w-full rounded-[4px] bg-accent text-[12px] font-medium text-page disabled:opacity-50">{tokenLogin.isPending ? 'Signing in…' : 'Sign in'}</button>
+        <p className="mb-0 mt-1 text-[10.5px] leading-4 text-ink-3">CLI: <code>rgt auth login &lt;server-url&gt;</code></p>
+      </form>}
+    </div>
+  </section></main>
+}
+
+const slugify = (value: string) => value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48)
+
+function CreateOrgScreen({ onReady }: { onReady: () => Promise<unknown> }) {
+  const navigate = useNavigate()
+  const [displayName, setDisplayName] = useState('')
+  const [slug, setSlug] = useState('')
+  const [slugEdited, setSlugEdited] = useState(false)
+  const createOrg = useMutation({
+    mutationFn: () => api.createOrg(slug, displayName),
+    onSuccess: async (org) => { await onReady(); navigate(onboardingPathFor(org, 'managed')) },
+  })
+  return <main className="flex min-h-screen items-center justify-center bg-page p-4 text-ink"><form onSubmit={(event) => { event.preventDefault(); createOrg.mutate() }} className="w-full max-w-sm overflow-hidden rounded-[8px] border border-line bg-canvas shadow-raised">
+    <header className="border-b border-line px-5 py-4"><span className="regent-kicker">Get started</span><h1 className="mb-0 mt-1 text-[16px] font-semibold">Create an organization</h1></header>
+    <div className="grid gap-3 p-5">
+      <label className="text-[11px] font-medium text-ink-2" htmlFor="org-name">Display name<input id="org-name" required value={displayName} onChange={(event) => { const value = event.target.value; setDisplayName(value); if (!slugEdited) setSlug(slugify(value)) }} className="mt-1.5 h-10 w-full rounded-[4px] border-0 bg-field px-3 text-[12.5px] shadow-hairline outline-none focus:ring-1 focus:ring-accent" /></label>
+      <label className="text-[11px] font-medium text-ink-2" htmlFor="org-slug">Slug<input id="org-slug" required pattern="[a-z0-9\\-]+" value={slug} onChange={(event) => { setSlugEdited(true); setSlug(slugify(event.target.value)) }} className="mt-1.5 h-10 w-full rounded-[4px] border-0 bg-field px-3 font-mono text-[12px] shadow-hairline outline-none focus:ring-1 focus:ring-accent" /></label>
+      {createOrg.error && <p role="alert" className="m-0 text-[11px] text-red">{createOrg.error.message}</p>}
+      <button type="submit" disabled={createOrg.isPending || !slug || !displayName} className="mt-1 h-10 rounded-[4px] bg-accent text-[12px] font-medium text-page disabled:opacity-50">{createOrg.isPending ? 'Creating…' : 'Create organization'}</button>
     </div>
   </form></main>
 }
 
-function BootstrapScreen({ onReady }: { onReady: () => Promise<unknown> }) {
-  const [bootstrapToken, setBootstrapToken] = useState('')
-  const [username, setUsername] = useState('')
-  const [displayName, setDisplayName] = useState('')
-  const [initialToken, setInitialToken] = useState('')
-  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
-  const bootstrap = useMutation({ mutationFn: () => api.bootstrap(bootstrapToken, username, displayName), onSuccess: (response) => { setBootstrapToken(''); setInitialToken(response.token) } })
-  const copyToken = async () => { try { await navigator.clipboard.writeText(initialToken); setCopyState('copied') } catch { setCopyState('failed') } }
-  if (initialToken) return <main className="flex min-h-screen items-center justify-center bg-page p-4 text-ink"><section className="w-full max-w-md rounded-[8px] border border-line bg-canvas p-5 shadow-raised"><span className="regent-kicker">First owner ready</span><h1 className="mb-0 mt-1 text-[18px] font-semibold">Save your initial CLI token</h1><p className="mt-1 text-[11.5px] leading-5 text-ink-3">This secret is shown once. Store it securely, then rotate it from Access settings.</p><div className="mt-3 flex overflow-hidden rounded-[4px] bg-inset shadow-hairline"><code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap px-3 py-2 text-[11px]">{initialToken}</code><button type="button" onClick={() => void copyToken()} className="m-1 rounded-[4px] bg-field px-2.5 text-[10.5px] shadow-hairline">{copyState === 'copied' ? 'Copied' : copyState === 'failed' ? 'Copy failed' : 'Copy'}</button></div><button type="button" onClick={() => void onReady()} className="mt-4 h-10 w-full rounded-[4px] bg-accent text-[12px] font-medium text-page">Continue to re_gent</button></section></main>
-  return <main className="flex min-h-screen items-center justify-center bg-page p-4 text-ink"><form onSubmit={(event) => { event.preventDefault(); bootstrap.mutate() }} className="w-full max-w-md overflow-hidden rounded-[8px] border border-line bg-canvas shadow-raised"><header className="border-b border-line px-5 py-4"><span className="regent-kicker">Secure self-hosted setup</span><h1 className="mb-0 mt-1 text-[18px] font-semibold">Create the first owner</h1><p className="mb-0 mt-1 text-[11.5px] leading-5 text-ink-3">Enter the one-time credential printed by <code>regent-server</code>. It is invalidated as soon as setup completes.</p></header><div className="grid gap-3 p-5">
-    <label className="text-[11px] font-medium text-ink-2">Bootstrap credential<input type="password" autoComplete="off" required value={bootstrapToken} onChange={(event) => setBootstrapToken(event.target.value)} className="mt-1.5 h-10 w-full rounded-[4px] border-0 bg-field px-3 font-mono text-[12px] shadow-hairline outline-none focus:ring-1 focus:ring-accent" /></label>
-    <div className="grid grid-cols-2 gap-2 max-sm:grid-cols-1"><label className="text-[11px] font-medium text-ink-2">Username<input required pattern="[a-z0-9][a-z0-9._-]*" value={username} onChange={(event) => setUsername(event.target.value)} className="mt-1.5 h-10 w-full rounded-[4px] border-0 bg-field px-3 text-[12px] shadow-hairline outline-none focus:ring-1 focus:ring-accent" /></label><label className="text-[11px] font-medium text-ink-2">Display name<input required value={displayName} onChange={(event) => setDisplayName(event.target.value)} className="mt-1.5 h-10 w-full rounded-[4px] border-0 bg-field px-3 text-[12px] shadow-hairline outline-none focus:ring-1 focus:ring-accent" /></label></div>
-    {bootstrap.error && <p role="alert" className="m-0 text-[11px] text-red">{bootstrap.error.message}</p>}<button type="submit" disabled={bootstrap.isPending} className="mt-1 h-10 rounded-[4px] bg-accent text-[12px] font-medium text-page disabled:opacity-50">{bootstrap.isPending ? 'Creating owner…' : 'Create owner'}</button>
-  </div></form></main>
+function invitationErrorMessage(error: unknown) {
+  const code = error instanceof ApiError && error.body && typeof error.body === 'object' && 'code' in error.body ? String((error.body as { code: unknown }).code) : undefined
+  if (code === 'invitation_expired') return 'This invitation link has expired.'
+  if (code === 'invitation_revoked') return 'This invitation has been revoked.'
+  return 'This invitation link is not valid.'
 }
+
+function InvitationScreen({ token }: { token: string }) {
+  const queryClient = useQueryClient()
+  const navigate = useNavigate()
+  const invitation = useQuery({ queryKey: ['invitation', token], queryFn: () => api.invitation(token), retry: false })
+  const capabilities = useQuery({ queryKey: ['capabilities'], queryFn: api.capabilities, retry: false })
+  const [displayName, setDisplayName] = useState('')
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  useEffect(() => { if (invitation.data?.username) setUsername((current) => current || invitation.data!.username!) }, [invitation.data?.username])
+  const accept = useMutation({
+    mutationFn: () => api.acceptInvitation(token, { display_name: displayName, username: username || undefined, password: password || undefined }),
+    onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ['auth-me'] }); navigate('/', { replace: true }) },
+  })
+
+  if (invitation.isPending) return <main className="flex min-h-screen bg-page text-ink"><Pending label="Loading invitation…" /></main>
+  if (invitation.error) return <main className="flex min-h-screen items-center justify-center bg-page p-4 text-ink"><p className="max-w-sm text-center text-[12.5px] text-ink-3">{invitationErrorMessage(invitation.error)}</p></main>
+
+  const data = invitation.data
+  const methods = data.methods ?? []
+  const providerMethods = methods.filter((method) => method !== 'password')
+  const authStarts = capabilities.data?.auth_starts ?? {}
+
+  return <main className="flex min-h-screen items-center justify-center bg-page p-4 text-ink"><section className="w-full max-w-sm overflow-hidden rounded-[8px] border border-line bg-canvas shadow-raised">
+    <header className="border-b border-line px-5 py-4"><span className="regent-kicker">Invitation</span><h1 className="mb-0 mt-1 text-[16px] font-semibold">Join {data.org_display_name}</h1><p className="mb-0 mt-1 text-[11.5px] text-ink-3">{data.email ? `For ${data.email}` : data.username ? `For @${data.username}` : 'Accept this invitation to join.'}</p></header>
+    <div className="grid gap-3 p-5">
+      {providerMethods.map((method) => authStarts[method] && <a key={method} href={withAuthParams(authStarts[method], '/', token, method === 'dev' && data.email ? { email: data.email } : undefined)} className="flex h-10 w-full items-center justify-center rounded-[4px] bg-field text-[12.5px] font-medium shadow-hairline hover:bg-hover-2">Continue with {providerLabel(method)}</a>)}
+      {methods.includes('password') && <form onSubmit={(event) => { event.preventDefault(); accept.mutate() }} className={`grid gap-1.5 ${providerMethods.length ? 'border-t border-line pt-3' : ''}`}>
+        <label className="text-[11px] font-medium text-ink-2" htmlFor="invite-name">Display name<input id="invite-name" required value={displayName} onChange={(event) => setDisplayName(event.target.value)} className="mt-1.5 h-9 w-full rounded-[4px] border-0 bg-field px-2.5 text-[12px] shadow-hairline outline-none focus:ring-1 focus:ring-accent" /></label>
+        <label className="text-[11px] font-medium text-ink-2" htmlFor="invite-username">Username<input id="invite-username" required pattern="[a-z0-9][a-z0-9._-]*" value={username} onChange={(event) => setUsername(event.target.value)} className="mt-1.5 h-9 w-full rounded-[4px] border-0 bg-field px-2.5 text-[12px] shadow-hairline outline-none focus:ring-1 focus:ring-accent" /></label>
+        <label className="text-[11px] font-medium text-ink-2" htmlFor="invite-password">Password<input id="invite-password" type="password" required minLength={12} value={password} onChange={(event) => setPassword(event.target.value)} className="mt-1.5 h-9 w-full rounded-[4px] border-0 bg-field px-2.5 text-[12px] shadow-hairline outline-none focus:ring-1 focus:ring-accent" /></label>
+        {accept.error && <p role="alert" className="m-0 text-[11px] text-red">{accept.error.message}</p>}
+        <button type="submit" disabled={accept.isPending} className="mt-1 h-9 rounded-[4px] bg-accent text-[12px] font-medium text-page disabled:opacity-50">{accept.isPending ? 'Joining…' : 'Accept invitation'}</button>
+      </form>}
+    </div>
+  </section></main>
+}
+
+function InvitationRoute() {
+  const { token = '' } = useParams()
+  return <InvitationScreen token={token} />
+}
+
+// Reason codes come from the server's refusal redirect; each maps to one plain
+// sentence so nobody reads a snake_case code on a sign-in page.
+const notInvitedReasons: Record<string, string> = {
+  not_invited: 'This account has no invitation to any organization here.',
+  invitation_email_mismatch: 'This invitation was sent to a different email address than the one you signed in with.',
+  invitation_expired: 'This invitation has expired.',
+  invitation_revoked: 'This invitation was revoked.',
+  invitation_used: 'This invitation was already used. Sign in normally, or ask for a new one.',
+  state_invalid: 'The sign-in link was stale or opened in a different browser. Start again from the invitation link.',
+  required_method: 'This organization requires a different sign-in method.',
+}
+
+function NotInvitedScreen() {
+  const location = useLocation()
+  const code = new URLSearchParams(location.search).get('reason') ?? ''
+  const reason = notInvitedReasons[code] ?? (code ? code.replace(/_/g, ' ') : '')
+  return <main className="flex min-h-screen items-center justify-center bg-page p-4 text-ink"><div className="max-w-sm text-center"><h1 className="m-0 text-[16px] font-semibold">Your account is not invited</h1><p className="mt-2 text-[12px] leading-5 text-ink-3">{reason ? `${reason}. ` : ''}Ask an administrator to invite you to this organization.</p></div></main>
+}
+
+function SignInErrorScreen() {
+  const location = useLocation()
+  const code = new URLSearchParams(location.search).get('code')
+  return <main className="flex min-h-screen items-center justify-center bg-page p-4 text-ink"><div className="max-w-sm text-center"><h1 className="m-0 text-[16px] font-semibold">Sign-in failed</h1><p className="mt-2 text-[12px] leading-5 text-ink-3">{code ? `Error: ${code}. ` : ''}Try signing in again, or contact an administrator.</p></div></main>
+}
+
+function DeviceApprovalScreen() {
+  const location = useLocation()
+  const prefill = new URLSearchParams(location.search).get('code') || ''
+  const [userCode, setUserCode] = useState(prefill)
+  const approve = useMutation({ mutationFn: () => api.approveDevice(userCode) })
+  const errorMessage = approve.error instanceof ApiError && approve.error.status === 404 ? 'That code was not recognized.' : approve.error instanceof ApiError && approve.error.status === 403 ? 'This account cannot approve that device.' : approve.error?.message
+  return <main className="flex min-h-screen items-center justify-center bg-page p-4 text-ink"><form onSubmit={(event) => { event.preventDefault(); approve.mutate() }} className="w-full max-w-sm overflow-hidden rounded-[8px] border border-line bg-canvas shadow-raised">
+    <header className="border-b border-line px-5 py-4"><h1 className="m-0 text-[16px] font-semibold">Approve this device</h1><p className="mb-0 mt-1 text-[11.5px] text-ink-3">Enter the code shown on the device you are signing in.</p></header>
+    <div className="grid gap-3 p-5">
+      <label className="text-[11px] font-medium text-ink-2" htmlFor="device-code">Device code</label>
+      <input id="device-code" required autoComplete="off" value={userCode} onChange={(event) => setUserCode(event.target.value)} className="h-10 rounded-[4px] border-0 bg-field px-3 text-center font-mono text-[16px] uppercase tracking-[0.15em] shadow-hairline outline-none focus:ring-1 focus:ring-accent" />
+      {approve.isSuccess && <p role="status" className="m-0 text-[11.5px] text-green">Device approved. You can return to it now.</p>}
+      {errorMessage && <p role="alert" className="m-0 text-[11px] text-red">{errorMessage}</p>}
+      <button type="submit" disabled={approve.isPending || approve.isSuccess} className="mt-1 h-10 rounded-[4px] bg-accent text-[12px] font-medium text-page disabled:opacity-50">{approve.isPending ? 'Approving…' : approve.isSuccess ? 'Approved' : 'Approve device'}</button>
+    </div>
+  </form></main>
+}
+
+type ProjectOption = { id: string; display_name: string }
 
 function RepoHome() {
   const navigate = useNavigate()
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
-  const repos = useQuery({ queryKey: ['repos'], queryFn: api.listRepos, retry: false, refetchInterval: 1_500 })
+  const projects = useQuery({
+    queryKey: ['projects'],
+    queryFn: async (): Promise<ProjectOption[]> => {
+      try {
+        const response = await api.listProjects()
+        return response.projects.map((project) => ({ id: project.id, display_name: project.display_name || project.id }))
+      } catch (error) {
+        // Older servers only expose the bare-id /repos list.
+        if (error instanceof ApiError && error.status === 404) return (await api.listRepos()).repos.map((id) => ({ id, display_name: id }))
+        throw error
+      }
+    },
+    retry: false,
+    refetchInterval: 1_500,
+  })
   const copyCommand = async () => {
     try {
       await navigator.clipboard.writeText(connectCommand)
@@ -103,11 +322,11 @@ function RepoHome() {
       setCopyState('failed')
     }
   }
-  if (repos.isPending) return <main className="flex min-h-screen bg-page text-ink"><Pending label="Connecting to re_gent…" /></main>
-  if (repos.error) return <main className="flex min-h-screen bg-page text-ink"><Problem error={repos.error} onRetry={() => repos.refetch()} /></main>
-  if (defaultRepo && repos.data.repos.includes(defaultRepo)) return <Navigate replace to={`/repos/${defaultRepo}/sessions`} />
-  if (repos.data.repos.length === 1) return <Navigate replace to={`/repos/${repos.data.repos[0]}/sessions`} />
-  const hasRepos = repos.data.repos.length > 0
+  if (projects.isPending) return <main className="flex min-h-screen bg-page text-ink"><Pending label="Connecting to re_gent…" /></main>
+  if (projects.error) return <main className="flex min-h-screen bg-page text-ink"><Problem error={projects.error} onRetry={() => projects.refetch()} /></main>
+  if (defaultRepo && projects.data.some((project) => project.id === defaultRepo)) return <Navigate replace to={`/repos/${defaultRepo}/sessions`} />
+  if (projects.data.length === 1) return <Navigate replace to={`/repos/${projects.data[0].id}/sessions`} />
+  const hasRepos = projects.data.length > 0
   return <main className="flex min-h-screen items-center justify-center bg-page p-4 text-ink">
     <section className="w-full max-w-md overflow-hidden rounded-[8px] border border-line bg-canvas shadow-raised">
       <header className="flex items-center gap-2 border-b border-line px-4 py-2.5">
@@ -117,7 +336,7 @@ function RepoHome() {
           <p className="m-0 text-[11px] leading-4 text-ink-3">{hasRepos ? 'Repositories registered on this server' : 'Run one command from your project directory'}</p>
         </div>
       </header>
-      {hasRepos && <div className="p-2">{repos.data.repos.map((repo) => <button key={repo} onClick={() => navigate(`/repos/${repo}/sessions`)} className="flex h-10 w-full items-center rounded-[4px] px-2.5 text-left text-[12.5px] hover:bg-hover"><span className="size-1.5 rounded-full bg-green" /><span className="ml-2 flex-1 font-medium">{repo}</span><span className="text-ink-3">Open →</span></button>)}</div>}
+      {hasRepos && <div className="p-2">{projects.data.map((project) => <button key={project.id} onClick={() => navigate(`/repos/${project.id}/sessions`)} className="flex h-10 w-full items-center rounded-[4px] px-2.5 text-left text-[12.5px] hover:bg-hover"><span className="size-1.5 rounded-full bg-green" /><span className="ml-2 flex-1 font-medium">{project.display_name}</span><span className="text-ink-3">Open →</span></button>)}</div>}
       <div className={`${hasRepos ? 'border-t border-line' : ''} p-4`}>
         {hasRepos && <h2 className="m-0 text-[12px] font-medium">Connect another project</h2>}
         <p className={`${hasRepos ? 'mt-1' : 'mt-0'} mb-2.5 text-[11.5px] leading-5 text-ink-3`}>Open a terminal in the project you want re_gent to track, then run:</p>
@@ -221,7 +440,11 @@ function FilesScreen({ repoId }: { repoId: string }) {
   const requestedStep = params.get('step') || undefined; const requestedPath = params.get('path') || undefined
   const [treeWidth, setTreeWidth] = usePersistentPanelSize('files-tree', 320, 240, 560)
   const { sessions, session, log } = useLatestLog(repoId); const step = requestedStep || log.data?.steps[0]?.hash
-  const files = useQuery({ queryKey: ['files', repoId, step, session], queryFn: () => api.files(repoId, { step, session }), enabled: Boolean(step || session), retry: false })
+  // Waits only for the initial sessions lookup, not for a step/session to be resolved: a
+  // freshly connected repo with no captured turn yet has neither, and still fetches with
+  // no scope — the server answers with the latest tree on disk, tagged `source: "sync"`
+  // rather than "session".
+  const files = useQuery({ queryKey: ['files', repoId, step, session], queryFn: () => api.files(repoId, { step, session }), enabled: !sessions.isPending, retry: false })
   const [selected, setSelected] = useState<string>()
   // A fresh ?path= link must win over whatever the user last clicked in the tree.
   useEffect(() => { setSelected(undefined) }, [requestedPath, requestedStep])
@@ -231,10 +454,10 @@ function FilesScreen({ repoId }: { repoId: string }) {
   const stepDetail = useQuery({ queryKey: ['step', repoId, step], queryFn: () => api.step(repoId, step!), enabled: Boolean(step), retry: false })
   const stepSession = stepDetail.data?.session_id
   const blame = useQuery({ queryKey: ['blame', repoId, files.data?.step_hash, path], queryFn: () => api.blame(repoId, files.data!.step_hash, path!), enabled: Boolean(files.data?.step_hash && path), retry: false })
-  if (sessions.isPending || (session && log.isPending) || ((step || session) && files.isPending)) return <Pending label="Reading captured tree…" />
+  if (sessions.isPending || (session && log.isPending) || files.isPending) return <Pending label="Reading captured tree…" />
   const error = sessions.error || log.error || files.error; if (error) return <Problem error={error} onRetry={() => files.refetch()} />
   if (!files.data?.files.length) return <Empty title="No captured files" detail="Choose a step with a workspace tree, or complete a captured agent turn first." />
-  return <div className="flex min-h-0 flex-1 max-md:flex-col"><aside className="min-h-0 shrink-0 overflow-auto bg-canvas max-md:!h-[38%] max-md:!w-full" style={{ width: treeWidth }}><div className="sticky top-0 z-10 flex h-10 items-center border-b border-line bg-canvas px-3 text-[12.5px] font-semibold">Files<span className="ml-auto text-[10.5px] font-normal tabular-nums text-ink-3">{files.data.total_files}</span></div><FileTree files={files.data.files} selectedPath={path} onSelect={setSelected} /></aside><ResizeHandle label="Resize file tree" value={treeWidth} min={240} max={560} defaultValue={320} onChange={setTreeWidth} className="max-md:hidden" /><section className="flex min-w-0 flex-1 flex-col overflow-hidden bg-inset"><div className="z-10 flex h-10 shrink-0 items-center border-b border-line bg-canvas px-3"><span className="truncate font-mono text-[11.5px]">{path}</span>{path && <span className="ml-2 shrink-0 font-mono text-[10px] text-ink-3">{languageForPath(path)}</span>}{stepSession ? <Link to={`/repos/${encodeURIComponent(repoId)}/sessions/${encodeURIComponent(stepSession)}?step=${encodeURIComponent(files.data.step_hash)}`} aria-label={`Open the session that produced step ${short(files.data.step_hash)}`} className="ml-auto font-mono text-[10.5px] text-accent-ink underline-offset-2 hover:underline">{short(files.data.step_hash)}</Link> : <span className="ml-auto font-mono text-[10.5px] text-accent-ink">{short(files.data.step_hash)}</span>}</div>{blame.isPending ? <Pending label="Loading provenance…" /> : blame.error ? <Problem error={blame.error} onRetry={() => blame.refetch()} /> : <BlameView repoId={repoId} data={blame.data!} />}</section></div>
+  return <div className="flex min-h-0 flex-1 max-md:flex-col"><aside className="min-h-0 shrink-0 overflow-auto bg-canvas max-md:!h-[38%] max-md:!w-full" style={{ width: treeWidth }}><div className="sticky top-0 z-10 flex h-10 items-center border-b border-line bg-canvas px-3 text-[12.5px] font-semibold">Files<span className="ml-auto text-[10.5px] font-normal tabular-nums text-ink-3">{files.data.total_files}</span></div><FileTree files={files.data.files} selectedPath={path} onSelect={setSelected} /></aside><ResizeHandle label="Resize file tree" value={treeWidth} min={240} max={560} defaultValue={320} onChange={setTreeWidth} className="max-md:hidden" /><section className="flex min-w-0 flex-1 flex-col overflow-hidden bg-inset"><div className="z-10 flex h-10 shrink-0 items-center border-b border-line bg-canvas px-3"><span className="truncate font-mono text-[11.5px]">{path}</span>{path && <span className="ml-2 shrink-0 font-mono text-[10px] text-ink-3">{languageForPath(path)}</span>}{files.data.source === 'sync' && <span className="ml-2 flex shrink-0 items-center gap-1.5 text-[10px] text-ink-3"><span aria-hidden className="h-2.5 w-px bg-line" />Baseline snapshot (outside an agent turn)</span>}{stepSession ? <Link to={`/repos/${encodeURIComponent(repoId)}/sessions/${encodeURIComponent(stepSession)}?step=${encodeURIComponent(files.data.step_hash)}`} aria-label={`Open the session that produced step ${short(files.data.step_hash)}`} className="ml-auto font-mono text-[10.5px] text-accent-ink underline-offset-2 hover:underline">{short(files.data.step_hash)}</Link> : <span className="ml-auto font-mono text-[10.5px] text-accent-ink">{short(files.data.step_hash)}</span>}</div>{blame.isPending ? <Pending label="Loading provenance…" /> : blame.error ? <Problem error={blame.error} onRetry={() => blame.refetch()} /> : <BlameView repoId={repoId} data={blame.data!} />}</section></div>
 }
 
 function StatusScreen({ repoId }: { repoId: string }) {
@@ -253,6 +476,18 @@ function SettingsRoute({ repoId }: { repoId: string }) {
   return <SettingsScreen section={section as SettingsSection} repoId={repoId} />
 }
 
-function ProductRoutes() { return <Routes><Route path="/" element={<RepoHome />} /><Route path="/repos/:repoId/*" element={<Shell />} /><Route path="*" element={<Navigate replace to="/" />} /></Routes> }
+function ProductRoutes() {
+  return <Routes>
+    <Route path="/" element={<RepoHome />} />
+    <Route path="/invitations/:token" element={<InvitationRoute />} />
+    <Route path="/not-invited" element={<NotInvitedScreen />} />
+    <Route path="/sign-in-error" element={<SignInErrorScreen />} />
+    <Route path="/device" element={<DeviceApprovalScreen />} />
+    <Route path="/setup/*" element={<OnboardingRoutes />} />
+    <Route path="/o/:slug/setup/*" element={<OnboardingRoutes />} />
+    <Route path="/repos/:repoId/*" element={<Shell />} />
+    <Route path="*" element={<Navigate replace to="/" />} />
+  </Routes>
+}
 
 export default function App() { return <AuthGate><ProductRoutes /></AuthGate> }

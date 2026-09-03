@@ -100,7 +100,7 @@ func runPullCommand(out io.Writer, cfg remote.Config, opts pullOptions) error {
 		return err
 	}
 	if len(refs) == 0 {
-		fmt.Fprintf(out, "%s holds no history for %s yet.\n", cfg.ServerURL, cfg.RepoID)
+		fmt.Fprintf(out, "%s holds no history for %s yet.\n", cfg.ServerURL, cfg.Key())
 		fmt.Fprintln(out, "Nothing has been pushed to this project. Once a teammate records a session, 'rgt pull' will find it.")
 		return nil
 	}
@@ -181,6 +181,12 @@ func printPullFollowUp(out io.Writer, pulled int, refused []string) {
 // pushed nothing. 'rgt sync --pull' asks the local spool instead, which only
 // ever knows what this machine sent — empty on a fresh clone, which is exactly
 // the case that needs an answer.
+// pullTargets defaults to session refs only, deliberately excluding
+// refs/sync/*: pull refuses (ErrDiverged) rather than rewind a ref that is
+// not an ancestor of the server's, and the workspace-sync ref routinely
+// "diverges" between ordinary machines that have never shared a baseline —
+// see the comment on Spool.Status. Name it explicitly — `rgt pull
+// sync/workspace` — to pull it anyway.
 func pullTargets(ctx context.Context, client remote.Client, ref string) ([]string, error) {
 	if ref != "" {
 		return []string{qualifyRef(ref)}, nil

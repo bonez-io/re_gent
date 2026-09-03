@@ -53,14 +53,37 @@ func InitCmd() *cobra.Command {
 	var captureRoot string
 
 	cmd := &cobra.Command{
-		Use:          "init",
-		Short:        "Initialize a new re_gent repository",
-		Long:         "Creates a .regent directory in the current workspace and sets up agent hooks.",
+		Use:   "init [server-url]",
+		Short: "Initialize a new re_gent repository, or connect one to a server",
+		Long: `Creates a .regent directory in the current workspace and sets up agent hooks.
+
+Pass a server URL and init behaves exactly like "rgt connect <url>",
+--setup included: this is the one-command form the README and the self-hosted
+onboarding wizard print ("curl ... | sh && rgt init <url> --setup <code>"),
+so a fresh machine never needs to know that init and connect are two
+commands. With no URL, init keeps its local-only behavior below.`,
 		SilenceUsage: true,
+		Args:         cobra.MaximumNArgs(1),
 		Annotations: map[string]string{
 			"commandOrder": "0",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// The alias: "rgt init <url>" is "rgt connect <url>". Dispatched
+			// first and unconditionally on any positional argument, before any
+			// of init's own local-repository logic runs, because the two
+			// behaviors are mutually exclusive — a URL means "connect this to a
+			// server," never "also initialize it locally first." connect does
+			// its own .regent/ initialization when needed.
+			//
+			// This reuses runConnectRunE (internal/cli/connect.go) rather than
+			// reimplementing it: cmd here is init's own *cobra.Command, but
+			// every flag runConnectRunE reads (as, no-git-hook, agent, url,
+			// yes, org, as-fork, setup) is also registered below on InitCmd's
+			// FlagSet under the same name, so the lookups resolve exactly as
+			// they would from ConnectCmd.
+			if len(args) > 0 {
+				return runConnectRunE(cmd, args)
+			}
 			if captureRoot != "" && captureRoot != "project" && captureRoot != "workspace" {
 				return fmt.Errorf("invalid --capture-root %q: use project or workspace", captureRoot)
 			}
@@ -168,6 +191,11 @@ func InitCmd() *cobra.Command {
 				}
 			}
 
+			// A baseline snapshot of the working tree, taken once hooks are
+			// wired, so the Files view is never empty before the first
+			// captured agent step (issue #106). Best-effort: see runBaselineSync.
+			runBaselineSync(out, cwd)
+
 			// The summary reports what was installed, not what was detected,
 			// and the exit code follows it. A run that wired nothing must not
 			// look like a success to a script, a devcontainer, or a teammate.
@@ -189,6 +217,19 @@ func InitCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&withSkills, "skills", false, "Offer to install optional agent skills")
 	cmd.Flags().StringVar(&agent, "agent", string(agentAuto), "Agent hooks to configure: auto, claude, codex, opencode, pi, both, all")
 	cmd.Flags().StringVar(&captureRoot, "capture-root", "", "Record this intentional capture layout: project or workspace")
+
+	// Connect-only flags, present here solely so "rgt init <url> [flags]"
+	// parses the same flags "rgt connect <url> [flags]" does — see the alias
+	// dispatch above. They are read only by runConnectRunE, and only when a
+	// URL argument sends this command down that path; the local-init RunE
+	// below never consults them. Keep the names, defaults, and help text in
+	// sync with ConnectCmd (internal/cli/connect.go).
+	cmd.Flags().String("as", "", "identity (legacy server) or display name (project-id server) for this project, instead of deriving one")
+	cmd.Flags().String("url", "", "public http(s) URL to prove and bind when provisioning an SSH target")
+	cmd.Flags().Bool("yes", false, "provision an SSH target without asking for confirmation")
+	cmd.Flags().String("org", "", "organization to enroll this project in (project-id servers only)")
+	cmd.Flags().Bool("as-fork", false, "enroll a detected fork as its own project instead of stopping to ask")
+	cmd.Flags().String("setup", "", "one-time setup code from the self-hosted onboarding wizard; exchanged for a machine credential before connecting")
 
 	return cmd
 }
@@ -415,8 +456,24 @@ func installOpenCodeHook(projectRoot string) error {
 	return registerOpenCodePlugin(projectRoot)
 }
 
+// ensureOpenCodePackage gives .opencode its own package.json. Without one,
+// npm walks up to the nearest package.json and installs into the user's
+// project instead, which fails outright in pnpm workspaces ("catalog:") and
+// would otherwise rewrite their dependencies.
+func ensureOpenCodePackage(opencodeDir string) error {
+	path := filepath.Join(opencodeDir, "package.json")
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	}
+	manifest := "{\n  \"name\": \"regent-opencode-integration\",\n  \"private\": true,\n  \"description\": \"re_gent OpenCode plugin, managed by rgt connect\"\n}\n"
+	return os.WriteFile(path, []byte(manifest), 0o644)
+}
+
 func npmInstallOpenCodePlugin(opencodeDir string) error {
-	cmd := exec.Command("npm", "install", "--save", "@regent-vcs/opencode-plugin")
+	if err := ensureOpenCodePackage(opencodeDir); err != nil {
+		return fmt.Errorf("prepare .opencode: %w", err)
+	}
+	cmd := exec.Command("npm", "install", "--save", "--prefix", opencodeDir, "@regent-vcs/opencode-plugin")
 	cmd.Dir = opencodeDir
 	return runSetupCommand(cmd, "install OpenCode integration")
 }

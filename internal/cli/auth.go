@@ -2,11 +2,13 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"os"
 	"strings"
@@ -20,16 +22,41 @@ import (
 
 const maxAuthResponseBytes = 64 << 10
 
+// readHiddenInput reads one line from fd without echoing it — a password or
+// a personal access token typed at a terminal. It is a package variable
+// rather than a direct call to term.ReadPassword purely so a test can
+// substitute a fake reader: term.ReadPassword needs a real terminal file
+// descriptor, which a test binary's stdin never is.
+var readHiddenInput = term.ReadPassword
+
 type authViewer struct {
 	ID            string `json:"id"`
 	Username      string `json:"username"`
 	DisplayName   string `json:"display_name"`
+	Email         string `json:"email"`
 	InstanceOwner bool   `json:"instance_owner"`
 }
 
 type authMeResponse struct {
+	// Viewer is the RFC 0003 shape; User is the RFC 0005 Appendix A shape
+	// that self-hosted (alongside viewer) and managed (alone) return. A
+	// managed user has no username, only an email, so identity() fills the
+	// gap from there rather than treating the response as broken.
 	Viewer     authViewer `json:"viewer"`
+	User       authViewer `json:"user"`
 	AuthMethod string     `json:"auth_method"`
+}
+
+// identity returns whichever of the two identity shapes the server filled in.
+func (m authMeResponse) identity() authViewer {
+	v := m.Viewer
+	if v.ID == "" {
+		v = m.User
+	}
+	if v.Username == "" {
+		v.Username = v.Email
+	}
+	return v
 }
 
 type authLoginParams struct {
@@ -71,11 +98,35 @@ func authLoginCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+
+			client := &http.Client{Timeout: 10 * time.Second}
+			// Capability discovery decides the sign-in method, never the
+			// hostname (RFC 0001): a server that lists "password" among
+			// auth_methods gets the password flow, unless --token-stdin was
+			// given (an explicit request for the PAT flow) or stdin is not a
+			// terminal (nobody there to type a password); a server that lists
+			// "device" and not "password" keeps the device flow; everything
+			// else — including a server unreachable or too old to answer
+			// capabilities at all — keeps the personal-access-token flow
+			// exactly as before.
+			caps := remote.FetchCapabilities(cmd.Context(), client, serverURL)
+			if !tokenStdin && caps.SupportsAuthMethod("password") && isTerminal(os.Stdin) {
+				return runAuthPasswordLogin(cmd, cfg, serverURL)
+			}
+			if caps.SupportsAuthMethod("device") && !caps.SupportsAuthMethod("password") {
+				viewer, err := runAuthDeviceLogin(cmd, cfg, serverURL, client)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "Signed in to %s as %s (%s).\n", serverURL, viewer.DisplayName, viewer.Username)
+				return nil
+			}
+
 			tokenValue, err := readLoginToken(cmd, tokenStdin)
 			if err != nil {
 				return err
 			}
-			viewer, err := runAuthLogin(authLoginParams{serverURL: serverURL, token: tokenValue, client: &http.Client{Timeout: 10 * time.Second}})
+			viewer, err := runAuthLogin(authLoginParams{serverURL: serverURL, token: tokenValue, client: client})
 			if err != nil {
 				return err
 			}
@@ -176,6 +227,156 @@ func runAuthLogin(params authLoginParams) (authViewer, error) {
 	return verifyAuthToken(client, serverURL, strings.TrimSpace(params.token))
 }
 
+// maxDeviceLoginWait bounds how long the polling loop below waits when the
+// server's own expires_in is missing or absurd, so a malformed response
+// cannot hang the command forever.
+const maxDeviceLoginWait = 10 * time.Minute
+
+// runAuthDeviceLogin drives the device-login flow (RFC 0004, "CLI flow"):
+// start, print the URL and code, poll until approved, store the resulting
+// access/refresh pair keyed by server, and verify the identity it was issued
+// for exactly as the PAT flow does.
+func runAuthDeviceLogin(cmd *cobra.Command, cfg *config.UserConfig, serverURL string, client *http.Client) (authViewer, error) {
+	ctx := cmd.Context()
+	auth, err := remote.StartDeviceAuthorization(ctx, client, serverURL)
+	if err != nil {
+		return authViewer{}, fmt.Errorf("start device login: %w", err)
+	}
+
+	out := cmd.OutOrStdout()
+	fmt.Fprintf(out, "To sign in, open this URL and enter the code:\n\n  %s\n  %s\n\n", auth.VerificationURL, auth.UserCode)
+	fmt.Fprintf(out, "Waiting for approval...\n")
+
+	interval := time.Duration(auth.Interval) * time.Second
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	wait := time.Duration(auth.ExpiresIn) * time.Second
+	if wait <= 0 || wait > maxDeviceLoginWait {
+		wait = maxDeviceLoginWait
+	}
+	deadline := time.Now().Add(wait)
+
+	for {
+		if err := sleepOrDone(ctx, interval); err != nil {
+			return authViewer{}, err
+		}
+		if time.Now().After(deadline) {
+			return authViewer{}, fmt.Errorf("device login was not approved in time; run `rgt auth login %s` again", serverURL)
+		}
+
+		pair, err := remote.PollDeviceToken(ctx, client, serverURL, auth.DeviceCode)
+		if err == nil {
+			config.SetDeviceCredential(cfg, serverURL, pair.AccessToken, pair.RefreshToken, pair.ExpiresIn)
+			cfg.Server.URL = serverURL
+			if err := config.Save(cfg); err != nil {
+				return authViewer{}, fmt.Errorf("save login: %w", err)
+			}
+			return verifyAuthToken(client, serverURL, pair.AccessToken)
+		}
+
+		var pending *remote.DevicePollError
+		if !errors.As(err, &pending) {
+			return authViewer{}, fmt.Errorf("poll device login: %w", err)
+		}
+		switch pending.Code {
+		case "authorization_pending":
+			continue
+		case "slow_down":
+			interval += 5 * time.Second
+			continue
+		case "expired":
+			return authViewer{}, fmt.Errorf("device code expired before it was approved; run `rgt auth login %s` again", serverURL)
+		case "denied":
+			return authViewer{}, fmt.Errorf("device login was denied")
+		default:
+			return authViewer{}, fmt.Errorf("device login: unrecognised state %q", pending.Code)
+		}
+	}
+}
+
+// runAuthPasswordLogin drives the self-hosted password flow (RFC 0005,
+// "Teammate flow": "rgt auth login <server>, which prompts for username and
+// password... and stores a machine credential. Tokens are never shown to
+// people."): prompt for a username and a hidden password, POST
+// /api/v1/auth/login, then mint a machine credential through the pre-existing
+// PAT-creation route using the session cookie and CSRF the login returned,
+// and store that credential exactly as the token-stdin path does.
+//
+// The credential minted here — not the session — is what gets stored: a
+// browser session is short-lived and re-authenticates through the cookie,
+// which a CLI invocation started fresh every time does not have. Storing the
+// PAT is what makes `rgt auth login` a one-time action instead of something
+// that would need to run before every command.
+func runAuthPasswordLogin(cmd *cobra.Command, cfg *config.UserConfig, serverURL string) error {
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return fmt.Errorf("create cookie jar: %w", err)
+	}
+	client := &http.Client{Timeout: 10 * time.Second, Jar: secureCookieJar{jar}}
+
+	fmt.Fprint(cmd.ErrOrStderr(), "Username: ")
+	username, err := readAnswer(cmd.InOrStdin())
+	if err != nil && !errors.Is(err, io.EOF) {
+		return fmt.Errorf("read username: %w", err)
+	}
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return errors.New("username is empty")
+	}
+
+	fmt.Fprint(cmd.ErrOrStderr(), "Password: ")
+	passwordBytes, err := readHiddenInput(os.Stdin.Fd())
+	fmt.Fprintln(cmd.ErrOrStderr())
+	if err != nil {
+		return fmt.Errorf("read password: %w", err)
+	}
+	password := strings.TrimSpace(string(passwordBytes))
+	if password == "" {
+		return errors.New("password is empty")
+	}
+
+	result, err := remote.PasswordLogin(cmd.Context(), client, serverURL, username, password)
+	if err != nil {
+		return fmt.Errorf("sign in to %s: %w", serverURL, err)
+	}
+	// The initial admin password (RFC 0005, "Step 0: start the server") signs
+	// in successfully but must not be turned into a standing machine
+	// credential: onboarding is not finished, and a credential minted now
+	// would outlive a password the wizard is about to replace out from under
+	// it.
+	if result.PasswordChangeRequired {
+		return fmt.Errorf("the initial password for %s is still in force; finish setup in the web UI, then run this again", serverURL)
+	}
+
+	credentialName := hostname() + " (cli)"
+	tokenValue, err := remote.CreateMachineCredential(cmd.Context(), client, serverURL, result.CSRF, credentialName)
+	if err != nil {
+		return fmt.Errorf("create machine credential: %w", err)
+	}
+
+	config.SetCredential(cfg, serverURL, tokenValue)
+	cfg.Server.URL = serverURL
+	if err := config.Save(cfg); err != nil {
+		return fmt.Errorf("save login: %w", err)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "Signed in as %s on %s.\n", result.User.Username, serverURL)
+	return nil
+}
+
+// sleepOrDone waits for d, returning early with the context's error if it is
+// cancelled first — so a device-login poll loop cannot outlive its caller.
+func sleepOrDone(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 func verifyAuthToken(client *http.Client, serverURL, tokenValue string) (authViewer, error) {
 	if err := remote.ValidateCredentialTransport(serverURL, tokenValue); err != nil {
 		return authViewer{}, err
@@ -208,10 +409,11 @@ func verifyAuthToken(client *http.Client, serverURL, tokenValue string) (authVie
 	if err := json.NewDecoder(bytes.NewReader(body)).Decode(&me); err != nil {
 		return authViewer{}, fmt.Errorf("decode authentication response: %w", err)
 	}
-	if me.Viewer.ID == "" || me.Viewer.Username == "" {
-		return authViewer{}, errors.New("authentication response omitted viewer identity")
+	viewer := me.identity()
+	if viewer.ID == "" {
+		return authViewer{}, errors.New("authentication response omitted the signed-in identity")
 	}
-	return me.Viewer, nil
+	return viewer, nil
 }
 
 func readLoginToken(cmd *cobra.Command, tokenStdin bool) (string, error) {
@@ -229,7 +431,7 @@ func readLoginToken(cmd *cobra.Command, tokenStdin bool) (string, error) {
 		return "", errors.New("refusing to read a token from process arguments; pipe it with --token-stdin or run in an interactive terminal")
 	}
 	fmt.Fprint(cmd.ErrOrStderr(), "Personal access token: ")
-	data, err := term.ReadPassword(os.Stdin.Fd())
+	data, err := readHiddenInput(os.Stdin.Fd())
 	fmt.Fprintln(cmd.ErrOrStderr())
 	if err != nil {
 		return "", fmt.Errorf("read token: %w", err)
@@ -270,4 +472,29 @@ func normalizeAuthServerURL(value string) (string, error) {
 		return "", errors.New("server URL must not contain credentials, a query, or a fragment")
 	}
 	return value, nil
+}
+
+// secureCookieJar presents every URL to the underlying jar as https.
+//
+// The server's session cookie is Secure (RFC 0003), and Go's cookie jar
+// drops Secure cookies on plain-http requests on the toolchains our release
+// binaries are built with, so a password login against http://127.0.0.1 or
+// a LAN address would authenticate and then fail to mint the credential on
+// the very next request. The user chose that address, and the bearer token
+// that follows travels over the same connection, so the cookie is not the
+// secret that decides whether http is acceptable here.
+type secureCookieJar struct{ jar http.CookieJar }
+
+func (j secureCookieJar) SetCookies(u *url.URL, cookies []*http.Cookie) {
+	j.jar.SetCookies(asHTTPSURL(u), cookies)
+}
+
+func (j secureCookieJar) Cookies(u *url.URL) []*http.Cookie {
+	return j.jar.Cookies(asHTTPSURL(u))
+}
+
+func asHTTPSURL(u *url.URL) *url.URL {
+	c := *u
+	c.Scheme = "https"
+	return &c
 }

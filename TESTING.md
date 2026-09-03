@@ -72,6 +72,113 @@ printf '{"session_id":"claude-manual","cwd":"%s","last_assistant_message":"done"
 
 Expected result: one step is created for the turn, with `origin: claude_code`.
 
+## Searchable Sessions (insight)
+
+This exercises RFC 0007 end to end with a local model, so it needs no key.
+It assumes [Ollama](https://ollama.com) is running with a chat-capable model
+(any instruct model works; `qwen2.5:3b` or larger reads better) and,
+optionally, an embedding model such as `nomic-embed-text`.
+
+Insight is off by default and has two halves: the repository switch in
+`.regent/config.toml` (committed) and your provider in `~/.regent/config.toml`
+(private). Use a scratch `HOME` so your real config is untouched:
+
+```bash
+export HOME=$(mktemp -d)
+mkdir -p "$HOME/.regent"
+cat > "$HOME/.regent/config.toml" <<'EOF'
+[insight.model]
+provider = "openai-compatible"
+model = "qwen2.5:3b"
+base_url = "http://localhost:11434/v1"
+
+[insight.embedding]            # optional; without it search is full-text only
+provider = "openai-compatible"
+model = "nomic-embed-text"
+base_url = "http://localhost:11434/v1"
+EOF
+
+cd "$tmp"
+"$RGT" insight enable          # writes [insight] enabled = true, indexes existing messages
+"$RGT" insight status          # "Insight: on", provider named, queue empty
+```
+
+Record a turn the way the Claude hooks do (the user prompt, a tool batch as
+in Manual Claude Turn so the turn has a step and a changed file, then the
+assistant message), and watch the worker the Stop hook spawned:
+
+```bash
+printf '{"session_id":"claude-manual","turn_id":"t1","cwd":"%s","prompt":"add exponential backoff to Retry in queue.go for https://github.com/acme/demo/issues/42"}' "$PWD" \
+  | "$RGT" message-hook user
+printf '{"session_id":"claude-manual","turn_id":"t1","cwd":"%s","last_assistant_message":"Done: Retry now backs off 100ms, 200ms, 400ms."}' "$PWD" \
+  | "$RGT" message-hook assistant
+
+until [ ! -f .regent/insight.lock ]; do sleep 1; done   # the detached worker released its lock
+cat .regent/log/insight.log                              # one line per work item read, or the failure
+"$RGT" insight status                                    # "1 done" in the queue, 1 work item read
+"$RGT" work list
+"$RGT" work show <id>                                    # goal, approach, outcome, entities with evidence, files
+"$RGT" search "backoff"                                  # the item, matched by text and (with embeddings) meaning
+"$RGT" search --entity acme/demo#42                      # the issue URL became an entity with no model involved
+"$RGT" search --file queue.go
+```
+
+Expected result: one work item for the session, `status` set by the model,
+the issue URL present as an `issue` entity with source `deterministic`, the
+edited file under "Files changed" (only when the turn had a tool batch: a
+turn with no tools has no step, so no files), and every model-added entity
+carrying an evidence step you can `rgt show`. If the embedding endpoint is
+not available, the log says so, the work items are stored without vectors,
+and `rgt insight status` reports how many are unembedded; search is then
+full-text only.
+
+### Server mode
+
+In a repository connected to a server, the same commands talk to the server,
+which mirrors every pushed session into its own per-project index and reads
+it there. Configure the server's providers once, in `insight.toml` under its
+data directory (`/data` in the container; `REGENT_INSIGHT_CONFIG` overrides
+the path), with the server's environment carrying the named keys:
+
+```toml
+[model]
+provider = "anthropic"
+model = "claude-haiku-4-5-20251001"
+api_key_env = "ANTHROPIC_API_KEY"
+
+[embedding]
+provider = "openai-compatible"
+model = "text-embedding-3-small"
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+```
+
+Restart the server so it reads the file, then from the connected repository:
+
+```bash
+rgt insight enable        # sets the project switch on the server; it mirrors what was pushed and starts reading
+rgt insight status        # "project enabled=true", providers named, queue and coverage from the server
+rgt work list             # after the server's worker finished (docker logs show "insight <project>: ... done")
+rgt search "backoff"
+```
+
+Only pushed steps reach the server, so a turn that used no tools (no step)
+is not read there; `rgt insight run` asks the server to read anything pushed
+since, and `rgt insight rebuild` re-reads every pushed session.
+
+Worth checking on purpose:
+
+- A second turn on a different topic produces a second item and closes the
+  first (`rgt work list` shows both; the first is no longer "open").
+- `rgt insight run` while the detached worker is running says so and exits.
+- `rgt insight rebuild` then `rgt insight run` reads every session again
+  from its first message and replaces the items.
+- With no `[insight.model]` in your config, `rgt insight status` says
+  "idle" and the hooks queue nothing.
+- With a `[insight.scrub] patterns = ["acme"]` line in `.regent/config.toml`,
+  the request the model sees has `[REDACTED:pattern]` where the text was
+  (check by pointing `command` at `tee`).
+
 ## Manual Codex Turn
 
 This exercises the Codex hook adapter without starting Codex.
@@ -151,6 +258,65 @@ rgt sync                       # drains; --status then reports clean
 Note: because capture consults the ambient environment, `REGENT_SERVER_URL` must be empty when
 running the local-mode suites. The `TestMain` guards in `internal/capture` and `cmd/rgt` do this
 automatically, so `go test ./...` is hermetic even on a machine configured for server mode.
+
+## Self-hosted local loop
+
+Quick check of the native local dev loop described in
+[docs/ui-development.md](docs/ui-development.md) — `regent-server` running
+self-hosted auth natively (no Docker), onboarding, CLI login, connect, a
+captured turn, and sync, with the server as the read of record.
+
+The scripted version, on a scratch port and temp directories:
+
+```bash
+make smoke
+# or directly:
+./scripts/dev-smoke.sh
+```
+
+It exits non-zero and names the failing step on any problem, and always stops
+the server it started.
+
+The same flow as a Go test, driving the real `rgt` binary against the
+`selfhosted` package in-process (`httptest`, no port or Docker needed):
+
+```bash
+go test ./test/ -run TestSelfHostedDevLoop -count=1
+```
+
+By hand, in two terminals:
+
+```bash
+# terminal 1
+make serve                          # regent-server on 127.0.0.1:7655, self-hosted auth
+
+# terminal 2, once /healthz answers
+./scripts/dev-bootstrap.sh          # signs in as admin, completes the wizard's first
+                                     # screen, creates a PAT, and runs `rgt auth login`
+                                     # for you
+
+cd /path/to/some/project
+git init -q                          # or use an existing git repo
+rgt connect http://127.0.0.1:7655 --as demo-project --agent claude
+
+# Manual Claude turn (see "Manual Claude Turn" above), then:
+rgt sync
+
+curl -s http://127.0.0.1:7655/demo-project/api/sessions            # 401, anonymous
+curl -s -H "Authorization: Bearer $PAT" \
+  http://127.0.0.1:7655/demo-project/api/sessions                  # your session, with the
+                                                                     # PAT dev-bootstrap.sh printed
+```
+
+`rgt auth login` never accepts a token as an argument or displays a stored
+one; `scripts/dev-bootstrap.sh` drives the onboarding wizard over its API
+(RFC 0005 Appendix A) rather than asking you to paste anything by hand, since
+this is a single-host local loop rather than the browser-driven wizard in
+[docs/self-hosted.md](docs/self-hosted.md). It saves the admin password and
+the resulting personal access token under `.local/` (mode `0600`) — the PAT
+is also printed once, on its own; save it (as `$PAT` above) if you want to
+call the API directly, though the CLI itself stays signed in via
+`~/.regent/config.toml` regardless.
 
 ## VPS bootstrap (manual before release)
 

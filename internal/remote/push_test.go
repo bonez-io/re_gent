@@ -92,6 +92,50 @@ func (f *fixture) addStep(t *testing.T, files map[string]string, tool string) st
 	return stepHash
 }
 
+// syncRef is the workspace-sync ref name (see internal/capture.WorkspaceSyncRef),
+// duplicated here the same way testRef duplicates the session ref shape.
+const syncRef = "sync/workspace"
+
+// addSyncStep appends a step onto the workspace-sync ref the way
+// capture.WorkspaceSync does: a tree, no causes, and Origin "sync".
+func (f *fixture) addSyncStep(t *testing.T, files map[string]string) store.Hash {
+	t.Helper()
+
+	parent, err := f.cache.ReadRef(syncRef)
+	if err != nil {
+		parent = ""
+	}
+
+	tree := &store.Tree{}
+	for path, content := range files {
+		blob, err := f.cache.WriteBlob([]byte(content))
+		if err != nil {
+			t.Fatalf("write blob: %v", err)
+		}
+		tree.Entries = append(tree.Entries, store.TreeEntry{Path: path, Blob: blob})
+	}
+	treeHash, err := f.cache.WriteTree(tree)
+	if err != nil {
+		t.Fatalf("write tree: %v", err)
+	}
+
+	step := &store.Step{
+		Parent:         parent,
+		Tree:           treeHash,
+		SessionID:      "sync:workspace",
+		Origin:         "sync",
+		TimestampNanos: time.Now().UnixNano(),
+	}
+	stepHash, err := f.cache.WriteStep(step)
+	if err != nil {
+		t.Fatalf("write step: %v", err)
+	}
+	if err := f.cache.UpdateRef(syncRef, parent, stepHash); err != nil {
+		t.Fatalf("update ref: %v", err)
+	}
+	return stepHash
+}
+
 // TestStepObjectsIncludesConversationBlob asserts that a step's conversation
 // blob is part of the upload set, so it reaches the server ahead of the step
 // that references it.
@@ -512,5 +556,66 @@ func assertServerHasChain(t *testing.T, f *fixture, tip store.Hash) {
 			}
 		}
 		current = step.Parent
+	}
+}
+
+// TestSyncRefsListsWorkspaceRef mirrors the session-ref listing test: the
+// workspace-sync ref must be discoverable the same way a session ref is, so
+// `rgt sync --repair` (with no ref named) walks it too.
+func TestSyncRefsListsWorkspaceRef(t *testing.T) {
+	f := newFixture(t)
+	f.addSyncStep(t, map[string]string{"a.txt": "one"})
+
+	refs, err := SyncRefs(f.cache)
+	if err != nil {
+		t.Fatalf("SyncRefs: %v", err)
+	}
+	if len(refs) != 1 || refs[0] != syncRef {
+		t.Fatalf("SyncRefs = %v, want [%s]", refs, syncRef)
+	}
+}
+
+// TestFlushDoesNotDeliverWorkspaceSyncRef is the flip side of
+// TestSpoolStatusExcludesWorkspaceSyncRef: Flush walks Status's ref list, so
+// a queued sync step must be left alone by the automatic drain a git hook or
+// agent turn triggers. It is still deliverable — see
+// TestFlushDeliversWorkspaceSyncRefWhenTargetedExplicitly below — just never
+// as a side effect of delivering something else.
+func TestFlushDoesNotDeliverWorkspaceSyncRef(t *testing.T) {
+	f := newFixture(t)
+	f.addStep(t, map[string]string{"a.txt": "one"}, "first")
+	f.addSyncStep(t, map[string]string{"a.txt": "one", "b.txt": "baseline"})
+
+	res := Flush(context.Background(), f.cache, f.cli, f.spool)
+	if res.Failed() {
+		t.Fatalf("flush: %v", res.Err())
+	}
+	for _, r := range res.Refs {
+		if r.Ref == syncRef {
+			t.Fatalf("Flush unexpectedly pushed %s: %+v", syncRef, res.Refs)
+		}
+	}
+	if f.srv.Ref(syncRef) != "" {
+		t.Fatalf("server sync ref = %s, want untouched", f.srv.Ref(syncRef))
+	}
+}
+
+// TestFlushDeliversWorkspaceSyncRefWhenTargetedExplicitly: the sync ref is
+// pushed like any other ref when a caller names it explicitly — `rgt sync
+// --workspace` does exactly this after writing the baseline (see
+// runSyncWorkspace, internal/cli/sync.go).
+func TestFlushDeliversWorkspaceSyncRefWhenTargetedExplicitly(t *testing.T) {
+	f := newFixture(t)
+	tip := f.addSyncStep(t, map[string]string{"a.txt": "one", "b.txt": "baseline"})
+
+	res, err := Push(context.Background(), f.cache, f.cli, f.spool, syncRef)
+	if err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+	if res.Tip != tip {
+		t.Fatalf("pushed tip = %s, want %s", res.Tip, tip)
+	}
+	if f.srv.Ref(syncRef) != tip {
+		t.Fatalf("server sync ref = %s, want %s", f.srv.Ref(syncRef), tip)
 	}
 }

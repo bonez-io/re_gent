@@ -97,6 +97,25 @@ func carryOverConfig(p connectParams, repoID, token string) remote.Config {
 	return cfg
 }
 
+// carryOverConfigForProject is carryOverConfig's project-id counterpart (RFC
+// 0004): the cache carried history lands in is keyed by Config.Key(), and a
+// project-id binding's key is ProjectID, not RepoID. Setting only ProjectID
+// (never RepoID) here is what keeps that cache directory distinct from any
+// legacy repo_id cache the same working tree might already have used.
+func carryOverConfigForProject(p connectParams, projectID, token string) remote.Config {
+	cfg, err := remote.LoadConfigForCWD(remote.OSEnv, p.projectRoot)
+	if err != nil {
+		cfg = remote.Config{}
+	}
+	cfg.ServerURL = strings.TrimRight(p.serverURL, "/")
+	cfg.RepoID = ""
+	cfg.ProjectID = projectID
+	if token != "" {
+		cfg.Token = token
+	}
+	return cfg
+}
+
 // carryOverLocalHistory copies the history a project recorded before it was
 // connected into the machine-local cache its reads will now use, uploads it to
 // the server, and reports what happened.
@@ -123,7 +142,7 @@ func carryOverLocalHistory(out io.Writer, local *store.Store, cfg remote.Config)
 
 	cacheDir, err := remote.CacheDirFor(cfg)
 	if err != nil {
-		res.problem("could not locate the local cache for %s: %v", cfg.RepoID, err)
+		res.problem("could not locate the local cache for %s: %v", cfg.Key(), err)
 		res.report(out, local.Root)
 		return res
 	}

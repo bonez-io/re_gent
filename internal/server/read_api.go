@@ -19,6 +19,16 @@ import (
 // defaultLogLimit bounds a /api/log walk when the caller does not specify one.
 const defaultLogLimit = 50
 
+// syncRefDirAPI is the ref namespace workspace sync steps live under (see
+// capture.WorkspaceSyncRefDir and feed_api.go's own "sync" scans),
+// duplicated here rather than imported so the server keeps reading raw store
+// state without depending on the capture package's hook-oriented dependency
+// tree. Keep this in step with internal/capture/workspacesync.go.
+const syncRefDirAPI = "sync"
+
+// syncOriginAPI mirrors capture.SyncOrigin for the same reason as syncRefDirAPI.
+const syncOriginAPI = "sync"
+
 // maxSessionWalk bounds how far the sessions list walks a single session's
 // parent chain. A session's whole history is walked to count steps and find the
 // earliest step's first prompt; the bound is a guard against a pathologically
@@ -164,6 +174,11 @@ type filesResponse struct {
 	TreeHash   string     `json:"tree_hash"`
 	TotalFiles int        `json:"total_files"`
 	Files      []fileJSON `json:"files"`
+	// Source names where the served tree came from: "session" for an agent
+	// step, "sync" for a workspace-sync baseline step. Derived from the
+	// resolved step's Origin, so it is accurate for an explicit ?step= or
+	// ?session= request too, not only the no-params fallback.
+	Source string `json:"source"`
 }
 
 type blameLineJSON struct {
@@ -185,15 +200,19 @@ type blameResponse struct {
 // self-hosted server is intentionally open, exactly like /objects and /refs.
 // segs is the full path split; segs[0] is the repo id and segs[1] == "api".
 func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request, repoID string, segs []string) {
-	if r.Method != http.MethodGet {
+	// Insight has the only writes under /api: the per-project switch and the
+	// worker verbs. The router already classified them as history writes.
+	isInsightWrite := len(segs) == 4 && segs[2] == "insight" && r.Method == http.MethodPost
+	if r.Method != http.MethodGet && !isInsightWrite {
 		w.Header().Set("Allow", http.MethodGet)
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
 
-	// Reads never bring a repo into existence: openRepo(create=false) returns
-	// errRepoNotFound, which we surface as a 404 like the object/ref handlers.
-	st, err := s.openRepo(repoID, false)
+	// Reads never bring a repo into existence: openRepoTenant(create=false)
+	// returns errRepoNotFound, which we surface as a 404 like the object/ref
+	// handlers.
+	st, err := s.openRepoTenant(resourceTenantFromContext(r.Context()), repoID, false)
 	if err != nil {
 		if errors.Is(err, errRepoNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown repo " + repoID})
@@ -221,9 +240,68 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request, repoID string
 		s.handleAPIBlame(w, r, repoID, st)
 	case len(segs) == 3 && segs[2] == "diff":
 		s.handleAPIDiff(w, r, repoID, st)
+	case len(segs) == 3 && segs[2] == "feed":
+		s.handleAPIFeed(w, r, repoID, st)
+	case len(segs) == 5 && segs[2] == "commits" && segs[4] == "steps":
+		s.handleAPICommitSteps(w, r, repoID, st, segs[3])
+	case len(segs) == 4 && segs[2] == "insight":
+		s.handleAPIInsight(w, r, repoID, st, segs[3])
+	case len(segs) == 3 && segs[2] == "search":
+		s.handleAPISearch(w, r, repoID, st)
+	case len(segs) == 3 && segs[2] == "work":
+		s.handleAPIWork(w, r, repoID, st, "")
+	case len(segs) == 4 && segs[2] == "work":
+		s.handleAPIWork(w, r, repoID, st, segs[3])
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 	}
+}
+
+// handleAPICommitSteps serves GET /{project}/api/commits/{sha}/steps: every
+// step in the project whose recorded git_commit effect names sha, per RFC
+// 0004's pull-request-provenance route. No hook records a git_commit effect on
+// a step yet (see internal/store.Effect and internal/capture), so this always
+// returns an empty list today — that is the honest answer, not a stub: the
+// moment a producer starts recording Effect{Kind:"git_commit", Descriptor:sha}
+// this route surfaces it with no further change here.
+func (s *Server) handleAPICommitSteps(w http.ResponseWriter, r *http.Request, repoID string, st *store.Store, sha string) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if sha == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing commit sha"})
+		return
+	}
+	refs, err := st.ListRefs("sessions")
+	if err != nil {
+		s.logf("list session refs for commit lookup in %s: %v", repoID, err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "list sessions failed"})
+		return
+	}
+	matches := []logStepJSON{}
+	seen := make(map[store.Hash]bool)
+	for _, tip := range refs {
+		steps, hashes, walkErr := walkSession(st, tip, maxSessionWalk)
+		if walkErr != nil {
+			s.logf("walk session for commit lookup in %s: %v", repoID, walkErr)
+		}
+		for i, step := range steps {
+			if step == nil || seen[hashes[i]] {
+				continue
+			}
+			seen[hashes[i]] = true
+			for _, effect := range step.Effects {
+				if effect.Kind == "git_commit" && effect.Descriptor == sha {
+					matches = append(matches, s.stepToJSON(st, repoID, hashes[i], step))
+					break
+				}
+			}
+		}
+	}
+	sort.Slice(matches, func(i, j int) bool { return matches[i].Timestamp < matches[j].Timestamp })
+	writeJSON(w, http.StatusOK, map[string]any{"steps": matches})
 }
 
 // handleAPISessions reconstructs the session list from the object store: every
@@ -529,10 +607,28 @@ func (s *Server) handleAPIStep(w http.ResponseWriter, _ *http.Request, repoID st
 }
 
 func (s *Server) handleAPIFiles(w http.ResponseWriter, r *http.Request, repoID string, st *store.Store) {
-	hash, step, ok := s.requestedStep(w, r, repoID, st)
-	if !ok {
-		return
+	var hash store.Hash
+	var step *store.Step
+
+	// No params: the Files view's default load, before any step or session is
+	// known. Resolve the most recently written tree across every session and
+	// workspace-sync ref rather than 400ing, so the view is never empty before
+	// the first captured agent step. Explicit ?step= or ?session= requests are
+	// unaffected — they still go through requestedStep exactly as before.
+	if r.URL.Query().Get("step") == "" && r.URL.Query().Get("session") == "" {
+		var ok bool
+		hash, step, ok = s.latestTreeStep(w, repoID, st)
+		if !ok {
+			return
+		}
+	} else {
+		var ok bool
+		hash, step, ok = s.requestedStep(w, r, repoID, st)
+		if !ok {
+			return
+		}
 	}
+
 	tree, err := st.ReadTree(step.Tree)
 	if err != nil {
 		s.logf("read tree %s for step %s in %s: %v", step.Tree, hash, repoID, err)
@@ -541,7 +637,8 @@ func (s *Server) handleAPIFiles(w http.ResponseWriter, r *http.Request, repoID s
 	}
 	resp := filesResponse{
 		StepHash: string(hash), TreeHash: string(step.Tree),
-		Files: make([]fileJSON, 0, len(tree.Entries)),
+		Source: filesSource(step),
+		Files:  make([]fileJSON, 0, len(tree.Entries)),
 	}
 	for _, entry := range tree.Entries {
 		size, err := objectSize(st, entry.Blob)
@@ -556,6 +653,96 @@ func (s *Server) handleAPIFiles(w http.ResponseWriter, r *http.Request, repoID s
 	}
 	resp.TotalFiles = len(resp.Files)
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// filesSource reports whether step is a workspace-sync baseline or an agent
+// step, from the same Origin field blame already surfaces (see
+// handleAPIBlame). Any origin other than syncOriginAPI — including the empty
+// string on very old steps — reads as "session", which is what it always was
+// before sync steps existed.
+func filesSource(step *store.Step) string {
+	if step.Origin == syncOriginAPI {
+		return "sync"
+	}
+	return "session"
+}
+
+// latestTreeStep resolves the tree GET /api/files serves when the caller
+// names neither a step nor a session: the most recently written tree across
+// every session and workspace-sync ref. It writes its own error response and
+// returns ok=false on failure, matching requestedStep's calling convention.
+func (s *Server) latestTreeStep(w http.ResponseWriter, repoID string, st *store.Store) (store.Hash, *store.Step, bool) {
+	hash, step, err := resolveLatestTree(st)
+	if err != nil {
+		s.logf("resolve latest tree in %s: %v", repoID, err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "resolve latest tree failed"})
+		return "", nil, false
+	}
+	if step == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no tree yet"})
+		return "", nil, false
+	}
+	return hash, step, true
+}
+
+// resolveLatestTree compares the tip of every ref under "sessions" and
+// syncRefDirAPI by TimestampNanos and returns the newest, or (=="", nil, nil)
+// when there are no readable refs at all — a repository with nothing
+// captured and nothing synced. A tip that cannot be read (a partial push, a
+// stale ref pointing at a missing object) is skipped rather than failing the
+// whole resolution, the same defensiveness listSessionSummaries uses.
+//
+// Ties prefer a session step over a sync step: an agent's own work reflects
+// intent, and should win over a baseline snapshot that happened to land at
+// the same instant.
+func resolveLatestTree(st *store.Store) (store.Hash, *store.Step, error) {
+	var bestHash store.Hash
+	var bestStep *store.Step
+	var bestIsSession bool
+
+	consider := func(refDir string, isSession bool) error {
+		refs, err := st.ListRefs(refDir)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		names := make([]string, 0, len(refs))
+		for name := range refs {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+
+		for _, name := range names {
+			hash := refs[name]
+			if hash == "" {
+				continue
+			}
+			step, err := st.ReadStep(hash)
+			if err != nil || step == nil || step.Tree == "" {
+				continue
+			}
+			switch {
+			case bestStep == nil:
+				bestHash, bestStep, bestIsSession = hash, step, isSession
+			case step.TimestampNanos > bestStep.TimestampNanos:
+				bestHash, bestStep, bestIsSession = hash, step, isSession
+			case step.TimestampNanos == bestStep.TimestampNanos && isSession && !bestIsSession:
+				bestHash, bestStep, bestIsSession = hash, step, isSession
+			}
+		}
+		return nil
+	}
+
+	if err := consider("sessions", true); err != nil {
+		return "", nil, err
+	}
+	if err := consider(syncRefDirAPI, false); err != nil {
+		return "", nil, err
+	}
+
+	return bestHash, bestStep, nil
 }
 
 func objectSize(st *store.Store, hash store.Hash) (int, error) {
@@ -675,6 +862,19 @@ func normalizedRepoPath(raw string) (string, error) {
 	return cleaned, nil
 }
 
+// deriveBlame recomputes blame for filePath as of target by walking target's
+// session history and replaying store.ComputeBlame forward, oldest step
+// first — the "query time" half of the annotated-blame asymmetry documented
+// in CLAUDE.md: unlike capture's stored sidecars, this always reflects the
+// current diff code and the current workspace-sync baseline, recomputed on
+// every call.
+//
+// Baseline seeding mirrors computeBlameForStep (internal/capture/capture.go):
+// whenever the walk reaches a step with no usable prior context for this path
+// — the session's root step, or a step right after the file reappeared having
+// been absent — the current tip of refs/sync/workspace is consulted before
+// falling back to "every line is new". A project with no sync ref behaves
+// exactly as it did before that baseline existed.
 func deriveBlame(st *store.Store, target store.Hash, filePath string) ([]byte, store.Hash, *store.BlameMap, error) {
 	steps, hashes, err := walkSession(st, target, maxSessionWalk)
 	if err != nil {
@@ -683,6 +883,8 @@ func deriveBlame(st *store.Store, target store.Hash, filePath string) ([]byte, s
 	if len(steps) == maxSessionWalk && steps[len(steps)-1].Parent != "" {
 		return nil, "", nil, errors.New("step history exceeds blame walk limit")
 	}
+	baselineTip, baselineTree := loadSyncBaselineTree(st)
+
 	var oldContent []byte
 	var content []byte
 	var blobHash store.Hash
@@ -705,6 +907,23 @@ func deriveBlame(st *store.Store, target store.Hash, filePath string) ([]byte, s
 		if err != nil {
 			return nil, "", nil, err
 		}
+		if blame == nil && oldContent == nil {
+			if bBlob, bBlame, ok := syncBaselineEntry(st, baselineTip, baselineTree, filePath); ok {
+				if bBlob == entry.Blob && bBlame != nil {
+					// Identical to the baseline: every line carries the
+					// baseline's attribution straight through, the same
+					// fast path the parent-tree case already takes below.
+					blame = bBlame
+					oldContent = content
+					blobHash = entry.Blob
+					continue
+				}
+				if bContent, berr := st.ReadBlob(bBlob); berr == nil {
+					oldContent = bContent
+					blame = bBlame
+				}
+			}
+		}
 		blame = store.ComputeBlame(oldContent, content, blame, hashes[i])
 		oldContent = content
 		blobHash = entry.Blob
@@ -713,6 +932,40 @@ func deriveBlame(st *store.Store, target store.Hash, filePath string) ([]byte, s
 		return nil, "", nil, fs.ErrNotExist
 	}
 	return content, blobHash, blame, nil
+}
+
+// loadSyncBaselineTree reads the tree at the tip of refs/sync/workspace, or
+// returns ("", nil) when there is no such ref or it cannot be read — every
+// failure here degrades to "no baseline" rather than an error, mirroring
+// internal/capture's loadWorkspaceSyncBaseline.
+func loadSyncBaselineTree(st *store.Store) (store.Hash, *store.Tree) {
+	tip, err := st.ReadRef(syncRefDirAPI + "/workspace")
+	if err != nil || tip == "" {
+		return "", nil
+	}
+	step, err := st.ReadStep(tip)
+	if err != nil || step.Tree == "" {
+		return "", nil
+	}
+	tree, err := st.ReadTree(step.Tree)
+	if err != nil {
+		return "", nil
+	}
+	return tip, tree
+}
+
+// syncBaselineEntry looks up path in the workspace-sync baseline tree,
+// returning its blob and, when available, its blame map.
+func syncBaselineEntry(st *store.Store, tip store.Hash, tree *store.Tree, path string) (store.Hash, *store.BlameMap, bool) {
+	if tree == nil {
+		return "", nil, false
+	}
+	entry := tree.FindEntry(path)
+	if entry == nil {
+		return "", nil, false
+	}
+	blame, _ := st.ReadBlameForFile(tip, path)
+	return entry.Blob, blame, true
 }
 
 func splitStoredLines(content []byte) []string {
@@ -835,6 +1088,18 @@ func changedFiles(st *store.Store, step *store.Step) []string {
 		parent, err := st.ReadStep(step.Parent)
 		if err == nil && parent.Tree != "" {
 			if tree, err := st.ReadTree(parent.Tree); err == nil {
+				for _, entry := range tree.Entries {
+					previous[entry.Path] = entry
+				}
+			}
+		}
+	} else if step.Origin != "sync" { // capture.SyncOrigin; the server package does not import capture
+		// A session's first step has no parent, so without a base it would
+		// report the whole workspace as changed. The workspace state just
+		// before it — the newest step older than it on any session or sync
+		// ref — is the best available "before".
+		if base := latestStepBefore(st, step.TimestampNanos); base != nil && base.Tree != "" {
+			if tree, err := st.ReadTree(base.Tree); err == nil {
 				for _, entry := range tree.Entries {
 					previous[entry.Path] = entry
 				}
@@ -989,4 +1254,35 @@ func rfc3339FromNanos(nanos int64) string {
 // toSlash converts any OS path separators in a ref name to forward slashes.
 func toSlash(name string) string {
 	return strings.ReplaceAll(name, "\\", "/")
+}
+
+// latestStepBefore returns the newest step recorded strictly before ts across
+// every session and workspace-sync ref, or nil. Each tip is walked back only
+// until it is older than ts, so the cost is bounded by how much newer work
+// exists, not by history depth.
+func latestStepBefore(st *store.Store, ts int64) *store.Step {
+	var best *store.Step
+	for _, dir := range []string{"sessions", "sync"} {
+		refs, err := st.ListRefs(dir)
+		if err != nil {
+			continue
+		}
+		for _, tip := range refs {
+			h := tip
+			for i := 0; h != "" && i < 10000; i++ {
+				step, err := st.ReadStep(h)
+				if err != nil {
+					break
+				}
+				if step.TimestampNanos < ts {
+					if best == nil || step.TimestampNanos > best.TimestampNanos {
+						best = step
+					}
+					break
+				}
+				h = step.Parent
+			}
+		}
+	}
+	return best
 }

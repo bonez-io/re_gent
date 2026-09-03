@@ -29,6 +29,8 @@ func main() {
 	authMode := flag.String("auth-mode", "auto", "authentication mode: auto, self-hosted, or open")
 	insecureNoAuth := flag.Bool("insecure-no-auth", false, "allow an unauthenticated non-loopback listener (development or an approved access proxy only)")
 	recoverOwnerToken := flag.Bool("recover-owner-token", false, "issue a 24-hour instance-owner recovery token and exit (stop the server first)")
+	adminUsername := flag.String("admin-username", "", "username for the initial self-hosted admin (default: admin)")
+	adminPassword := flag.String("admin-password", "", "initial self-hosted admin password (default: REGENT_ADMIN_PASSWORD, or a random 20-character password printed on first start)")
 	flag.Parse()
 	if flag.NArg() != 0 {
 		fmt.Fprintln(os.Stderr, "regent-server takes no arguments")
@@ -41,7 +43,7 @@ func main() {
 		}
 		return
 	}
-	if err := serve(*addr, *data, *max, *binaries, *skillsDir, *authMode, *insecureNoAuth); err != nil {
+	if err := serve(*addr, *data, *max, *binaries, *skillsDir, *authMode, *adminUsername, *adminPassword, *insecureNoAuth); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -65,7 +67,7 @@ func recoverOwner(data string) error {
 	return nil
 }
 
-func serve(addr, data string, max int64, binaries, skillsDir, authMode string, insecureNoAuth bool) error {
+func serve(addr, data string, max int64, binaries, skillsDir, authMode, adminUsername, adminPassword string, insecureNoAuth bool) error {
 	if !filepath.IsAbs(data) {
 		var err error
 		data, err = filepath.Abs(data)
@@ -79,6 +81,9 @@ func serve(addr, data string, max int64, binaries, skillsDir, authMode string, i
 	if skillsDir == "" {
 		skillsDir = os.Getenv("REGENT_SKILLS_DIR")
 	}
+	if adminPassword == "" {
+		adminPassword = os.Getenv("REGENT_ADMIN_PASSWORD")
+	}
 	mode, err := resolveAuthMode(authMode, insecureNoAuth)
 	if err != nil {
 		return err
@@ -88,16 +93,32 @@ func serve(addr, data string, max int64, binaries, skillsDir, authMode string, i
 	var closeHandler func() error
 	switch mode {
 	case "self-hosted":
-		secureServer, setup, err := selfhosted.New(data, coreOptions...)
+		secureServer, setup, err := selfhosted.New(data, adminUsername, adminPassword, coreOptions...)
 		if err != nil {
 			return err
 		}
 		handler = secureServer
 		closeHandler = secureServer.Close
-		if setup.BootstrapRequired {
-			fmt.Fprintln(os.Stderr, "re_gent first-owner setup is required")
-			fmt.Fprintf(os.Stderr, "one-time bootstrap credential written to %s (mode 0600)\n", filepath.Join(data, "bootstrap-token"))
-			fmt.Fprintln(os.Stderr, "read it from the host terminal and complete setup; it is deleted after use and rotates if the unclaimed server restarts")
+		// RFC 0005 step 0: print the three-line ready message to stdout only
+		// on the run that generated the initial password (the plaintext is
+		// never available again afterward — only its Argon2id hash is
+		// persisted); a restart against an already-bootstrapped data
+		// directory instead reports that the initial password, if still in
+		// force, remains unchanged, without ever repeating the value.
+		switch {
+		case setup.Generated:
+			// The address people open is the web origin in front of this
+			// process (Compose publishes it on the host), not the bind
+			// address inside a container, so Compose sets REGENT_PUBLIC_URL.
+			publicURL := strings.TrimSpace(os.Getenv("REGENT_PUBLIC_URL"))
+			if publicURL == "" {
+				publicURL = "http://" + addr
+			}
+			fmt.Printf("re_gent is ready at %s\n", publicURL)
+			fmt.Printf("Sign in as %s with the initial password: %s\n", setup.AdminUsername, setup.AdminPassword)
+			fmt.Println("This password must be replaced on first sign-in.")
+		case setup.PasswordChangeRequired:
+			fmt.Fprintln(os.Stderr, "re_gent: the initial admin password is still in force")
 		}
 	case "open":
 		if err := validateUnauthenticatedBind(addr, insecureNoAuth); err != nil {

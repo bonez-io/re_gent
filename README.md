@@ -305,12 +305,43 @@ explicitly with `NO_COLOR=1`.
 | `rgt show <step>` | Display full context for a step (tool call + conversation) |
 | `rgt blame <path>[:<line>]` | Show per-line provenance for a file |
 | `rgt repair blame` | Recompute every stored blame map with the current diff. `rgt blame` is annotated at write time, so a diff fix does not reach maps already on disk; `rgt show` diffs at query time and needs no repair. Idempotent and safe to interrupt. |
+| `rgt insight enable` / `disable` / `status` | Turn on the searchable-sessions layer for this repository (RFC 0007). Off by default. Locally each person also configures a model provider in `~/.regent/config.toml`; in server mode the switch and the providers (`insight.toml` in the server's data directory) live on the server, which reads every pushed session. `status` says what would be called and how much has been read. |
+| `rgt insight run [--detach]` / `rebuild` | Drain the read queue now, or re-index full-text search and queue every session to be read again. Hooks queue and spawn the worker on their own once insight is on. |
+| `rgt search "<query>" [--file] [--entity] [--status] [--session] [--since] [--json]` | Find work items by meaning, text, entity, or file. Full-text always; semantic when an embedding provider is configured. Sessions no work item covers yet are listed as "not yet read". |
+| `rgt work list` / `rgt work show <id>` | List work items (goal, approach, outcome, status) and inspect one with its entities, evidence steps, and files. |
 | `rgt cat <hash>` | Inspect any object by hash (debugging tool; runnable but not listed in `rgt --help`) |
 | `rgt push` | Push session history to a repo on a server (`--url`, `--repo`, `--session`) |
 | `rgt version` | Print version information |
 | `rgt completion` | Generate shell completion scripts |
 | `rgt sync` | Deliver queued server-mode capture (`--status`, `--pull`, `--repair`) |
+| `rgt sync --workspace` | Refresh the workspace baseline (`refs/sync/workspace`) from the current git working tree. Also run automatically by `rgt init`/`rgt connect`, the `post-commit` git hook, and (before draining the queue) the `pre-push` git hook. |
 | `rgt pull [ref]` | Fetch the project's history from the server into this machine's cache. With no ref it asks the server what exists. |
+
+---
+
+## Workspace baseline
+
+A tree only otherwise exists as a step snapshot, so the Files view and `rgt blame` are empty until
+the first captured agent step — a long wait on a repository an agent barely touches. `rgt init` and
+`rgt connect` take one snapshot of the git working tree right after hooks are wired, so there is
+something to see immediately, and it stays current afterwards:
+
+- `rgt sync --workspace` refreshes it on demand.
+- A `post-commit` git hook refreshes it automatically in the background after every commit.
+- The `pre-push` git hook refreshes it too, before draining the server-mode delivery queue.
+
+In server mode, each of these also delivers the baseline to the server right after writing it —
+bounded, and silent on failure in the two git hooks (the next commit, push, or `rgt sync --workspace`
+tries again). Every machine's baseline chains onto whatever the server already has instead of
+starting its own incompatible history, so this converges rather than conflicting across teammates.
+
+The baseline is a step like any other, chained onto its own ref (`refs/sync/workspace`) rather than
+a session's — `rgt sessions` and the sessions API never list it. Its `origin` is `sync`, so `rgt
+blame` and the Files/blame APIs can distinguish "outside an agent turn" from an agent's own work, and
+an agent's first step inherits blame for whatever it did not touch from this baseline instead of
+claiming every pre-existing line in the repository. Opt out with the same switch that disables the
+`pre-push` hook: `REGENT_GIT_SYNC_ON_PUSH=0`, or `rgt init --no-git-hook` / `rgt connect
+--no-git-hook` to skip installing either git hook up front.
 
 ---
 
@@ -359,6 +390,12 @@ Start a loopback-only server for local development:
 make server
 curl http://127.0.0.1:7654/healthz
 
+# First run only: sign in as admin with the password `docker compose logs
+# server` printed, then complete the wizard at http://localhost:8080 (or
+# run ./scripts/dev-bootstrap.sh instead) so `rgt auth login` has a
+# credential to store.
+rgt auth login http://127.0.0.1:7654
+
 # Connect a project
 cd ~/code/my-project
 rgt connect http://127.0.0.1:7654
@@ -368,10 +405,14 @@ rgt push
 rgt pull
 ```
 
-The development Compose profile is intentionally unauthenticated and binds only
-to `127.0.0.1`. For a remote host, use the secure production profile and the
-complete **[self-hosted guide](docs/self-hosted.md)**; it enables HTTPS,
-first-owner bootstrap, persistent users, project roles, PATs, browser sessions,
+This profile runs the same persistent self-hosted auth composition as
+production, bound only to `127.0.0.1`; first start prints the admin sign-in
+line to its own stdout, readable any time with `docker compose logs server`.
+For the legacy fully-open (no application auth) loopback mode instead, run
+`docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build`.
+For a remote host, use the secure production profile and the complete
+**[self-hosted guide](docs/self-hosted.md)**; it enables HTTPS, the browser
+onboarding wizard, persistent users, project roles, PATs, browser sessions,
 CSRF protection, access settings, recovery, backup, and rollback.
 For the private dev/main GCP deployment, CI/CD, persistence, rollback, and IAP
 access model, see **[infra/gcp/README.md](infra/gcp/README.md)**. The older SSH

@@ -82,6 +82,15 @@ func TestE2ESecondCloneCanPullAndReadTheTeamsHistory(t *testing.T) {
 	srv := startTestServer(t)
 
 	author := gitProject(t, "team-project", teamOrigin)
+	// The second machine: a clone of the SAME repository (identical root
+	// commit), taken before either machine ever runs rgt so neither's
+	// .regent state leaks into the other's. Source identity (RFC 0004) is
+	// remote + root commit — two independent `git init`s that merely share a
+	// remote fingerprint as two different projects and enroll separately,
+	// which would fail this whole file for a reason that has nothing to do
+	// with pull.
+	clone := cloneOfSameRepo(t, author)
+
 	authorEnv := machineEnv(t, srv.URL)
 	e2eRunEnv(t, rgt, author, authorEnv, nil, "connect", srv.URL)
 
@@ -89,9 +98,6 @@ func TestE2ESecondCloneCanPullAndReadTheTeamsHistory(t *testing.T) {
 	captureTurn(t, rgt, author, authorEnv, session, "t1", "hello.go")
 	captureTurn(t, rgt, author, authorEnv, session, "t2", "goodbye.go")
 
-	// The second machine: the same project by identity — same git origin, so
-	// the same repo id — and nothing else in common.
-	clone := gitProject(t, "team-project", teamOrigin)
 	cloneEnv := machineEnv(t, srv.URL)
 	e2eRunEnv(t, rgt, clone, cloneEnv, nil, "connect", srv.URL)
 
@@ -132,6 +138,12 @@ func TestE2EFreshMachinePullRestoresCompleteConversation(t *testing.T) {
 	srv := startTestServer(t)
 
 	author := gitProject(t, "conversation-project", "https://github.com/acme/conversation-project.git")
+	// See TestE2ESecondCloneCanPullAndReadTheTeamsHistory: the clone must be
+	// an actual clone of author (same root commit), taken before author ever
+	// runs rgt, so the two machines share a project by RFC 0004 fingerprint
+	// instead of enrolling separately.
+	clone := cloneOfSameRepo(t, author)
+
 	authorEnv := machineEnv(t, srv.URL)
 	e2eRunEnv(t, rgt, author, authorEnv, nil, "connect", srv.URL)
 	captureTurn(t, rgt, author, authorEnv, "conversation-session", "t1", "conversation.go")
@@ -143,7 +155,6 @@ func TestE2EFreshMachinePullRestoresCompleteConversation(t *testing.T) {
 		t.Fatalf("recording machine has no conversation precondition:\n%s", originalLog)
 	}
 
-	clone := gitProject(t, "conversation-project", "https://github.com/acme/conversation-project.git")
 	cloneEnv := machineEnv(t, srv.URL)
 	e2eRunEnv(t, rgt, clone, cloneEnv, nil, "connect", srv.URL)
 	e2eRunEnv(t, rgt, clone, cloneEnv, nil, "pull")
@@ -169,11 +180,14 @@ func TestE2EPulledHistoryReadsWithTheServerGone(t *testing.T) {
 	srv := startTestServer(t)
 
 	author := gitProject(t, "team-project", teamOrigin)
+	// See TestE2ESecondCloneCanPullAndReadTheTeamsHistory for why the clone
+	// must share author's root commit rather than being a second `git init`.
+	clone := cloneOfSameRepo(t, author)
+
 	authorEnv := machineEnv(t, srv.URL)
 	e2eRunEnv(t, rgt, author, authorEnv, nil, "connect", srv.URL)
 	captureTurn(t, rgt, author, authorEnv, "offline-session", "t1", "hello.go")
 
-	clone := gitProject(t, "team-project", teamOrigin)
 	cloneEnv := machineEnv(t, srv.URL)
 	e2eRunEnv(t, rgt, clone, cloneEnv, nil, "connect", srv.URL)
 	e2eRunEnv(t, rgt, clone, cloneEnv, nil, "pull")
@@ -195,11 +209,14 @@ func TestE2EConnectedProjectWithAnEmptyCacheSaysItHasNotPulled(t *testing.T) {
 	srv := startTestServer(t)
 
 	author := gitProject(t, "team-project", teamOrigin)
+	// See TestE2ESecondCloneCanPullAndReadTheTeamsHistory for why the clone
+	// must share author's root commit rather than being a second `git init`.
+	clone := cloneOfSameRepo(t, author)
+
 	authorEnv := machineEnv(t, srv.URL)
 	e2eRunEnv(t, rgt, author, authorEnv, nil, "connect", srv.URL)
 	captureTurn(t, rgt, author, authorEnv, "recorded-elsewhere", "t1", "hello.go")
 
-	clone := gitProject(t, "team-project", teamOrigin)
 	cloneEnv := machineEnv(t, srv.URL)
 	e2eRunEnv(t, rgt, clone, cloneEnv, nil, "connect", srv.URL)
 

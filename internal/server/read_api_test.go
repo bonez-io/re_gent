@@ -631,3 +631,172 @@ func TestAPITranscriptSynthesizesLegacyToolEvents(t *testing.T) {
 		t.Fatalf("legacy events = %#v, want user + synthesized call/result", events)
 	}
 }
+
+// TestAPIFilesNoParamsFallsBackToLatestTree covers the Files view's default
+// load: before any step or session is named, /api/files should resolve the
+// most recently written tree across every session and workspace-sync ref
+// instead of 400ing, and report where it came from.
+func TestAPIFilesNoParamsFallsBackToLatestTree(t *testing.T) {
+	_, _, ts := newTestServer(t)
+	const repo = "alpha"
+
+	t.Run("empty repo reports no tree yet", func(t *testing.T) {
+		createRepo(t, ts, repo)
+		status, body := getAPI(t, ts, "/"+repo+"/api/files", "")
+		if status != http.StatusNotFound {
+			t.Fatalf("status %d, want 404: %s", status, body)
+		}
+		var got map[string]string
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got["error"] != "no tree yet" {
+			t.Fatalf("error = %q, want %q", got["error"], "no tree yet")
+		}
+	})
+
+	const repo2 = "beta"
+	createRepo(t, ts, repo2)
+
+	syncTree := putTree(t, ts, repo2, store.TreeEntry{Path: "a.txt", Blob: mustPutBlob(t, ts, repo2, "a\n")})
+	syncTS := time.Date(2026, 8, 2, 9, 0, 0, 0, time.UTC).UnixNano()
+	syncHash := putStep(t, ts, repo2, store.Step{
+		Tree: syncTree, SessionID: "sync:workspace", Origin: "sync", TimestampNanos: syncTS,
+	})
+	if code, _ := postRef(t, ts, repo2, "sync/workspace", "", string(syncHash)); code != http.StatusOK {
+		t.Fatalf("set sync ref: status %d", code)
+	}
+
+	t.Run("falls back to the sync baseline when there is no session yet", func(t *testing.T) {
+		status, body := getAPI(t, ts, "/"+repo2+"/api/files", "")
+		if status != http.StatusOK {
+			t.Fatalf("status %d: %s", status, body)
+		}
+		var got filesResponse
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Source != "sync" || got.StepHash != string(syncHash) || got.TotalFiles != 1 {
+			t.Fatalf("unexpected response: %#v", got)
+		}
+	})
+
+	sessionTree := putTree(t, ts, repo2, store.TreeEntry{Path: "b.txt", Blob: mustPutBlob(t, ts, repo2, "b\n")})
+	sessionTS := syncTS + int64(time.Hour)
+	sessionHash := putStep(t, ts, repo2, store.Step{
+		Tree: sessionTree, SessionID: "claude_code--sess1", Origin: "claude_code", TimestampNanos: sessionTS,
+	})
+	if code, _ := postRef(t, ts, repo2, "sessions/claude_code--sess1", "", string(sessionHash)); code != http.StatusOK {
+		t.Fatalf("set session ref: status %d", code)
+	}
+
+	t.Run("a later session step wins over the sync baseline", func(t *testing.T) {
+		status, body := getAPI(t, ts, "/"+repo2+"/api/files", "")
+		if status != http.StatusOK {
+			t.Fatalf("status %d: %s", status, body)
+		}
+		var got filesResponse
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Source != "session" || got.StepHash != string(sessionHash) {
+			t.Fatalf("unexpected response: %#v", got)
+		}
+	})
+
+	t.Run("explicit step and session params are unaffected", func(t *testing.T) {
+		status, body := getAPI(t, ts, "/"+repo2+"/api/files?step="+string(syncHash), "")
+		if status != http.StatusOK {
+			t.Fatalf("status %d: %s", status, body)
+		}
+		var got filesResponse
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Source != "sync" || got.StepHash != string(syncHash) {
+			t.Fatalf("unexpected response for explicit ?step=: %#v", got)
+		}
+	})
+}
+
+// mustPutBlob is a small convenience wrapper over putObject for tests that
+// only care about the resulting hash.
+func mustPutBlob(t *testing.T, ts *httptest.Server, repo, content string) store.Hash {
+	t.Helper()
+	_, h := putObject(t, ts, repo, []byte(content))
+	return h
+}
+
+// TestAPIBlameForSyncStepReportsSyncOrigin covers the other half of the
+// baseline feature: a line whose provenance is a workspace-sync step must
+// read as origin "sync" through the same /api/blame endpoint agent-step
+// blame already uses, with no server-side special-casing required.
+func TestAPIBlameForSyncStepReportsSyncOrigin(t *testing.T) {
+	_, _, ts := newTestServer(t)
+	const repo = "alpha"
+
+	content := []byte("baseline line\n")
+	_, blob := putObject(t, ts, repo, content)
+	tree := putTree(t, ts, repo, store.TreeEntry{Path: "README.md", Blob: blob, Mode: 0o644})
+	syncHash := putStep(t, ts, repo, store.Step{
+		Tree: tree, SessionID: "sync:workspace", Origin: "sync",
+		TimestampNanos: time.Date(2026, 8, 2, 9, 0, 0, 0, time.UTC).UnixNano(),
+	})
+	if code, _ := postRef(t, ts, repo, "sync/workspace", "", string(syncHash)); code != http.StatusOK {
+		t.Fatalf("set sync ref: status %d", code)
+	}
+
+	status, body := getAPI(t, ts, "/"+repo+"/api/blame?step="+string(syncHash)+"&path=README.md", "")
+	if status != http.StatusOK {
+		t.Fatalf("status %d: %s", status, body)
+	}
+	var got blameResponse
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Lines) != 1 {
+		t.Fatalf("lines = %#v", got.Lines)
+	}
+	if got.Lines[0].Origin != "sync" || got.Lines[0].StepHash != string(syncHash) {
+		t.Fatalf("unexpected blame line: %#v, want origin sync attributed to %s", got.Lines[0], syncHash)
+	}
+}
+
+// TestAPISessionsIgnoresSyncRef locks in that the workspace-sync ref never
+// shows up as a session: /api/sessions enumerates refs/sessions only, and a
+// sync/workspace ref sitting alongside it must not appear.
+func TestAPISessionsIgnoresSyncRef(t *testing.T) {
+	_, _, ts := newTestServer(t)
+	const repo = "alpha"
+	const sessionID = "claude_code--sess1"
+
+	sessionTree := putTree(t, ts, repo, store.TreeEntry{Path: "a.txt", Blob: mustPutBlob(t, ts, repo, "a\n")})
+	sessionHash := putStep(t, ts, repo, store.Step{
+		Tree: sessionTree, SessionID: sessionID, Origin: "claude_code",
+		TimestampNanos: time.Date(2026, 8, 2, 9, 0, 0, 0, time.UTC).UnixNano(),
+	})
+	if code, _ := postRef(t, ts, repo, "sessions/"+sessionID, "", string(sessionHash)); code != http.StatusOK {
+		t.Fatalf("set session ref: status %d", code)
+	}
+
+	syncTree := putTree(t, ts, repo, store.TreeEntry{Path: "b.txt", Blob: mustPutBlob(t, ts, repo, "b\n")})
+	syncHash := putStep(t, ts, repo, store.Step{
+		Tree: syncTree, SessionID: "sync:workspace", Origin: "sync",
+		TimestampNanos: time.Date(2026, 8, 2, 10, 0, 0, 0, time.UTC).UnixNano(),
+	})
+	if code, _ := postRef(t, ts, repo, "sync/workspace", "", string(syncHash)); code != http.StatusOK {
+		t.Fatalf("set sync ref: status %d", code)
+	}
+
+	status, body := getAPI(t, ts, "/"+repo+"/api/sessions", "")
+	if status != http.StatusOK {
+		t.Fatalf("status %d: %s", status, body)
+	}
+	var got sessionsResponse
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.TotalSessions != 1 || len(got.Sessions) != 1 || got.Sessions[0].SessionID != sessionID {
+		t.Fatalf("sessions = %#v, want only %s", got.Sessions, sessionID)
+	}
+}

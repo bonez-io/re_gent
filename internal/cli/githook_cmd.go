@@ -39,14 +39,62 @@ func GitHookCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) == 0 || args[0] != gitHookName {
+			if len(args) == 0 {
 				return nil // unknown hook name: nothing to do, still exit 0
 			}
-			runGitPrePushHook(cmd.ErrOrStderr(), os.LookupEnv, time.Now)
+			switch args[0] {
+			case gitHookName:
+				runGitPrePushHook(cmd.ErrOrStderr(), os.LookupEnv, time.Now)
+			case gitPostCommitHookName:
+				runGitPostCommitHook(cmd.ErrOrStderr(), os.LookupEnv)
+			}
 			return nil
 		},
 	}
 	return cmd
+}
+
+// runGitPostCommitHook is the post-commit behaviour: refresh the workspace
+// baseline and, in server mode, deliver it — bounded, so the Files view
+// reflects what a commit just changed without a live agent turn having to
+// touch those files first, and without waiting on an unreachable server.
+//
+// The installed script backgrounds this whole process (see
+// postCommitHookScript), so `git commit` itself never waits on any of this —
+// but the process's own life still ends the moment this function returns
+// (see boundedRun's doc comment), which is why write and delivery share one
+// bounded window here rather than two: there is no "resume in the
+// background" beyond it.
+//
+// It writes at most one line, and only for the write succeeding — never
+// for delivery, success or failure: silence on delivery matches the
+// pre-push hook's "silence never means failure" contract, and a missed
+// delivery here is picked up by the very next post-commit, the next
+// pre-push, or `rgt sync --workspace`.
+func runGitPostCommitHook(out io.Writer, env func(string) (string, bool)) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintf(out, "Regent: workspace sync skipped (%v)\n", r)
+		}
+	}()
+
+	if optedOutOfGitHook(env) {
+		return
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return
+	}
+
+	var res workspaceSyncResult
+	finished := boundedRun(workspaceSyncHookBudget, func() {
+		res, _, _ = syncWorkspaceAndDeliver(cwd, remote.Env(env), workspaceSyncHookBudget)
+	})
+	if !finished || !res.Wrote {
+		return
+	}
+	fmt.Fprintf(out, "Regent: workspace baseline updated (%d file(s))\n", res.FileCount)
 }
 
 // runGitPrePushHook is the pre-push behaviour, mirroring the agent-turn
@@ -77,6 +125,19 @@ func runGitPrePushHook(out io.Writer, env func(string) (string, bool), now func(
 	if err != nil {
 		return
 	}
+
+	// Refresh the workspace baseline — and, in server mode, deliver it — before
+	// draining the session queue below: a push is as good a moment as a commit
+	// to notice the working tree moved. This runs in local mode too (it
+	// resolves its own store regardless of server configuration), so it is not
+	// behind the cfg.Enabled() gate that follows. Bounded and silent: a
+	// failure or a timeout here must never turn into an output line, let
+	// alone abort the rest of this hook — see boundedRun's doc comment for
+	// what "bounded" actually guarantees for a process this short-lived.
+	_ = boundedRun(workspaceSyncHookBudget, func() {
+		_, _, _ = syncWorkspaceAndDeliver(cwd, remote.Env(env), workspaceSyncHookBudget)
+	})
+
 	cfg, err := remote.LoadConfigForCWD(remote.Env(env), cwd)
 	if err != nil || !cfg.Enabled() {
 		return // local mode, or an unreadable binding: nothing to deliver to
