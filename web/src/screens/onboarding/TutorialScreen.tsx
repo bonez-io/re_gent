@@ -39,6 +39,8 @@ function computeLanded(steps: FeedStep[]): Landed {
   let stage2: FeedStep | undefined
   let stage3: FeedStep | undefined
   for (const step of steps) {
+    // Baseline syncs (rgt connect, git hooks) are not agent turns and must not light a stage.
+    if (step.origin === 'sync') continue
     if (!stage1 && step.files.some(isHelloWorldPath)) { stage1 = step; continue }
     if (stage1 && !stage2 && step.files.some(isTestPath)) { stage2 = step; continue }
     if (stage2 && !stage3 && step.session_id !== stage2.session_id && step.files.some((path) => isHelloWorldPath(path) || isTestPath(path))) stage3 = step

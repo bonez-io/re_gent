@@ -1095,11 +1095,14 @@ func changedFiles(st *store.Store, step *store.Step) []string {
 		}
 	} else if step.Origin != "sync" { // capture.SyncOrigin; the server package does not import capture
 		// A session's first step has no parent, so without a base it would
-		// report the whole workspace as changed. The workspace baseline
-		// (refs/sync/workspace) is the best available "before" for it.
-		if _, tree := loadSyncBaselineTree(st); tree != nil {
-			for _, entry := range tree.Entries {
-				previous[entry.Path] = entry
+		// report the whole workspace as changed. The workspace state just
+		// before it — the newest step older than it on any session or sync
+		// ref — is the best available "before".
+		if base := latestStepBefore(st, step.TimestampNanos); base != nil && base.Tree != "" {
+			if tree, err := st.ReadTree(base.Tree); err == nil {
+				for _, entry := range tree.Entries {
+					previous[entry.Path] = entry
+				}
 			}
 		}
 	}
@@ -1251,4 +1254,35 @@ func rfc3339FromNanos(nanos int64) string {
 // toSlash converts any OS path separators in a ref name to forward slashes.
 func toSlash(name string) string {
 	return strings.ReplaceAll(name, "\\", "/")
+}
+
+// latestStepBefore returns the newest step recorded strictly before ts across
+// every session and workspace-sync ref, or nil. Each tip is walked back only
+// until it is older than ts, so the cost is bounded by how much newer work
+// exists, not by history depth.
+func latestStepBefore(st *store.Store, ts int64) *store.Step {
+	var best *store.Step
+	for _, dir := range []string{"sessions", "sync"} {
+		refs, err := st.ListRefs(dir)
+		if err != nil {
+			continue
+		}
+		for _, tip := range refs {
+			h := tip
+			for i := 0; h != "" && i < 10000; i++ {
+				step, err := st.ReadStep(h)
+				if err != nil {
+					break
+				}
+				if step.TimestampNanos < ts {
+					if best == nil || step.TimestampNanos > best.TimestampNanos {
+						best = step
+					}
+					break
+				}
+				h = step.Parent
+			}
+		}
+	}
+	return best
 }
