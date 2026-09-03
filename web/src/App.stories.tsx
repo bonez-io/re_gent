@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { http, HttpResponse } from 'msw'
 import { useState, type PropsWithChildren } from 'react'
 import { MemoryRouter } from 'react-router-dom'
-import { expect, fn } from 'storybook/test'
+import { expect, fn, waitFor } from 'storybook/test'
 
 function AppProviders({ children, initialPath }: PropsWithChildren<{ initialPath?: string }>) {
   const [queryClient] = useState(() => new QueryClient({ defaultOptions: { queries: { retry: false } } }))
@@ -50,6 +50,37 @@ export const EmptyServer: Story = {
     await userEvent.click(copy)
     await expect(copy).toHaveTextContent('Copied')
     await expect(writeClipboard).toHaveBeenCalledWith('rgt connect http://127.0.0.1:7654')
+  },
+}
+
+// A repository that connected but has not completed a captured agent turn yet has no
+// sessions and no step — Files falls back to the latest tree straight off disk.
+export const FilesBaselineSnapshot: Story = {
+  parameters: { initialPath: '/repos/girlfriend-assistant/files' },
+  beforeEach({ msw }) {
+    const hash = (seed: string) => seed.padEnd(64, '0')
+    msw.use(
+      http.get('/girlfriend-assistant/api/sessions', () => HttpResponse.json({ total_sessions: 0, sessions: [] })),
+      http.get('/girlfriend-assistant/api/files', () => HttpResponse.json({
+        step_hash: hash('baseline1'),
+        tree_hash: hash('baselinetree'),
+        total_files: 1,
+        source: 'sync',
+        files: [{ path: 'README.md', blob_hash: hash('b1'), mode: 420, size: 120 }],
+      })),
+      http.get('/girlfriend-assistant/api/blame', () => HttpResponse.json({
+        step_hash: hash('baseline1'),
+        path: 'README.md',
+        blob_hash: hash('b1'),
+        lines: [{ number: 1, content: '# girlfriend-assistant', step_hash: hash('baseline1'), origin: 'sync' }],
+      })),
+    )
+  },
+  play: async ({ canvas }) => {
+    await waitFor(() => expect(canvas.getByText('Baseline snapshot (outside an agent turn)')).toBeVisible(), { timeout: 3000 })
+    await waitFor(() => expect(canvas.getByText('# girlfriend-assistant')).toBeVisible(), { timeout: 3000 })
+    // Blame rows with origin "sync" read as "baseline", not the raw origin string.
+    await waitFor(() => expect(canvas.getByTitle(/by baseline/)).toBeVisible(), { timeout: 3000 })
   },
 }
 
