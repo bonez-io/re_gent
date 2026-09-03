@@ -231,7 +231,7 @@ function InvitationScreen({ token }: { token: string }) {
   return <main className="flex min-h-screen items-center justify-center bg-page p-4 text-ink"><section className="w-full max-w-sm overflow-hidden rounded-[8px] border border-line bg-canvas shadow-raised">
     <header className="border-b border-line px-5 py-4"><span className="regent-kicker">Invitation</span><h1 className="mb-0 mt-1 text-[16px] font-semibold">Join {data.org_display_name}</h1><p className="mb-0 mt-1 text-[11.5px] text-ink-3">{data.email ? `For ${data.email}` : data.username ? `For @${data.username}` : 'Accept this invitation to join.'}</p></header>
     <div className="grid gap-3 p-5">
-      {providerMethods.map((method) => authStarts[method] && <a key={method} href={withAuthParams(authStarts[method], '/', token)} className="flex h-10 w-full items-center justify-center rounded-[4px] bg-field text-[12.5px] font-medium shadow-hairline hover:bg-hover-2">Continue with {providerLabel(method)}</a>)}
+      {providerMethods.map((method) => authStarts[method] && <a key={method} href={withAuthParams(authStarts[method], '/', token, method === 'dev' && data.email ? { email: data.email } : undefined)} className="flex h-10 w-full items-center justify-center rounded-[4px] bg-field text-[12.5px] font-medium shadow-hairline hover:bg-hover-2">Continue with {providerLabel(method)}</a>)}
       {methods.includes('password') && <form onSubmit={(event) => { event.preventDefault(); accept.mutate() }} className={`grid gap-1.5 ${providerMethods.length ? 'border-t border-line pt-3' : ''}`}>
         <label className="text-[11px] font-medium text-ink-2" htmlFor="invite-name">Display name<input id="invite-name" required value={displayName} onChange={(event) => setDisplayName(event.target.value)} className="mt-1.5 h-9 w-full rounded-[4px] border-0 bg-field px-2.5 text-[12px] shadow-hairline outline-none focus:ring-1 focus:ring-accent" /></label>
         <label className="text-[11px] font-medium text-ink-2" htmlFor="invite-username">Username<input id="invite-username" required pattern="[a-z0-9][a-z0-9._-]*" value={username} onChange={(event) => setUsername(event.target.value)} className="mt-1.5 h-9 w-full rounded-[4px] border-0 bg-field px-2.5 text-[12px] shadow-hairline outline-none focus:ring-1 focus:ring-accent" /></label>
@@ -248,9 +248,21 @@ function InvitationRoute() {
   return <InvitationScreen token={token} />
 }
 
+// Reason codes come from the server's refusal redirect; each maps to one plain
+// sentence so nobody reads a snake_case code on a sign-in page.
+const notInvitedReasons: Record<string, string> = {
+  not_invited: 'This account has no invitation to any organization here.',
+  invitation_email_mismatch: 'This invitation was sent to a different email address than the one you signed in with.',
+  invitation_expired: 'This invitation has expired.',
+  invitation_revoked: 'This invitation was revoked.',
+  state_invalid: 'The sign-in link was stale or opened in a different browser. Start again from the invitation link.',
+  required_method: 'This organization requires a different sign-in method.',
+}
+
 function NotInvitedScreen() {
   const location = useLocation()
-  const reason = new URLSearchParams(location.search).get('reason')
+  const code = new URLSearchParams(location.search).get('reason') ?? ''
+  const reason = notInvitedReasons[code] ?? (code ? code.replace(/_/g, ' ') : '')
   return <main className="flex min-h-screen items-center justify-center bg-page p-4 text-ink"><div className="max-w-sm text-center"><h1 className="m-0 text-[16px] font-semibold">Your account is not invited</h1><p className="mt-2 text-[12px] leading-5 text-ink-3">{reason ? `${reason}. ` : ''}Ask an administrator to invite you to this organization.</p></div></main>
 }
 
