@@ -338,6 +338,32 @@ func (idx *DB) InsightCursor(sessionID string) (int, error) {
 	return seq, err
 }
 
+// SessionsWithUnread lists sessions whose messages run past the worker's
+// cursor: what a `run` should queue when nothing new was pushed but a
+// session was never read (insight was off, or the worker failed).
+func (idx *DB) SessionsWithUnread() ([]string, error) {
+	rows, err := idx.db.Query(`
+		SELECT m.session_id FROM messages m
+		LEFT JOIN insight_cursors c ON c.session_id = m.session_id
+		GROUP BY m.session_id
+		HAVING MAX(m.seq_num) > COALESCE(MAX(c.last_message_seq), -1)
+		ORDER BY m.session_id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // ClearInsightCursor forgets a session's read position, so a rebuild reads
 // it from the start.
 func (idx *DB) ClearInsightCursor(sessionID string) error {

@@ -310,6 +310,38 @@ func (c *HTTPClient) UpdateRef(ctx context.Context, name string, expected, next 
 // — except a 401 that names "token_expired", which is refreshed and retried
 // exactly once (see refreshedOnce below), because that failure mode gets
 // better by trying again and every other 4xx does not.
+// APIGet fetches GET {server}/{repo}/api/{path} and decodes the JSON reply
+// into out. path may carry a query string.
+func (c *HTTPClient) APIGet(ctx context.Context, path string, out any) error {
+	return c.apiJSON(ctx, http.MethodGet, path, nil, out)
+}
+
+// APIPost sends in as JSON to POST {server}/{repo}/api/{path} and decodes
+// the reply into out (nil to discard it).
+func (c *HTTPClient) APIPost(ctx context.Context, path string, in, out any) error {
+	body, err := json.Marshal(in)
+	if err != nil {
+		return fmt.Errorf("encode request: %w", err)
+	}
+	return c.apiJSON(ctx, http.MethodPost, path, body, out)
+}
+
+func (c *HTTPClient) apiJSON(ctx context.Context, method, path string, body []byte, out any) error {
+	url := fmt.Sprintf("%s/%s/api/%s", c.baseURL, c.repoID, strings.TrimLeft(path, "/"))
+	resp, err := c.do(ctx, method, url, body)
+	if err != nil {
+		return err
+	}
+	defer closeBody(resp)
+	if out == nil {
+		return nil
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(out); err != nil {
+		return fmt.Errorf("decode %s %s: %w", method, redactURL(url), err)
+	}
+	return nil
+}
+
 func (c *HTTPClient) do(ctx context.Context, method, url string, body []byte) (*http.Response, error) {
 	var lastErr error
 	refreshedOnce := false

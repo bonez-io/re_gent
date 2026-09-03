@@ -1,8 +1,8 @@
 # RFC 0007: Searchable sessions
 
-- Status: Draft, decisions locked; S1, S3, S4 and the CLI half of S5 landed
-  (`rgt search`, `rgt work`); `rgt related`, capture-time scrub (S2), the
-  skill (S6) and Cursor (S7) are open
+- Status: Draft, decisions locked; S1, S3, S4, the CLI half of S5 (`rgt
+  search`, `rgt work`) and server mode landed; `rgt related`, capture-time
+  scrub (S2), the skill (S6) and Cursor (S7) are open
 - Owners: re_gent maintainers
 - Last updated: 2026-09-03
 - Builds on: [RFC 0004](./0004-managed-service-identity-and-enrollment.md)
@@ -260,7 +260,8 @@ second, which is more than a repository will have for a long time.
 `sqlite-vec` or any ANN index is deferred until a real repository shows the
 scan on a profile.
 
-None of this is pushed in server mode in v1; see below.
+In server mode the same tables live in the server's per-project index, filled
+by mirroring pushed refs; nothing derived is pushed from a client.
 
 ## Search
 
@@ -314,11 +315,20 @@ OpenCode, and Pi. Cursor is a reader, not a hook host; see below.
 
 ## What is out of v1
 
-- **Server mode.** In server mode the index is a machine-local cache and the
-  server is the source of truth, so the worker would have to run on the
-  server, against organization-configured providers, on ingest. That is a
-  follow-up to this RFC; v1 is local mode only, and `rgt insight enable`
-  refuses in a server-mode repository with a message saying so.
+- ~~**Server mode.**~~ In. The server keeps a per-project `index.db` beside
+  its objects and refs, mirrors every pushed session ref into it
+  (`internal/insight/mirror`: new steps indexed, messages rebuilt from each
+  step's conversation blob), runs the same worker in-process on ingest with
+  providers from `<data dir>/insight.toml` (`[model]`, `[embedding]`, same
+  shape as the per-user tables; `REGENT_INSIGHT_CONFIG` overrides the path),
+  and serves `GET insight/status`, `POST insight/settings`, `POST
+  insight/run`, `POST insight/rebuild`, `GET search`, `GET work`, `GET
+  work/{id}` under `/{project}/api/`. The per-project switch lives in that
+  index (`rgt insight enable` in a server-mode repository sets it on the
+  server; the committed `[insight]` table is not consulted). `rgt search`,
+  `rgt work`, and `rgt insight` call those routes when the repository is
+  connected. One limit: a turn that used no tools writes no step and is not
+  pushed, so the server cannot read it; locally it is.
 - **Entity-to-entity relations** (this PR closes that ticket). Both link to
   the same work item; that is enough to find them together. A graph comes
   when a query needs it.

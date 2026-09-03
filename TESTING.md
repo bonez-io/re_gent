@@ -132,6 +132,40 @@ not available, the log says so, the work items are stored without vectors,
 and `rgt insight status` reports how many are unembedded; search is then
 full-text only.
 
+### Server mode
+
+In a repository connected to a server, the same commands talk to the server,
+which mirrors every pushed session into its own per-project index and reads
+it there. Configure the server's providers once, in `insight.toml` under its
+data directory (`/data` in the container; `REGENT_INSIGHT_CONFIG` overrides
+the path), with the server's environment carrying the named keys:
+
+```toml
+[model]
+provider = "anthropic"
+model = "claude-haiku-4-5-20251001"
+api_key_env = "ANTHROPIC_API_KEY"
+
+[embedding]
+provider = "openai-compatible"
+model = "text-embedding-3-small"
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+```
+
+Restart the server so it reads the file, then from the connected repository:
+
+```bash
+rgt insight enable        # sets the project switch on the server; it mirrors what was pushed and starts reading
+rgt insight status        # "project enabled=true", providers named, queue and coverage from the server
+rgt work list             # after the server's worker finished (docker logs show "insight <project>: ... done")
+rgt search "backoff"
+```
+
+Only pushed steps reach the server, so a turn that used no tools (no step)
+is not read there; `rgt insight run` asks the server to read anything pushed
+since, and `rgt insight rebuild` re-reads every pushed session.
+
 Worth checking on purpose:
 
 - A second turn on a different topic produces a second item and closes the

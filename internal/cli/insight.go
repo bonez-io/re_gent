@@ -25,11 +25,16 @@ func InsightCmd() *cobra.Command {
 		Short: "Read recorded sessions into searchable work items and entities",
 		Long: `Read recorded sessions into searchable work items and entities.
 
-Insight is off by default. It has two halves: the repository enables it in
-.regent/config.toml (committed, so the policy travels with the code), and each
-person configures a model provider in ~/.regent/config.toml (private, so no
-repository decides where anyone's sessions are sent). With both in place, every
-finished agent turn queues a job and a detached worker reads it.
+Insight is off by default. It has two halves: a switch for the project, and a
+model provider. In local mode the switch is [insight] enabled in
+.regent/config.toml (committed, so the policy travels with the code) and the
+provider is yours, in ~/.regent/config.toml (private, so no repository decides
+where anyone's sessions are sent). With both in place, every finished agent
+turn queues a job and a detached worker reads it.
+
+In server mode the server holds both: the switch is per project, the providers
+are the server's (insight.toml under its data directory), and reading happens
+there when a turn is pushed. The commands below then talk to the server.
 
 Nothing here runs inside an agent turn. The hook writes one row and, at most,
 starts the worker; the worker does its reading in its own process and writes
@@ -47,69 +52,94 @@ func insightStatusCmd() *cobra.Command {
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			s, err := openStoreFromCWD()
-			if err != nil {
+			if client, ok, err := insightServerClient(); err != nil {
 				return err
+			} else if ok {
+				var st insight.Status
+				ctx, cancel := withTimeout(cmd.Context())
+				defer cancel()
+				if err := client.APIGet(ctx, "insight/status", &st); err != nil {
+					return err
+				}
+				printInsightStatus(cmd.OutOrStdout(), st, true)
+				return nil
 			}
-			idx, err := index.Open(s)
+			s, idx, err := openInsightLocal()
 			if err != nil {
 				return err
 			}
 			defer func() { _ = idx.Close() }()
-			return printInsightStatus(cmd.OutOrStdout(), s, idx)
+			st, err := localInsightStatus(s, idx)
+			if err != nil {
+				return err
+			}
+			printInsightStatus(cmd.OutOrStdout(), st, false)
+			return nil
 		},
 	}
 }
 
-func printInsightStatus(w io.Writer, s *store.Store, idx *index.DB) error {
-	settings, settingsErr := insight.Load(s)
+func openInsightLocal() (*store.Store, *index.DB, error) {
+	s, err := openStoreFromCWD()
+	if err != nil {
+		return nil, nil, err
+	}
+	idx, err := index.Open(s)
+	if err != nil {
+		return nil, nil, err
+	}
+	return s, idx, nil
+}
 
+func localInsightStatus(s *store.Store, idx *index.DB) (insight.Status, error) {
+	settings, settingsErr := insight.Load(s)
+	return insight.Collect(s, idx, settings, settingsErr, "~/.regent/config.toml")
+}
+
+func printInsightStatus(w io.Writer, st insight.Status, server bool) {
 	switch {
-	case settingsErr != nil:
-		fmt.Fprintf(w, "%s %v\n", style.Error("Insight: configuration error:"), settingsErr)
-	case settings.Active():
+	case st.ConfigError != "":
+		fmt.Fprintf(w, "%s %s\n", style.Error("Insight: configuration error:"), st.ConfigError)
+	case st.Active:
 		fmt.Fprintf(w, "%s\n", style.Success("Insight: on"))
-	case settings.Enabled:
+	case st.Enabled && server:
+		fmt.Fprintf(w, "%s enabled for this project, but the server has no model provider configured\n", style.Warning("Insight: idle:"))
+	case st.Enabled:
 		fmt.Fprintf(w, "%s enabled for this repository, but you have no model provider configured\n", style.Warning("Insight: idle:"))
 	default:
 		fmt.Fprintf(w, "%s\n", style.DimText("Insight: off (run `rgt insight enable`)"))
 	}
 
-	if settingsErr == nil {
-		fmt.Fprintf(w, "  repository   enabled=%t  scrub.capture=%s  work_item_idle=%s\n",
-			settings.Enabled, settings.Scrub.Capture, settings.WorkItemIdle)
-		if settings.Model.Provider == "" {
-			fmt.Fprintf(w, "  model        %s\n", style.DimText("none — add [insight.model] to ~/.regent/config.toml"))
-		} else {
-			fmt.Fprintf(w, "  model        %s %s  (%s)\n", settings.Model.Provider, settings.Model.Model, settings.ModelKey())
+	if st.ConfigError == "" {
+		where := "repository"
+		if server {
+			where = "project"
 		}
-		if settings.Embedding.Provider == "" {
+		fmt.Fprintf(w, "  %-12s enabled=%t  scrub.capture=%s  work_item_idle=%s\n", where, st.Enabled, st.ScrubCapture, st.WorkItemIdle)
+		if st.Model.Provider == "" {
+			fmt.Fprintf(w, "  model        %s\n", style.DimText("none — add [insight.model] to "+st.ProvidersFrom))
+		} else {
+			fmt.Fprintf(w, "  model        %s %s  (%s)\n", st.Model.Provider, st.Model.Model, st.Model.Key)
+		}
+		if st.Embedding.Provider == "" {
 			fmt.Fprintf(w, "  embedding    %s\n", style.DimText("none — search will be full-text only"))
 		} else {
-			fmt.Fprintf(w, "  embedding    %s %s  (%s)\n", settings.Embedding.Provider, settings.Embedding.Model, settings.EmbeddingKey())
+			fmt.Fprintf(w, "  embedding    %s %s  (%s)\n", st.Embedding.Provider, st.Embedding.Model, st.Embedding.Key)
 		}
 	}
 
-	if !insight.HasProcessor() {
-		fmt.Fprintf(w, "  worker       %s\n", style.Warning("this rgt has no read pipeline yet; jobs queue and wait for one"))
+	if !st.HasProcessor {
+		fmt.Fprintf(w, "  worker       %s\n", style.Warning("this build has no read pipeline; jobs queue and wait for one"))
 	}
-	if pid, alive := insight.Holder(s.Root); alive {
-		fmt.Fprintf(w, "  worker       running (pid %d)\n", pid)
+	if st.WorkerPID != 0 {
+		fmt.Fprintf(w, "  worker       running (pid %d)\n", st.WorkerPID)
 	}
-
-	counts, err := idx.InsightJobCounts()
-	if err != nil {
-		return fmt.Errorf("count jobs: %w", err)
-	}
-	fmt.Fprintf(w, "  queue        %s\n", formatInsightJobCounts(counts))
-	if failed, ok, err := idx.LastFailedInsightJob(); err == nil && ok {
-		fmt.Fprintf(w, "  last failure job %d (%s, session %s): %s\n", failed.ID, failed.Kind, failed.SessionID, failed.LastError)
+	fmt.Fprintf(w, "  queue        %s\n", formatInsightJobCounts(st.Queue))
+	if st.LastFailure != nil {
+		fmt.Fprintf(w, "  last failure job %d (%s, session %s): %s\n", st.LastFailure.ID, st.LastFailure.Kind, st.LastFailure.SessionID, st.LastFailure.Error)
 	}
 
-	cov, err := idx.InsightCoverage()
-	if err != nil {
-		return fmt.Errorf("coverage: %w", err)
-	}
+	cov := st.Coverage
 	fmt.Fprintf(w, "  indexed      %d of %d messages full-text", cov.MessagesIndexed, cov.Messages)
 	if cov.MessagesIndexed < cov.Messages {
 		fmt.Fprintf(w, "  %s", style.DimText("(run `rgt insight rebuild` to index the rest)"))
@@ -121,10 +151,9 @@ func printInsightStatus(w io.Writer, s *store.Store, idx *index.DB) error {
 	}
 	fmt.Fprintf(w, "  read         %s (%d embedded), %s across %s\n",
 		plural(cov.WorkItems, "work item"), cov.WorkItemsEmbedded, entities, plural(cov.Sessions, "session"))
-	if settingsErr == nil && settings.HasEmbedding() && cov.WorkItemsEmbedded < cov.WorkItems {
+	if st.Embedding.Provider != "" && cov.WorkItemsEmbedded < cov.WorkItems {
 		fmt.Fprintf(w, "               %s\n", style.DimText(fmt.Sprintf("%d work items have no vector; see log/%s for the embedding error, then `rgt insight rebuild`", cov.WorkItems-cov.WorkItemsEmbedded, insight.LogFileName)))
 	}
-	return nil
 }
 
 func formatInsightJobCounts(counts map[string]int) string {
@@ -159,15 +188,32 @@ func insightRunCmd() *cobra.Command {
 
 Runs the worker in the foreground until the queue is empty. With --detach it
 starts the worker as a background process, the way a hook does, and returns.
-Only one worker runs per repository; a second run reports the first and exits.`,
+Only one worker runs per repository; a second run reports the first and exits.
+
+In server mode this asks the server to read whatever has been pushed and not
+yet read; the server's worker does the reading.`,
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			out := cmd.OutOrStdout()
+			if client, ok, err := insightServerClient(); err != nil {
+				return err
+			} else if ok {
+				var st insight.Status
+				ctx, cancel := withTimeout(cmd.Context())
+				defer cancel()
+				if err := client.APIPost(ctx, "insight/run", map[string]any{}, &st); err != nil {
+					return err
+				}
+				fmt.Fprintln(out, "Asked the server to read what has been pushed; its worker runs in the background.")
+				printInsightStatus(out, st, true)
+				return nil
+			}
+
 			s, err := openStoreFromCWD()
 			if err != nil {
 				return err
 			}
-			out := cmd.OutOrStdout()
 			if detach {
 				cwd, err := os.Getwd()
 				if err != nil {
@@ -228,7 +274,7 @@ Only one worker runs per repository; a second run reports the first and exits.`,
 			return err
 		},
 	}
-	cmd.Flags().BoolVar(&detach, "detach", false, "start the worker in the background and return")
+	cmd.Flags().BoolVar(&detach, "detach", false, "start the worker in the background and return (local mode)")
 	return cmd
 }
 
@@ -246,22 +292,37 @@ func insightEnableCmd() *cobra.Command {
 		Short: "Turn insight on for this repository",
 		Long: `Turn insight on for this repository.
 
-Writes [insight] enabled = true to .regent/config.toml, which is committed, so
-the setting travels with the repository. Each contributor still needs a model
-provider in their own ~/.regent/config.toml before anything runs for them.
+Local mode: writes [insight] enabled = true to .regent/config.toml, which is
+committed, so the setting travels with the repository. Each contributor still
+needs a model provider in their own ~/.regent/config.toml before anything runs
+for them.
+
+Server mode: turns the project on at the server, which then mirrors and reads
+every pushed session with its own providers.
 
 Also indexes every recorded message for full-text search, so literal text is
 findable before any model has read anything.`,
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cwd, err := os.Getwd()
-			if err != nil {
+			out := cmd.OutOrStdout()
+			if client, ok, err := insightServerClient(); err != nil {
 				return err
+			} else if ok {
+				var st insight.Status
+				ctx, cancel := withTimeout(cmd.Context())
+				defer cancel()
+				if err := client.APIPost(ctx, "insight/settings", map[string]any{"enabled": true}, &st); err != nil {
+					return err
+				}
+				fmt.Fprintf(out, "%s the server reads this project's pushed sessions from now on.\n", style.Success("Insight enabled on the server:"))
+				if st.Model.Provider == "" && st.ConfigError == "" {
+					fmt.Fprintf(out, "\nThe server has no model provider yet. Put one in %s:\n\n%s\n", st.ProvidersFrom, insightServerProviderExample)
+				}
+				printInsightStatus(out, st, true)
+				return nil
 			}
-			if err := refuseInsightInServerMode(cwd); err != nil {
-				return err
-			}
+
 			s, err := openStoreFromCWD()
 			if err != nil {
 				return err
@@ -287,17 +348,16 @@ findable before any model has read anything.`,
 				return err
 			}
 
-			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "%s [insight] enabled = true written to %s/config.toml.\n", style.Success("Insight enabled:"), s.Root)
-
-			settings, err := insight.Load(s)
+			st, err := localInsightStatus(s, idx)
 			if err != nil {
 				return err
 			}
-			if settings.Model.Provider == "" {
+			if st.Model.Provider == "" && st.ConfigError == "" {
 				fmt.Fprintf(out, "\nNo model provider is configured for you yet. Add one to ~/.regent/config.toml:\n\n%s\n", insightProviderExample)
 			}
-			return printInsightStatus(out, s, idx)
+			printInsightStatus(out, st, false)
+			return nil
 		},
 	}
 }
@@ -312,6 +372,17 @@ const insightProviderExample = `  [insight.model]
   model = "nomic-embed-text"
   base_url = "http://localhost:11434/v1"`
 
+const insightServerProviderExample = `  [model]
+  provider = "anthropic"            # anthropic | openai-compatible | command
+  model = "claude-haiku-4-5-20251001"
+  api_key_env = "ANTHROPIC_API_KEY" # set in the server's environment
+
+  [embedding]
+  provider = "openai-compatible"    # openai-compatible | command
+  model = "text-embedding-3-small"
+  base_url = "https://api.openai.com/v1"
+  api_key_env = "OPENAI_API_KEY"`
+
 func insightDisableCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "disable",
@@ -319,6 +390,18 @@ func insightDisableCmd() *cobra.Command {
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			out := cmd.OutOrStdout()
+			if client, ok, err := insightServerClient(); err != nil {
+				return err
+			} else if ok {
+				ctx, cancel := withTimeout(cmd.Context())
+				defer cancel()
+				if err := client.APIPost(ctx, "insight/settings", map[string]any{"enabled": false}, nil); err != nil {
+					return err
+				}
+				fmt.Fprintf(out, "%s the server stops reading this project; what was already read stays searchable.\n", style.Success("Insight disabled on the server:"))
+				return nil
+			}
 			s, err := openStoreFromCWD()
 			if err != nil {
 				return err
@@ -328,14 +411,14 @@ func insightDisableCmd() *cobra.Command {
 				return err
 			}
 			if !cfg.Insight.Enabled {
-				fmt.Fprintln(cmd.OutOrStdout(), "Insight is already off.")
+				fmt.Fprintln(out, "Insight is already off.")
 				return nil
 			}
 			cfg.Insight.Enabled = false
 			if err := s.WriteRepoConfig(cfg); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%s hooks stop queueing; what was already read stays searchable.\n", style.Success("Insight disabled:"))
+			fmt.Fprintf(out, "%s hooks stop queueing; what was already read stays searchable.\n", style.Success("Insight disabled:"))
 			return nil
 		},
 	}
@@ -350,15 +433,27 @@ func insightRebuildCmd() *cobra.Command {
 Rebuilds the full-text indexes from the recorded messages, drops queued and
 failed jobs, and queues one job per recorded session. The worker then reads
 every session from its first step. Existing work items are replaced as each
-session is read; nothing recorded is touched.`,
+session is read; nothing recorded is touched. In server mode the server does
+all of this over what has been pushed.`,
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			s, err := openStoreFromCWD()
-			if err != nil {
+			out := cmd.OutOrStdout()
+			if client, ok, err := insightServerClient(); err != nil {
 				return err
+			} else if ok {
+				var st insight.Status
+				ctx, cancel := withTimeout(cmd.Context())
+				defer cancel()
+				if err := client.APIPost(ctx, "insight/rebuild", map[string]any{}, &st); err != nil {
+					return err
+				}
+				fmt.Fprintf(out, "%s the server re-indexed full-text search and queued every pushed session.\n", style.Success("Insight:"))
+				printInsightStatus(out, st, true)
+				return nil
 			}
-			idx, err := index.Open(s)
+
+			s, idx, err := openInsightLocal()
 			if err != nil {
 				return err
 			}
@@ -371,7 +466,6 @@ session is read; nothing recorded is touched.`,
 			if err != nil {
 				return fmt.Errorf("queue sessions: %w", err)
 			}
-			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "%s full-text index rebuilt; %s queued.\n", style.Success("Insight:"), plural(queued, "session"))
 
 			settings, err := insight.Load(s)
@@ -391,16 +485,25 @@ session is read; nothing recorded is touched.`,
 	}
 }
 
-// refuseInsightInServerMode keeps v1 local-only (RFC 0007): in server mode
-// the index is a disposable cache and the server is the source of truth, so
-// the worker would have to run there.
-func refuseInsightInServerMode(cwd string) error {
-	cfg, err := remote.LoadConfigForCWD(remote.OSEnv, cwd)
+// insightServerClient returns a client for the server this repository is
+// connected to, or ok=false in local mode. In server mode the index is a
+// disposable cache and the server is the source of truth, so work items are
+// read and produced there.
+func insightServerClient() (*remote.HTTPClient, bool, error) {
+	cwd, err := os.Getwd()
 	if err != nil {
-		return nil
+		return nil, false, err
 	}
-	if !cfg.Enabled() {
-		return nil
+	cfg, err := remote.LoadConfigForCWD(remote.OSEnv, cwd)
+	if err != nil || !cfg.Enabled() {
+		return nil, false, nil
 	}
-	return fmt.Errorf("insight is local mode only for now: this repository is connected to %s, and a server-mode index is a cache the server can replace. Server-side insight is a follow-up to RFC 0007", cfg.ServerURL)
+	if err := cfg.Validate(); err != nil {
+		return nil, false, fmt.Errorf("server-mode config: %w", err)
+	}
+	client, err := remote.NewHTTPClient(cfg)
+	if err != nil {
+		return nil, false, err
+	}
+	return client, true, nil
 }

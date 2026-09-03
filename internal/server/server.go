@@ -98,6 +98,9 @@ type Server struct {
 
 	mu    sync.Mutex
 	repos map[string]*store.Store
+
+	// insight runs RFC 0007 for every project this server holds.
+	insight *insightService
 }
 
 // Option configures a Server.
@@ -209,6 +212,7 @@ func New(dataDir string, opts ...Option) (*Server, error) {
 	if srv.registry == nil {
 		srv.registry = newFilesystemProjectRegistry(dataDir, srv.locator)
 	}
+	srv.insight = newInsightService(srv)
 	if srv.enrollmentHook == nil {
 		srv.enrollmentHook = noopEnrollmentHook
 	}
@@ -965,6 +969,9 @@ func (s *Server) postRef(w http.ResponseWriter, r *http.Request, repoID string, 
 	switch err := s.casUpdateRef(st, name, store.Hash(req.Old), store.Hash(req.New)); {
 	case err == nil:
 		writeJSON(w, http.StatusOK, refResponse{Hash: req.New})
+		// The push is complete; reading it into work items is the server's
+		// own background work and never delays the reply.
+		go s.insight.afterRefUpdate(repoID, st, name, store.Hash(req.New))
 	case errors.Is(err, store.ErrRefConflict):
 		current, readErr := st.ReadRef(name)
 		if readErr != nil && !errors.Is(readErr, fs.ErrNotExist) {

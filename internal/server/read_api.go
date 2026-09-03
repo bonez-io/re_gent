@@ -185,7 +185,10 @@ type blameResponse struct {
 // self-hosted server is intentionally open, exactly like /objects and /refs.
 // segs is the full path split; segs[0] is the repo id and segs[1] == "api".
 func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request, repoID string, segs []string) {
-	if r.Method != http.MethodGet {
+	// Insight has the only writes under /api: the per-project switch and the
+	// worker verbs. The router already classified them as history writes.
+	isInsightWrite := len(segs) == 4 && segs[2] == "insight" && r.Method == http.MethodPost
+	if r.Method != http.MethodGet && !isInsightWrite {
 		w.Header().Set("Allow", http.MethodGet)
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
@@ -226,6 +229,14 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request, repoID string
 		s.handleAPIFeed(w, r, repoID, st)
 	case len(segs) == 5 && segs[2] == "commits" && segs[4] == "steps":
 		s.handleAPICommitSteps(w, r, repoID, st, segs[3])
+	case len(segs) == 4 && segs[2] == "insight":
+		s.handleAPIInsight(w, r, repoID, st, segs[3])
+	case len(segs) == 3 && segs[2] == "search":
+		s.handleAPISearch(w, r, repoID, st)
+	case len(segs) == 3 && segs[2] == "work":
+		s.handleAPIWork(w, r, repoID, st, "")
+	case len(segs) == 4 && segs[2] == "work":
+		s.handleAPIWork(w, r, repoID, st, segs[3])
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 	}

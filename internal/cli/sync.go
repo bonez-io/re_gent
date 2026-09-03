@@ -303,7 +303,7 @@ func rebuildDerived(cache *store.Store, idx *index.DB, tip store.Hash) (int, err
 		if err := idx.IndexStep(stepHash, step, tree); err != nil {
 			return 0, err
 		}
-		if err := rebuildConversation(cache, idx, stepHash, step); err != nil {
+		if err := index.RebuildConversation(cache, idx, stepHash, step); err != nil {
 			return 0, err
 		}
 		if err := capture.ComputeAndWriteBlame(cache, step.Parent, stepHash, step.Tree); err != nil {
