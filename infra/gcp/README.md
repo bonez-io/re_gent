@@ -14,10 +14,11 @@ This is the first production-shaped re_gent deployment: one private VM for
   identity, and branch-bound identity provider.
 - Production deletion protection is enabled by default.
 
-This boundary is intentional because `regent-server` does not yet implement
-application authentication or tenancy. IAP grants access using GCP IAM. A
-public hostname must wait for the auth/security epic or be placed behind an
-approved HTTPS load balancer + IAP design.
+This remains a staging boundary while the authenticated server composition is
+implemented. `regent-server` requires the explicit `--insecure-no-auth` override
+in this topology, and IAP grants access using GCP IAM. A public hostname must
+wait for application authentication, tenant authorization, and the approved
+HTTPS ingress design.
 
 ## One-time provisioning
 
@@ -94,11 +95,17 @@ and 30 days in main. Destroying the Terraform stack deliberately fails while
 the data disks are protected; removing that lifecycle protection must be a
 reviewed, explicit change.
 
-The known external blockers are operational rather than code changes:
+After the GitHub repository migration, refresh the production trust before the
+next deployment:
 
-1. authenticate `gcloud` and select/create the dedicated re_gent project;
-2. repair GitHub Actions billing, because GitHub currently refuses to start
-   any jobs for this private repository;
-3. restore a paid GitHub organization plan (or make the repository public) so
-   private-branch protection and protected deployment environments can enforce
-   the review policy. The organization currently reports the Free plan.
+1. authenticate `gcloud` interactively and select `regent-vcs-platform`;
+2. initialize the existing `regent-vcs-platform-regent-tfstate` backend;
+3. review a Terraform plan with `github_repository = "bonez-io/re_gent"` and
+   apply only the expected Workload Identity claim/IAM changes;
+4. run `infra/gcp/configure-github.sh` to refresh repository/environment
+   variables; and
+5. verify both branch-bound identities with a release validation run.
+
+Do not remove IAP or expose the service publicly during this migration. Remove
+`--insecure-no-auth` from this deployment once the secure server composition is
+available.

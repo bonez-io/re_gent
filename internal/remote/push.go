@@ -7,7 +7,7 @@ import (
 	"io/fs"
 	"sort"
 
-	"github.com/regent-vcs/regent/internal/store"
+	"github.com/bonez-io/re_gent/internal/store"
 )
 
 // maxChainLength bounds every DAG walk. A cycle cannot occur in a

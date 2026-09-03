@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/regent-vcs/regent/internal/config"
-	"github.com/regent-vcs/regent/internal/store"
+	"github.com/bonez-io/re_gent/internal/config"
+	"github.com/bonez-io/re_gent/internal/store"
 )
 
 // newTestServer returns an httptest.Server that handles POST /repos.
@@ -35,12 +35,12 @@ func newTestServer(t *testing.T, statusCode int, repoID string) *httptest.Server
 }
 
 // writeGlobalConfig writes a global config with the given token to path.
-func writeGlobalConfig(t *testing.T, path, token string) {
+func writeGlobalConfig(t *testing.T, path, serverURL, token string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := config.SaveTo(path, &config.UserConfig{Auth: config.Auth{Token: token}}); err != nil {
+	if err := config.SaveTo(path, &config.UserConfig{Credentials: []config.Credential{{ServerURL: serverURL, Token: token}}}); err != nil {
 		t.Fatalf("write global config: %v", err)
 	}
 }
@@ -130,7 +130,7 @@ func TestConnect_WritesRemoteConfig(t *testing.T) {
 	srv := newTestServer(t, http.StatusCreated, "repo-abc")
 	root := t.TempDir()
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	writeGlobalConfig(t, cfgPath, "my-token")
+	writeGlobalConfig(t, cfgPath, srv.URL, "my-token")
 
 	if err := runConnect(connectParams{
 		serverURL:   srv.URL,
@@ -161,7 +161,7 @@ func TestConnect_InstallsClaudeHooks(t *testing.T) {
 	srv := newTestServer(t, http.StatusCreated, "repo-hooks")
 	root := t.TempDir()
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	writeGlobalConfig(t, cfgPath, "tok")
+	writeGlobalConfig(t, cfgPath, srv.URL, "tok")
 
 	if err := runConnect(connectParams{
 		serverURL:   srv.URL,
@@ -198,7 +198,7 @@ func TestConnect_MergesExistingHooks(t *testing.T) {
 	srv := newTestServer(t, http.StatusCreated, "repo-merge")
 	root := t.TempDir()
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	writeGlobalConfig(t, cfgPath, "tok")
+	writeGlobalConfig(t, cfgPath, srv.URL, "tok")
 
 	// Pre-install a non-regent Claude hook.
 	claudeDir := filepath.Join(root, ".claude")
@@ -262,7 +262,7 @@ func TestConnect_Idempotent(t *testing.T) {
 
 	root := t.TempDir()
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	writeGlobalConfig(t, cfgPath, "tok")
+	writeGlobalConfig(t, cfgPath, srv.URL, "tok")
 
 	params := connectParams{
 		serverURL:   srv.URL,
@@ -298,7 +298,7 @@ func TestConnect_Idempotent(t *testing.T) {
 }
 
 // TestConnect_SucceedsWithoutToken is the new-teammate path: a machine that has
-// never run `rgt login` must still connect, because the default server is open.
+// never run `rgt auth login` must still connect to an intentional open server.
 // Requiring a token here broke onboarding for everyone except the person who had
 // signed in at some point — and their stale token hid the bug during testing.
 func TestConnect_SucceedsWithoutToken(t *testing.T) {
@@ -364,7 +364,7 @@ func TestConnect_ServerUnauthorized(t *testing.T) {
 	srv := newTestServer(t, http.StatusUnauthorized, "")
 	root := t.TempDir()
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	writeGlobalConfig(t, cfgPath, "bad-token")
+	writeGlobalConfig(t, cfgPath, srv.URL, "bad-token")
 
 	err := runConnect(connectParams{
 		serverURL:   srv.URL,
@@ -376,13 +376,15 @@ func TestConnect_ServerUnauthorized(t *testing.T) {
 		t.Fatal("want error for 401, got nil")
 	}
 	// A 401 must still be reported as a 401. What changed is the remedy: the
-	// old message said "Run: rgt login <server-url>", and login no longer
-	// exists, so following the advice would have produced "unknown command".
-	// An error that names a removed command is worse than one that names none.
+	// The remedy must name the current auth command group, not the removed
+	// top-level `rgt login` command.
 	if !strings.Contains(err.Error(), "unauthenticated") {
 		t.Errorf("error should say the server rejected us as unauthenticated, got: %v", err)
 	}
 	if strings.Contains(err.Error(), "rgt login") {
-		t.Errorf("error points at `rgt login`, which has been removed: %v", err)
+		t.Errorf("error points at removed top-level `rgt login`: %v", err)
+	}
+	if !strings.Contains(err.Error(), "rgt auth login") {
+		t.Errorf("error does not name the supported login command: %v", err)
 	}
 }

@@ -38,7 +38,7 @@ func TestVersionStringIncludesDateWhenSet(t *testing.T) {
 // main.version (which does not exist) instead of these cli package symbols.
 // If the symbol path ever drifts from the build config again, this fails.
 func TestBuildConfigTargetsVersionSymbols(t *testing.T) {
-	const symbolPath = "github.com/regent-vcs/regent/internal/cli."
+	const symbolPath = "github.com/bonez-io/re_gent/internal/cli."
 
 	repoRoot := filepath.Join("..", "..")
 	cases := []struct {

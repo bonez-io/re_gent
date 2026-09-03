@@ -19,7 +19,7 @@ import (
 	// A suite that answers for code it did not run is worse than no suite. This
 	// import makes the test binary depend on the package under test, so any
 	// change to it invalidates the cache the ordinary way.
-	_ "github.com/regent-vcs/regent/internal/cli"
+	_ "github.com/bonez-io/re_gent/internal/cli"
 )
 
 // The onboarding path is about to lose a lot of code: an interactive wizard, a

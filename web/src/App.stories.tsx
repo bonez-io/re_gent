@@ -17,6 +17,29 @@ type Story = StoryObj<typeof meta>
 
 export const Sessions: Story = {}
 
+export const LoginRequired: Story = {
+  beforeEach({ msw }) {
+    msw.use(
+      http.get('/api/v1/capabilities', () => HttpResponse.json({ deployment: 'self-hosted', api_version: 'v1', auth_methods: ['pat', 'browser_session'], bootstrap_required: false, features: [] })),
+      http.get('/api/v1/auth/me', () => new HttpResponse(null, { status: 401 })),
+    )
+  },
+  play: async ({ canvas }) => {
+    await expect(await canvas.findByRole('heading', { name: 'Sign in to re_gent' })).toBeVisible()
+    await expect(canvas.getByLabelText('Personal access token')).toHaveAttribute('type', 'password')
+  },
+}
+
+export const FirstOwnerSetup: Story = {
+  beforeEach({ msw }) {
+    msw.use(http.get('/api/v1/capabilities', () => HttpResponse.json({ deployment: 'self-hosted', api_version: 'v1', auth_methods: ['pat', 'browser_session'], bootstrap_required: true, features: [] })))
+  },
+  play: async ({ canvas }) => {
+    await expect(await canvas.findByRole('heading', { name: 'Create the first owner' })).toBeVisible()
+    await expect(canvas.getByText(/one-time credential printed by/)).toBeVisible()
+  },
+}
+
 const writeClipboard = fn(async () => undefined)
 
 export const EmptyServer: Story = {

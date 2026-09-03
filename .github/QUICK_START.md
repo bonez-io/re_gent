@@ -8,7 +8,7 @@ Fast-track guide to contributing to re_gent. For full details, see [CONTRIBUTING
 
 ```bash
 # Clone and setup
-git clone https://github.com/regent-vcs/regent.git
+git clone https://github.com/bonez-io/re_gent.git
 cd regent
 go mod download
 go build -o rgt ./cmd/rgt
@@ -25,9 +25,9 @@ go test ./...
 ### 1. Find Something to Work On
 
 **New to the project?** Look for issues labeled:
-- [`good first issue`](https://github.com/regent-vcs/regent/labels/good%20first%20issue)
-- [`help wanted`](https://github.com/regent-vcs/regent/labels/help%20wanted)
-- [`documentation`](https://github.com/regent-vcs/regent/labels/documentation)
+- [`good first issue`](https://github.com/bonez-io/re_gent/labels/good%20first%20issue)
+- [`help wanted`](https://github.com/bonez-io/re_gent/labels/help%20wanted)
+- [`documentation`](https://github.com/bonez-io/re_gent/labels/documentation)
 
 **Want something meatier?** Check:
 - Phase implementations in [POC.md](../POC.md)
@@ -36,8 +36,8 @@ go test ./...
 ### 2. Create Your Branch
 
 ```bash
-git checkout develop
-git pull origin develop
+git checkout dev
+git pull origin dev
 git checkout -b feature/your-feature-name
 ```
 
@@ -75,7 +75,7 @@ git commit -m "feat: add blob deduplication"
 
 ```bash
 git push origin feature/your-feature-name
-gh pr create --base develop --fill
+gh pr create --base dev --fill
 ```
 
 ### 6. Wait for Review
@@ -197,8 +197,8 @@ if err != nil {
 ## Getting Help
 
 - **Stuck?** Comment on the issue or open a discussion
-- **Bug?** Check if it's already reported in [Issues](https://github.com/regent-vcs/regent/issues)
-- **Question?** Ask in [Discussions](https://github.com/regent-vcs/regent/discussions)
+- **Bug?** Check if it's already reported in [Issues](https://github.com/bonez-io/re_gent/issues)
+- **Question?** Ask in [Discussions](https://github.com/bonez-io/re_gent/discussions)
 
 ---
 

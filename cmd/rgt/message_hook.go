@@ -7,9 +7,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/regent-vcs/regent/internal/capture"
-	"github.com/regent-vcs/regent/internal/remote"
-	"github.com/regent-vcs/regent/internal/remote/remotecapture"
+	"github.com/bonez-io/re_gent/internal/capture"
+	"github.com/bonez-io/re_gent/internal/remote"
+	"github.com/bonez-io/re_gent/internal/remote/remotecapture"
 	"github.com/spf13/cobra"
 )
 

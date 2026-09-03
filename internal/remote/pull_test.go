@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/regent-vcs/regent/internal/remotetest"
-	"github.com/regent-vcs/regent/internal/store"
+	"github.com/bonez-io/re_gent/internal/remotetest"
+	"github.com/bonez-io/re_gent/internal/store"
 )
 
 // newFixtureOn is a second machine sharing one server: its own cache, its own

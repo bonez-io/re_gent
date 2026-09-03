@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/regent-vcs/regent/internal/store"
+	"github.com/bonez-io/re_gent/internal/store"
 )
 
 // getAPI performs an authenticated GET against the test server and returns the

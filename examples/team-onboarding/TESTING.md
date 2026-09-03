@@ -6,7 +6,7 @@ repo from the template, do an agent turn, and confirm the step shows up.
 ## 0. Build rgt
 
 ```sh
-cd /path/to/re_gent_headless
+cd /path/to/re_gent
 go build -o /tmp/rgt ./cmd/rgt
 export PATH="/tmp:$PATH"   # so `rgt` resolves to the build under test
 ```
@@ -33,7 +33,7 @@ mkdir /tmp/regent-kit-test && cd /tmp/regent-kit-test
 git init -q && git config user.name "Test Dev" && git config user.email "test@example.com"
 
 # Copy the committed template files in:
-cp -R /path/to/re_gent_headless/examples/team-onboarding/project-template/. .
+cp -R /path/to/re_gent/examples/team-onboarding/project-template/. .
 
 # Point the [remote] block at the local server + register the repo id:
 #   edit .regent/config.toml ->

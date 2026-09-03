@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bonez-io/re_gent/internal/remote"
 	"github.com/pelletier/go-toml/v2"
-	"github.com/regent-vcs/regent/internal/remote"
 )
 
 // Sharing the wiring through version control is two commands making one promise:

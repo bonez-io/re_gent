@@ -1,6 +1,6 @@
 <div align="center">
 
-  <a href="https://github.com/regent-vcs/regent">
+  <a href="https://github.com/bonez-io/re_gent">
     <img
       src="assets/regent-logo-dark.png"
       alt="re_gent"
@@ -14,14 +14,14 @@
     Track what your agent did, which prompt wrote each line, and inspect any step.
   </p>
 
-[![Star on GitHub](https://img.shields.io/github/stars/regent-vcs/regent?style=for-the-badge&logo=github&color=gold)](https://github.com/regent-vcs/regent)
+[![Star on GitHub](https://img.shields.io/github/stars/bonez-io/re_gent?style=for-the-badge&logo=github&color=gold)](https://github.com/bonez-io/re_gent)
 [![Apache 2.0 License](https://img.shields.io/badge/License-Apache%202.0-blue?style=for-the-badge)](LICENSE)
-[![Go Version](https://img.shields.io/github/go-mod/go-version/regent-vcs/regent?style=for-the-badge&logo=go&logoColor=white&color=00ADD8)](go.mod)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/bonez-io/re_gent?style=for-the-badge&logo=go&logoColor=white&color=00ADD8)](go.mod)
 
-[![CI Status](https://img.shields.io/github/actions/workflow/status/regent-vcs/regent/ci.yml?style=for-the-badge&logo=githubactions&logoColor=white)](https://github.com/regent-vcs/regent/actions/workflows/ci.yml)
-[![Coverage](https://img.shields.io/codecov/c/github/regent-vcs/regent?style=for-the-badge&logo=codecov&logoColor=white)](https://codecov.io/gh/regent-vcs/regent)
+[![CI Status](https://img.shields.io/github/actions/workflow/status/bonez-io/re_gent/ci.yml?style=for-the-badge&logo=githubactions&logoColor=white)](https://github.com/bonez-io/re_gent/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/codecov/c/github/bonez-io/re_gent?style=for-the-badge&logo=codecov&logoColor=white)](https://codecov.io/gh/bonez-io/re_gent)
 [![Contributions Welcome](https://img.shields.io/badge/Contributions-Welcome-10b981?style=for-the-badge&logo=github)](CONTRIBUTING.md)
-[![Claude Code Compatible](https://img.shields.io/badge/Claude%20Code-Compatible-6366f1?style=for-the-badge&logo=anthropic&logoColor=white)](https://github.com/regent-vcs/regent) [![Codex Compatible](https://img.shields.io/badge/Codex-Compatible-10b981?style=for-the-badge&logo=openai&logoColor=white)](https://github.com/regent-vcs/regent) [![OpenCode Compatible](https://img.shields.io/badge/OpenCode-Compatible-ff6b35?style=for-the-badge)](https://github.com/regent-vcs/regent)
+[![Claude Code Compatible](https://img.shields.io/badge/Claude%20Code-Compatible-6366f1?style=for-the-badge&logo=anthropic&logoColor=white)](https://github.com/bonez-io/re_gent) [![Codex Compatible](https://img.shields.io/badge/Codex-Compatible-10b981?style=for-the-badge&logo=openai&logoColor=white)](https://github.com/bonez-io/re_gent) [![OpenCode Compatible](https://img.shields.io/badge/OpenCode-Compatible-ff6b35?style=for-the-badge)](https://github.com/bonez-io/re_gent)
 [![Discord](https://img.shields.io/discord/1503732569622053004?style=for-the-badge&logo=discord&logoColor=white&color=5865F2)](https://discord.gg/5k2Q8AmqC)
 
 </div>
@@ -32,11 +32,11 @@
 
 ```bash
 # Install via Homebrew (macOS/Linux)
-brew tap regent-vcs/tap
+brew tap bonez-io/tap
 brew install regent
 
 # Or via Go
-go install github.com/regent-vcs/regent/cmd/rgt@latest
+go install github.com/bonez-io/re_gent/cmd/rgt@latest
 
 # Initialize in your project
 cd your-project
@@ -205,7 +205,7 @@ Steps form a **DAG**. Each session has its own branch. Common ancestors dedupe. 
 ### Via Homebrew (macOS/Linux)
 
 ```bash
-brew tap regent-vcs/tap
+brew tap bonez-io/tap
 brew install regent
 ```
 
@@ -214,7 +214,7 @@ This installs the `rgt` command and automatically sets up shell completions for 
 ### Via Go Install
 
 ```bash
-go install github.com/regent-vcs/regent/cmd/rgt@latest
+go install github.com/bonez-io/re_gent/cmd/rgt@latest
 ```
 
 **Shell Completion (manual setup):**
@@ -232,7 +232,7 @@ rgt completion fish > ~/.config/fish/completions/rgt.fish
 ### From Source
 
 ```bash
-git clone https://github.com/regent-vcs/regent
+git clone https://github.com/bonez-io/re_gent
 cd regent
 make install
 rgt version
@@ -243,7 +243,7 @@ or other package-manager installation elsewhere on `PATH`.
 
 ### Binary Releases
 
-Download pre-built binaries from [GitHub Releases](https://github.com/regent-vcs/regent/releases)
+Download pre-built binaries from [GitHub Releases](https://github.com/bonez-io/re_gent/releases)
 
 ---
 
@@ -294,6 +294,9 @@ explicitly with `NO_COLOR=1`.
 | `rgt connect [server-url-or-ssh-target]` | Bind to an existing `http(s)` server, or give an SSH target to provision it first. A project is written only after its public `/healthz` answers. |
 | `rgt connect --as <name>` | Register this project under a name you choose instead of one derived from its git remote. Recorded in the project binding, so it is said once. |
 | `rgt connect --agent <target>` | Wire a specific host integration (`claude`, `codex`, `opencode`, `pi`, `both`, or `all`) instead of auto-detecting installed agents. |
+| `rgt auth login [server-url]` | Validate and store a server-scoped PAT. Reads it from a hidden prompt or `--token-stdin`, never an argument. |
+| `rgt auth status [server-url]` | Verify the stored login and show the authenticated identity without displaying the token. |
+| `rgt auth logout [server-url]` | Remove that server's credential from this machine without revoking it server-side. |
 | `rgt init` | Initialize `.regent/` in current directory |
 | `rgt connect --no-git-hook` / `rgt init --no-git-hook` | Wire agent hooks but not the Git `pre-push` hook, so `git push` does not deliver queued capture. |
 | `rgt log` | Show step history (supports `--session`, `-n`, `--json`, `--graph`) |
@@ -365,12 +368,16 @@ rgt push
 rgt pull
 ```
 
-The server is currently unauthenticated, and Compose binds it to `127.0.0.1`.
+The development Compose profile is intentionally unauthenticated and binds only
+to `127.0.0.1`. For a remote host, use the secure production profile and the
+complete **[self-hosted guide](docs/self-hosted.md)**; it enables HTTPS,
+first-owner bootstrap, persistent users, project roles, PATs, browser sessions,
+CSRF protection, access settings, recovery, backup, and rollback.
 For the private dev/main GCP deployment, CI/CD, persistence, rollback, and IAP
-access model, see **[infra/gcp/README.md](infra/gcp/README.md)**. To provision a
-generic Linux VPS, run `rgt connect root@host` from a project (or add `--url
-https://public.example` for NAT/DNS), review the plan, and confirm. `make
-server-down` stops it; the named Docker
+access model, see **[infra/gcp/README.md](infra/gcp/README.md)**. The older SSH
+auto-provisioning path remains a development/staging convenience and must not be
+used as an internet-facing production topology. `make server-down` stops the
+local profile; the named Docker
 volume preserves its data between runs.
 
 ---
@@ -382,7 +389,7 @@ by id and stored separately, so two repos never share refs, objects or history �
 even when they use the same session ids and contain identical files.
 
 ```bash
-regent-server --addr 127.0.0.1:7654 --data ~/.regent-server
+regent-server --addr 127.0.0.1:7654 --data ~/.regent-server --auth-mode open
 
 # in each project, once:
 cd ~/code/alpha && rgt push --url http://127.0.0.1:7654 --repo alpha
@@ -464,7 +471,13 @@ npm install && npm run compile
 
 ## Roadmap
 
-See [ROADMAP.md](ROADMAP.md) for planned features including:
+The active `v1.2.0-beta.3` scope, architecture decisions, workstreams, and
+release gates live in the
+[beta release plan](docs/BETA-RELEASE-PLAN.md). The
+[release tracker](https://github.com/bonez-io/re_gent/issues/96) holds linked
+execution evidence.
+
+See [ROADMAP.md](ROADMAP.md) for older long-range product context including:
 - Non-destructive rewind and fork operations
 - Additional tool adapters (Cursor, Cline, Continue)
 - Session sharing and merge support
@@ -486,9 +499,9 @@ outcomes and dependencies, not one large PR.
 
 | Owner | Responsibility | Active epics |
 |---|---|---|
-| [Arad (`@arad1410`)](https://github.com/arad1410) | Core engineering and most of the implementation-heavy work | [Remote fidelity #35](https://github.com/regent-vcs/re_gent_headless/issues/35), [remote lifecycle #38](https://github.com/regent-vcs/re_gent_headless/issues/38) |
-| [Amir (`@Amirshrim`)](https://github.com/Amirshrim) | Complete onboarding-friendly epics with independently useful deliverables | [Documentation platform #37](https://github.com/regent-vcs/re_gent_headless/issues/37), followed by the designed Git integration work in [#31](https://github.com/regent-vcs/re_gent_headless/issues/31) |
-| [Shay (`@shayliv`)](https://github.com/shayliv) | R&D lead, review/merge owner, UI foundation, infrastructure, deployment, security, and authentication | [UI foundation #36](https://github.com/regent-vcs/re_gent_headless/issues/36), [infrastructure #34](https://github.com/regent-vcs/re_gent_headless/issues/34) |
+| [Arad (`@arad1410`)](https://github.com/arad1410) | Core engineering and most of the implementation-heavy work | [Remote fidelity #35](https://github.com/bonez-io/re_gent/issues/35), [remote lifecycle #38](https://github.com/bonez-io/re_gent/issues/38) |
+| [Amir (`@Amirshrim`)](https://github.com/Amirshrim) | Complete onboarding-friendly epics with independently useful deliverables | [Documentation platform #37](https://github.com/bonez-io/re_gent/issues/37), followed by the designed Git integration work in [#31](https://github.com/bonez-io/re_gent/issues/31) |
+| [Shay (`@shayliv`)](https://github.com/shayliv) | R&D lead, review/merge owner, UI foundation, infrastructure, deployment, security, and authentication | [UI foundation #36](https://github.com/bonez-io/re_gent/issues/36), [infrastructure #34](https://github.com/bonez-io/re_gent/issues/34) |
 
 Shay is the required reviewer and merge owner for every PR entering `dev`.
 Shay-authored PRs still require green CI and the same self-review checklist;
@@ -531,7 +544,7 @@ pushes, or changes a source repository's Git remotes.
 **Quick Start:**
 - [QUICK_START.md](.github/QUICK_START.md) — 5-minute setup guide
 - [UI development](docs/ui-development.md) — run the server and real-data session explorer locally
-- [Good first issues](https://github.com/regent-vcs/regent/labels/good%20first%20issue)
+- [Good first issues](https://github.com/bonez-io/re_gent/labels/good%20first%20issue)
 
 **Before opening a PR:**
 - [ ] The PR targets `dev` and closes one assigned issue
@@ -560,12 +573,12 @@ pushes, or changes a source repository's Git remotes.
 
 <div align="center">
   <p>
-    <sub>Built by <a href="https://github.com/regent-vcs/regent/graphs/contributors">contributors</a></sub>
+    <sub>Built by <a href="https://github.com/bonez-io/re_gent/graphs/contributors">contributors</a></sub>
   </p>
   <p>
     <a href="https://discord.gg/5k2Q8AmqC">Discord</a> •
-    <a href="https://github.com/regent-vcs/regent/discussions">Discussions</a> •
-    <a href="https://github.com/regent-vcs/regent/issues">Issues</a> •
+    <a href="https://github.com/bonez-io/re_gent/discussions">Discussions</a> •
+    <a href="https://github.com/bonez-io/re_gent/issues">Issues</a> •
     <a href="POC.md">Technical Spec</a>
   </p>
 </div>

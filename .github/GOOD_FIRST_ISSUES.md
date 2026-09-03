@@ -145,4 +145,4 @@ A new directory `examples/bad-refactor/` containing:
 4. Follow [CONTRIBUTING.md](../CONTRIBUTING.md) guidelines
 5. Open a PR when ready
 
-**Questions?** Ask in the issue comments or open a [Discussion](https://github.com/regent-vcs/regent/discussions).
+**Questions?** Ask in the issue comments or open a [Discussion](https://github.com/bonez-io/re_gent/discussions).

@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/regent-vcs/regent/internal/diff"
-	"github.com/regent-vcs/regent/internal/store"
+	"github.com/bonez-io/re_gent/internal/diff"
+	"github.com/bonez-io/re_gent/internal/store"
 )
 
 // FileDiff represents a file change between two steps

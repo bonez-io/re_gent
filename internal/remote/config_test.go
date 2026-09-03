@@ -148,9 +148,14 @@ func TestConfigValidate(t *testing.T) {
 		wantErr string
 	}{
 		{"valid", Config{ServerURL: "https://a.example", RepoID: "repo"}, ""},
+		{"loopback http token", Config{ServerURL: "http://127.0.0.1:7654", RepoID: "repo", Token: "secret"}, ""},
+		{"remote http token", Config{ServerURL: "http://a.example", RepoID: "repo", Token: "secret"}, "refusing to send a bearer token"},
+		{"remote open http", Config{ServerURL: "http://a.example", RepoID: "repo"}, ""},
 		{"no url", Config{RepoID: "repo"}, "server url is required"},
 		{"bad scheme", Config{ServerURL: "ftp://a.example", RepoID: "repo"}, "scheme must be http or https"},
 		{"no host", Config{ServerURL: "http://", RepoID: "repo"}, "missing host"},
+		{"embedded credentials", Config{ServerURL: "https://user:pass@a.example", RepoID: "repo"}, "credentials, query, and fragment"},
+		{"query", Config{ServerURL: "https://a.example?target=other", RepoID: "repo"}, "credentials, query, and fragment"},
 		{"no repo", Config{ServerURL: "https://a.example"}, "repo id is required"},
 		{"repo traversal", Config{ServerURL: "https://a.example", RepoID: "../etc"}, "invalid repo id"},
 		{"repo slash", Config{ServerURL: "https://a.example", RepoID: "a/b"}, "invalid repo id"},
@@ -171,6 +176,20 @@ func TestConfigValidate(t *testing.T) {
 				t.Fatalf("error = %v, want it to contain %q", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestEnvironmentServerOverrideDoesNotCarryFileToken(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[server]\nurl = 'https://one.example'\nrepo_id = 'repo'\ntoken = 'token-for-one'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(envMap(map[string]string{"REGENT_SERVER_URL": "https://two.example"}), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ServerURL != "https://two.example" || cfg.Token != "" {
+		t.Fatalf("environment redirect carried a file credential: %+v", cfg)
 	}
 }
 

@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/regent-vcs/regent/internal/skills"
+	"github.com/bonez-io/re_gent/internal/skills"
 )
 
 // The skills registry.

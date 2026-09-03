@@ -10,7 +10,7 @@ import (
 
 	// This package executes a freshly built rgt binary. Keep the compile-time
 	// edge so the Go test cache cannot reuse a binary from before a CLI change.
-	_ "github.com/regent-vcs/regent/internal/cli"
+	_ "github.com/bonez-io/re_gent/internal/cli"
 )
 
 // RFC 0001 makes the repository binding portable by excluding every machine

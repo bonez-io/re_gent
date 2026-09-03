@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/regent-vcs/regent/internal/style"
+	"github.com/bonez-io/re_gent/internal/style"
 )
 
 // This file wires re_gent into `git push`. See docs/rfcs/0002-git-push-integration.md.

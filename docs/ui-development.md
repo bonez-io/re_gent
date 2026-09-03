@@ -66,5 +66,6 @@ corepack pnpm storybook
 
 The UI uses repository-scoped HTTP endpoints on `regent-server`. Local Vite
 uses a proxy; the production self-hosted build will be served from the same
-origin as the server. Hosted authentication and organization switching stay
-outside this local MVP and can wrap the same typed client later.
+origin as the server. The public client now negotiates self-hosted capabilities
+and browser sessions; managed OAuth and organization switching can wrap the
+same typed client later.

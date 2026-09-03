@@ -17,7 +17,8 @@ The app is available at <http://localhost:5173>.
 The development server proxies the repository registry and repo-scoped API to
 `http://127.0.0.1:7654`. Override it with `VITE_REGENT_SERVER_URL`; set
 `VITE_REGENT_REPO_ID` to skip the repository picker when that repository is
-registered. `VITE_REGENT_TOKEN` adds a bearer token for protected servers.
+registered. Authenticated deployments use the runtime capability document and
+same-origin browser session; bearer tokens are never compiled into the UI.
 
 Runtime routes are repository-scoped:
 

@@ -3,7 +3,7 @@ package cli
 import (
 	"os"
 
-	"github.com/regent-vcs/regent/internal/hook"
+	"github.com/bonez-io/re_gent/internal/hook"
 	"github.com/spf13/cobra"
 )
 

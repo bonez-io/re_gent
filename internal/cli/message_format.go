@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/regent-vcs/regent/internal/conversation"
-	"github.com/regent-vcs/regent/internal/style"
+	"github.com/bonez-io/re_gent/internal/conversation"
+	"github.com/bonez-io/re_gent/internal/style"
 )
 
 // FormatMessagesHumanReadable converts raw message JSON into readable conversation format

@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/regent-vcs/regent/internal/style"
+	"github.com/bonez-io/re_gent/internal/style"
 )
 
 type bootstrapper interface {
@@ -105,7 +105,7 @@ mkdir -p /opt/regent
 cat >/opt/regent/compose.yml <<'EOF'
 services:
   server:
-    image: ghcr.io/regent-vcs/regent-server:latest
+    image: ghcr.io/bonez-io/regent-server:latest
     ports: ["7654:7654"]
     volumes: ["regent-data:/data"]
     restart: unless-stopped
@@ -119,6 +119,9 @@ func normalizeServiceURL(raw string) (string, error) {
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return "", fmt.Errorf("%q is not an http(s) server URL", raw)
+	}
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("%q must not contain credentials, a query, or a fragment", raw)
 	}
 	return strings.TrimRight(u.String(), "/"), nil
 }

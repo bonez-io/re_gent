@@ -17,7 +17,7 @@ variable "zone" {
 variable "github_repository" {
   description = "GitHub owner/repository trusted by Workload Identity Federation."
   type        = string
-  default     = "regent-vcs/re_gent_headless"
+  default     = "bonez-io/re_gent"
 }
 
 variable "machine_types" {

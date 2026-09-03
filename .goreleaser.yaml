@@ -27,9 +27,9 @@ builds:
       - CGO_ENABLED=0
     ldflags:
       - -s -w
-      - -X github.com/regent-vcs/regent/internal/cli.Version={{.Version}}
-      - -X github.com/regent-vcs/regent/internal/cli.Commit={{.Commit}}
-      - -X github.com/regent-vcs/regent/internal/cli.Date={{.Date}}
+      - -X github.com/bonez-io/re_gent/internal/cli.Version={{.Version}}
+      - -X github.com/bonez-io/re_gent/internal/cli.Commit={{.Commit}}
+      - -X github.com/bonez-io/re_gent/internal/cli.Date={{.Date}}
 
 archives:
   - formats: [tar.gz]
@@ -56,7 +56,7 @@ changelog:
 
 release:
   github:
-    owner: regent-vcs
+    owner: bonez-io
     name: re_gent
   draft: false
   prerelease: auto
@@ -66,13 +66,13 @@ release:
 brews:
   - name: regent
     repository:
-      owner: regent-vcs
+      owner: bonez-io
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     commit_author:
       name: regent-bot
       email: bot@regent-vcs.dev
-    homepage: "https://github.com/regent-vcs/re_gent"
+    homepage: "https://github.com/bonez-io/re_gent"
     description: "Git for AI agents - content-addressed version control for agent activity"
     license: "Apache-2.0"
     install: |

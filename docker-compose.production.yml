@@ -1,0 +1,60 @@
+# Secure single-node self-hosted profile.
+#
+#   export REGENT_DOMAIN=regent.example.com
+#   docker compose -f docker-compose.production.yml up -d --build
+#   docker compose -f docker-compose.production.yml exec regent-server \
+#     sh -c 'cat /data/bootstrap-token'
+#
+# Caddy obtains and renews public TLS certificates. The Go server is reachable
+# only on the internal network and always runs the persistent self-hosted auth
+# composition; there is no insecure override in this profile.
+services:
+  regent-server:
+    build: .
+    image: regent-server:production
+    command: ["--addr", "0.0.0.0:7654", "--data", "/data", "--auth-mode", "self-hosted"]
+    volumes:
+      - regent-data:/data
+    networks: [regent-internal]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m"]
+
+  regent-web:
+    build: ./web
+    image: regent-web:production
+    depends_on:
+      regent-server:
+        condition: service_healthy
+    networks: [regent-internal]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+
+  caddy:
+    image: caddy:2.10.2-alpine
+    depends_on:
+      regent-web:
+        condition: service_healthy
+    environment:
+      REGENT_DOMAIN: "${REGENT_DOMAIN:?Set REGENT_DOMAIN to the public DNS name}"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [regent-public, regent-internal]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+
+networks:
+  regent-public:
+  regent-internal:
+    internal: true
+
+volumes:
+  regent-data:
+  caddy-data:
+  caddy-config:

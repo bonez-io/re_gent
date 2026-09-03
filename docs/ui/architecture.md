@@ -82,7 +82,7 @@ The public product repository owns everything necessary to run a complete
 self-hosted system:
 
 ```text
-re_gent_headless/
+re_gent/
 ├── api/
 │   └── openapi.yaml       # versioned public data-plane contract
 ├── cmd/
@@ -117,14 +117,13 @@ model.
 
 ### Community self-hosted
 
-- One Docker Compose stack and one public container image.
-- The Go server serves the compiled SPA and the versioned API on the same
-  origin.
+- One Docker Compose stack with public server and web images.
+- An unprivileged static web container proxies the Go API, and Caddy terminates
+  TLS, so the compiled SPA and versioned API still share one public origin.
 - Loopback development can remain explicitly unauthenticated.
-- Any non-loopback deployment must use authentication and TLS, either through
-  the server's supported OIDC configuration or a documented trusted reverse
-  proxy. Until that exists, the UI must not imply that an open remote server is
-  safe.
+- Any non-loopback deployment must use the secure self-hosted composition and
+  TLS. The production Compose profile provides local users, PATs, browser
+  sessions, CSRF protection, and Caddy HTTPS; open mode remains local-only.
 
 ### Enterprise self-hosted
 
@@ -152,28 +151,22 @@ model.
 
 ## Runtime contract
 
-The UI loads a small, same-origin bootstrap document before protected product
-queries:
+The UI loads a public, same-origin capabilities document, then resolves the
+cookie-authenticated viewer before protected product queries:
 
 ```json
 {
   "deployment": "self-hosted",
-  "version": "0.2.0",
-  "viewer": {
-    "name": "Shay Livne"
-  },
-  "capabilities": [
-    "projects:read",
-    "sessions:read",
-    "files:read",
-    "blame:read"
-  ]
+  "api_version": "v1",
+  "auth_methods": ["pat", "browser_session"],
+  "bootstrap_required": false,
+  "features": ["projects", "history", "skills", "users", "memberships", "personal_tokens"]
 }
 ```
 
-The exact identity fields wait for the authentication RFC. The important
-invariant is that deployment and permissions come from the server at runtime,
-not from `VITE_*` build flags.
+`GET /api/v1/auth/me` then returns the viewer and effective capabilities. The
+important invariant is that deployment, identity, and permissions come from the
+server at runtime, not from `VITE_*` build flags.
 
 ## Versioned API shape
 

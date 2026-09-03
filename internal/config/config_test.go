@@ -118,3 +118,35 @@ func TestRedact(t *testing.T) {
 		}
 	}
 }
+
+func TestCredentialsAreScopedByServer(t *testing.T) {
+	cfg := &UserConfig{}
+	SetCredential(cfg, "https://one.example/", "one-token-at-least-16")
+	SetCredential(cfg, "https://two.example", "two-token-at-least-16")
+	if got := TokenForServer(cfg, "https://one.example"); got != "one-token-at-least-16" {
+		t.Fatalf("server one token = %q", got)
+	}
+	if got := TokenForServer(cfg, "https://two.example/"); got != "two-token-at-least-16" {
+		t.Fatalf("server two token = %q", got)
+	}
+	if got := TokenForServer(cfg, "https://unknown.example"); got != "" {
+		t.Fatalf("credential crossed server boundary: %q", got)
+	}
+	if !RemoveCredential(cfg, "https://one.example") || TokenForServer(cfg, "https://one.example") != "" {
+		t.Fatal("RemoveCredential did not remove only server one")
+	}
+	if TokenForServer(cfg, "https://two.example") == "" {
+		t.Fatal("RemoveCredential removed an unrelated server")
+	}
+}
+
+func TestUnscopedLegacyTokenIsNotSentToAnArbitraryServer(t *testing.T) {
+	cfg := &UserConfig{Auth: Auth{Token: "legacy-token-at-least-16"}}
+	if got := TokenForServer(cfg, "https://new.example"); got != "" {
+		t.Fatalf("unscoped legacy token would leak to a newly named server: %q", got)
+	}
+	cfg.Server.URL = "https://remembered.example"
+	if got := TokenForServer(cfg, "https://remembered.example"); got != "legacy-token-at-least-16" {
+		t.Fatalf("legacy token was not recoverable for its remembered server: %q", got)
+	}
+}

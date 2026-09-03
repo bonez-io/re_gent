@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/regent-vcs/regent/internal/ignore"
-	"github.com/regent-vcs/regent/internal/store"
+	"github.com/bonez-io/re_gent/internal/ignore"
+	"github.com/bonez-io/re_gent/internal/store"
 )
 
 func TestSnapshotBasic(t *testing.T) {

@@ -7,9 +7,9 @@ import (
 	"io"
 	"os"
 
-	"github.com/regent-vcs/regent/internal/cli"
-	"github.com/regent-vcs/regent/internal/remote"
-	"github.com/regent-vcs/regent/internal/store"
+	"github.com/bonez-io/re_gent/internal/cli"
+	"github.com/bonez-io/re_gent/internal/remote"
+	"github.com/bonez-io/re_gent/internal/store"
 	"github.com/spf13/cobra"
 )
 
@@ -91,6 +91,7 @@ func newRootCommand() *cobra.Command {
 	rootCmd.AddCommand(cli.PullCmd())
 	rootCmd.AddCommand(cli.ConnectCmd())
 	rootCmd.AddCommand(cli.DisconnectCmd())
+	rootCmd.AddCommand(cli.AuthCmd())
 	rootCmd.AddCommand(cli.LogCmd())
 	rootCmd.AddCommand(cli.StatusCmd())
 	rootCmd.AddCommand(cli.BlameCmd())
@@ -117,10 +118,8 @@ func newRootCommand() *cobra.Command {
 	// know is "unknown command", which names no way forward.
 	rootCmd.AddCommand(removedCmd("setup",
 		"connect now does everything setup did.\n\n  rgt connect <server-url>   wire this project\n  rgt connect                use the server this machine already knows"))
-	rootCmd.AddCommand(removedCmd("login",
-		"There is no authentication to sign in to: the server performs no authentication,\nand a sign-in command implied otherwise.\n\n  rgt connect <server-url>   connect a project"))
 	rootCmd.AddCommand(removedCmd("whoami",
-		"Identity comes from your git config, not from a sign-in.\n\n  git config user.name\n  git config user.email\n  rgt doctor                 check what re_gent will record"))
+		"Use the auth status command for server identity, and git config for capture authorship.\n\n  rgt auth status\n  git config user.name\n  git config user.email"))
 	rootCmd.AddCommand(removedCmd("serve",
 		"The server now has its own operator binary.\n\n  regent-server --addr 0.0.0.0:7654 --data /data"))
 

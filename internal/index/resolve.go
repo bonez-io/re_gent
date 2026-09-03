@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/regent-vcs/regent/internal/store"
+	"github.com/bonez-io/re_gent/internal/store"
 )
 
 // ResolveStepHash resolves a short hash prefix to a full step hash
