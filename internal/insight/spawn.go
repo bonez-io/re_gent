@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"syscall"
 )
 
 // Spawn starts `rgt insight run` for the repository at cwd as a detached
@@ -37,7 +36,7 @@ func Spawn(exe, cwd, root string) error {
 	// The worker's output goes to a file, so the style package must not
 	// colour it: it honours NO_COLOR, and nothing else reads this variable.
 	cmd.Env = append(os.Environ(), "NO_COLOR=1")
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.SysProcAttr = detachAttr()
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start worker: %w", err)
 	}
