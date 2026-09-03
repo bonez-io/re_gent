@@ -81,8 +81,11 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 
   if (caps.deployment === 'managed' && orgs.length === 0) return <CreateOrgScreen onReady={refreshMe} />
 
+  // The wizard is admin work: members land in the app even while their
+  // organization is still being set up by someone else.
+  const canRunSetup = !orgs[0] || ['owner', 'admin'].includes(orgs[0].role ?? '')
   const onboardingState = caps.deployment === 'managed' ? orgs[0]?.onboarding : caps.onboarding
-  if (onboardingState && onboardingState !== 'done' && !isSetupPath(location.pathname)) {
+  if (canRunSetup && onboardingState && onboardingState !== 'done' && !isSetupPath(location.pathname)) {
     const org = orgs[0]
     return <Navigate replace to={org ? onboardingPathFor(org, caps.deployment) : '/setup'} />
   }
