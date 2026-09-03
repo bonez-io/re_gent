@@ -255,6 +255,7 @@ const notInvitedReasons: Record<string, string> = {
   invitation_email_mismatch: 'This invitation was sent to a different email address than the one you signed in with.',
   invitation_expired: 'This invitation has expired.',
   invitation_revoked: 'This invitation was revoked.',
+  invitation_used: 'This invitation was already used. Sign in normally, or ask for a new one.',
   state_invalid: 'The sign-in link was stale or opened in a different browser. Start again from the invitation link.',
   required_method: 'This organization requires a different sign-in method.',
 }
