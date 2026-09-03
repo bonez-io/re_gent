@@ -205,13 +205,35 @@ detail "Binary: $(command -v rgt)"
 # Wiring is unconditional: rgt connect wires the project it is standing in, and
 # says what to do when it is not standing in one. See the Go comment on this
 # template for why the installer no longer inspects the terminal.
+# Arguments after "sh -s --": "--setup CODE" carries the one-time setup code
+# the wizard printed (RFC 0005 screen 2), which signs this machine in and
+# enrolls the project in one go; "--no-connect" installs the CLI and stops.
+SETUP_CODE=""
+NO_CONNECT=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --setup) SETUP_CODE="${2:-}"; shift 2 ;;
+    --setup=*) SETUP_CODE="${1#--setup=}"; shift ;;
+    --no-connect) NO_CONNECT=1; shift ;;
+    *) shift ;;
+  esac
+done
+if [ -n "$NO_CONNECT" ]; then
+  detail "Next: rgt auth login {{.BaseURL}}, then rgt connect inside your project."
+  exit 0
+fi
 CONNECT_LOG="${TARGET}.connect.$$"
-rgt connect "{{.BaseURL}}" >"$CONNECT_LOG" 2>&1 &
+if [ -n "$SETUP_CODE" ]; then
+  rgt connect "{{.BaseURL}}" --setup "$SETUP_CODE" >"$CONNECT_LOG" 2>&1 &
+else
+  rgt connect "{{.BaseURL}}" >"$CONNECT_LOG" 2>&1 &
+fi
 connect_pid=$!
 if ! spin_wait "$connect_pid" "Connecting this project"; then
   cat "$CONNECT_LOG" >&2
   rm -f "$CONNECT_LOG"
-  warn "Setup did not finish. You can re-run it any time with:"
+  warn "Setup did not finish. Sign in first, then connect:"
+  warn "  rgt auth login {{.BaseURL}}"
   warn "  rgt connect {{.BaseURL}}"
   exit 1
 fi

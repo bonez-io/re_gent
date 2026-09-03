@@ -445,8 +445,8 @@ func (s *Server) handleOrgSetupCodes(w http.ResponseWriter, r *http.Request, slu
 		writeCodedError(w, http.StatusInternalServerError, "create setup code failed", "internal")
 		return
 	}
-	command := fmt.Sprintf("curl -fsSL %s/install | sh && rgt connect %s --setup %s",
-		strings.TrimRight(org.ServerURL, "/"), org.ServerURL, code)
+	command := fmt.Sprintf("curl -fsSL %s/install | sh -s -- --setup %s",
+		strings.TrimRight(org.ServerURL, "/"), code)
 	writeJSON(w, http.StatusCreated, map[string]any{"code": code, "expires_at": expires, "command": command})
 }
 
