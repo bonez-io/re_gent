@@ -57,9 +57,13 @@ set -eu
 BASE_URL="{{.BaseURL}}"
 VERBOSE="${REGENT_VERBOSE:-0}"
 
+# Escape codes must be real ESC bytes: they are printed through %s, which
+# never interprets backslash sequences, so a literal "\033[" would reach the
+# terminal as text (and did).
+esc() { printf '\033[%sm' "$1"; }
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
-  PURPLE='\033[38;5;141m'; GREEN='\033[38;5;42m'; AMBER='\033[38;5;214m'
-  BLUE='\033[38;5;69m'; BOLD='\033[1m'; DIM='\033[2m'; RESET='\033[0m'
+  PURPLE=$(esc '38;5;141'); GREEN=$(esc '38;5;42'); AMBER=$(esc '38;5;214')
+  BLUE=$(esc '38;5;69'); BOLD=$(esc 1); DIM=$(esc 2); RESET=$(esc 0)
 else
   PURPLE=''; GREEN=''; AMBER=''; BLUE=''; BOLD=''; DIM=''; RESET=''
 fi
