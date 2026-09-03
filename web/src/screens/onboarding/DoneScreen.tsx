@@ -1,11 +1,13 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import { OnboardingLayout, OnboardingPending, OnboardingProblem } from './chrome'
 import { useOnboardingBase } from './shared'
 
 /** Screen 4: summary and the teammate instructions. */
 export function DoneScreen() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const { deployment, org, serverUrl } = useOnboardingBase()
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
   const installCommand = `curl -fsSL ${serverUrl}/install | sh\nrgt auth login ${serverUrl}`
@@ -24,7 +26,7 @@ export function DoneScreen() {
       </div>
     </div>
     <div className="mt-4 flex flex-wrap items-center gap-3">
-      <button type="button" onClick={() => navigate('/')} className="h-10 rounded-[4px] bg-accent px-4 text-[12px] font-medium text-page">Go to re_gent</button>
+      <button type="button" onClick={() => { void queryClient.invalidateQueries({ queryKey: ['auth-me'] }).then(() => navigate('/')) }} className="h-10 rounded-[4px] bg-accent px-4 text-[12px] font-medium text-page">Go to re_gent</button>
       <span className="text-[11px] text-ink-3">Sign-in methods and invitations stay available from Settings any time.</span>
     </div>
   </OnboardingLayout>

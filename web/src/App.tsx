@@ -192,7 +192,7 @@ function CreateOrgScreen({ onReady }: { onReady: () => Promise<unknown> }) {
     <header className="border-b border-line px-5 py-4"><span className="regent-kicker">Get started</span><h1 className="mb-0 mt-1 text-[16px] font-semibold">Create an organization</h1></header>
     <div className="grid gap-3 p-5">
       <label className="text-[11px] font-medium text-ink-2" htmlFor="org-name">Display name<input id="org-name" required value={displayName} onChange={(event) => { const value = event.target.value; setDisplayName(value); if (!slugEdited) setSlug(slugify(value)) }} className="mt-1.5 h-10 w-full rounded-[4px] border-0 bg-field px-3 text-[12.5px] shadow-hairline outline-none focus:ring-1 focus:ring-accent" /></label>
-      <label className="text-[11px] font-medium text-ink-2" htmlFor="org-slug">Slug<input id="org-slug" required pattern="[a-z0-9-]+" value={slug} onChange={(event) => { setSlugEdited(true); setSlug(slugify(event.target.value)) }} className="mt-1.5 h-10 w-full rounded-[4px] border-0 bg-field px-3 font-mono text-[12px] shadow-hairline outline-none focus:ring-1 focus:ring-accent" /></label>
+      <label className="text-[11px] font-medium text-ink-2" htmlFor="org-slug">Slug<input id="org-slug" required pattern="[a-z0-9\\-]+" value={slug} onChange={(event) => { setSlugEdited(true); setSlug(slugify(event.target.value)) }} className="mt-1.5 h-10 w-full rounded-[4px] border-0 bg-field px-3 font-mono text-[12px] shadow-hairline outline-none focus:ring-1 focus:ring-accent" /></label>
       {createOrg.error && <p role="alert" className="m-0 text-[11px] text-red">{createOrg.error.message}</p>}
       <button type="submit" disabled={createOrg.isPending || !slug || !displayName} className="mt-1 h-10 rounded-[4px] bg-accent text-[12px] font-medium text-page disabled:opacity-50">{createOrg.isPending ? 'Creating…' : 'Create organization'}</button>
     </div>
@@ -224,14 +224,15 @@ function InvitationScreen({ token }: { token: string }) {
   if (invitation.error) return <main className="flex min-h-screen items-center justify-center bg-page p-4 text-ink"><p className="max-w-sm text-center text-[12.5px] text-ink-3">{invitationErrorMessage(invitation.error)}</p></main>
 
   const data = invitation.data
-  const providerMethods = data.methods.filter((method) => method !== 'password')
+  const methods = data.methods ?? []
+  const providerMethods = methods.filter((method) => method !== 'password')
   const authStarts = capabilities.data?.auth_starts ?? {}
 
   return <main className="flex min-h-screen items-center justify-center bg-page p-4 text-ink"><section className="w-full max-w-sm overflow-hidden rounded-[8px] border border-line bg-canvas shadow-raised">
     <header className="border-b border-line px-5 py-4"><span className="regent-kicker">Invitation</span><h1 className="mb-0 mt-1 text-[16px] font-semibold">Join {data.org_display_name}</h1><p className="mb-0 mt-1 text-[11.5px] text-ink-3">{data.email ? `For ${data.email}` : data.username ? `For @${data.username}` : 'Accept this invitation to join.'}</p></header>
     <div className="grid gap-3 p-5">
       {providerMethods.map((method) => authStarts[method] && <a key={method} href={withAuthParams(authStarts[method], '/', token)} className="flex h-10 w-full items-center justify-center rounded-[4px] bg-field text-[12.5px] font-medium shadow-hairline hover:bg-hover-2">Continue with {providerLabel(method)}</a>)}
-      {data.methods.includes('password') && <form onSubmit={(event) => { event.preventDefault(); accept.mutate() }} className={`grid gap-1.5 ${providerMethods.length ? 'border-t border-line pt-3' : ''}`}>
+      {methods.includes('password') && <form onSubmit={(event) => { event.preventDefault(); accept.mutate() }} className={`grid gap-1.5 ${providerMethods.length ? 'border-t border-line pt-3' : ''}`}>
         <label className="text-[11px] font-medium text-ink-2" htmlFor="invite-name">Display name<input id="invite-name" required value={displayName} onChange={(event) => setDisplayName(event.target.value)} className="mt-1.5 h-9 w-full rounded-[4px] border-0 bg-field px-2.5 text-[12px] shadow-hairline outline-none focus:ring-1 focus:ring-accent" /></label>
         <label className="text-[11px] font-medium text-ink-2" htmlFor="invite-username">Username<input id="invite-username" required pattern="[a-z0-9][a-z0-9._-]*" value={username} onChange={(event) => setUsername(event.target.value)} className="mt-1.5 h-9 w-full rounded-[4px] border-0 bg-field px-2.5 text-[12px] shadow-hairline outline-none focus:ring-1 focus:ring-accent" /></label>
         <label className="text-[11px] font-medium text-ink-2" htmlFor="invite-password">Password<input id="invite-password" type="password" required minLength={12} value={password} onChange={(event) => setPassword(event.target.value)} className="mt-1.5 h-9 w-full rounded-[4px] border-0 bg-field px-2.5 text-[12px] shadow-hairline outline-none focus:ring-1 focus:ring-accent" /></label>
