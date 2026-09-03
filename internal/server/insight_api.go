@@ -18,6 +18,7 @@ import (
 	"github.com/bonez-io/re_gent/internal/index"
 	"github.com/bonez-io/re_gent/internal/insight"
 	"github.com/bonez-io/re_gent/internal/insight/mirror"
+
 	// The read pipeline registers itself as the insight processor. Every
 	// server composition carries it, so a project enabled on any server is
 	// read the same way.
