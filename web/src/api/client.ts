@@ -86,7 +86,11 @@ export const api = {
   // RepoHome falls back to listRepos when this route answers 404.
   listProjects: () => request<ProjectsResponse>('/api/v1/projects'),
   // Managed only; self-hosted answers 409 single_org since it always has exactly one.
-  createOrg: (slug: string, displayName: string) => request<CreateOrgResponse>('/api/v1/orgs', { method: 'POST', body: JSON.stringify({ slug, display_name: displayName }) }),
+  // The contract returns the organization itself; older managed builds wrap it in `org`.
+  createOrg: async (slug: string, displayName: string) => {
+    const response = await request<CreateOrgResponse | { org: CreateOrgResponse }>('/api/v1/orgs', { method: 'POST', body: JSON.stringify({ slug, display_name: displayName }) })
+    return 'org' in response ? response.org : response
+  },
   invitation: (token: string) => request<InvitationResponse>(`/api/v1/invitations/${encodeURIComponent(token)}`),
   acceptInvitation: async (token: string, body: { display_name: string; username?: string; password?: string }) => rememberCSRFField(await request<AcceptInvitationResponse>(`/api/v1/invitations/${encodeURIComponent(token)}/accept`, { method: 'POST', body: JSON.stringify(body) })),
   approveDevice: (userCode: string) => request<undefined>('/api/v1/auth/device/approve', { method: 'POST', body: JSON.stringify({ user_code: userCode, approve: true }) }),

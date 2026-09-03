@@ -12,6 +12,8 @@ const segmentFor: Record<string, string> = {
 
 export function onboardingPathFor(org: { slug: string; onboarding?: string }, deployment: string): string {
   const base = deployment === 'managed' ? `/o/${encodeURIComponent(org.slug)}/setup` : '/setup'
+  // An organization that does not report a state is a new one: it has
+  // nothing connected yet, so the wizard starts at "connect", never at "done".
   const segment = org.onboarding !== undefined ? segmentFor[org.onboarding] : undefined
-  return `${base}${segment ?? '/done'}`
+  return `${base}${segment ?? '/connect'}`
 }
