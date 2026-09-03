@@ -74,11 +74,12 @@ func SyncCmd() *cobra.Command {
 // it works in local mode too: the baseline this writes is what makes the
 // Files view non-empty before the first captured agent step, and that is
 // just as true for a project that has never configured a server. In server
-// mode, once the baseline is written, this delegates to the same plain push
-// runPush uses so it delivers immediately when the server is reachable —
-// mirroring `rgt sync`'s own contract for a command a person is waiting on —
-// while runWorkspaceSync itself never delivers eagerly (see its doc comment):
-// only one place gets to report "delivered".
+// mode, once the baseline is written, this delivers it immediately by
+// pushing refs/sync/workspace explicitly — the same targeted push an
+// explicit `rgt sync <ref>` makes — mirroring `rgt sync`'s own contract for a
+// command a person is waiting on, while runWorkspaceSync itself never
+// delivers eagerly (see its doc comment): only one place gets to report
+// "delivered".
 func runSyncWorkspace(out io.Writer, cwd string) error {
 	res, err := runWorkspaceSync(cwd)
 	if err != nil {
