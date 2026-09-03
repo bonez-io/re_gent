@@ -1,4 +1,4 @@
-import type { AuthMeResponse, AuthSessionResponse, BlameResponse, BootstrapResponse, CapabilitiesResponse, CreateRepoResponse, CreateTokenResponse, CreateUserResponse, FilesResponse, LogResponse, LogStep, MembersResponse, ProjectRole, RepoListResponse, SessionsResponse, StatusResponse, StepDiffResponse, TokensResponse, TranscriptResponse, UsersResponse } from './types'
+import type { AcceptInvitationResponse, AuthMeResponse, AuthSessionResponse, BlameResponse, CapabilitiesResponse, CreateOrgResponse, CreateRepoResponse, CreateTokenResponse, CreateUserResponse, FilesResponse, InvitationResponse, LogResponse, LogStep, MembersResponse, PasswordLoginResponse, ProjectRole, ProjectsResponse, RepoListResponse, SessionsResponse, StatusResponse, StepDiffResponse, TokensResponse, TranscriptResponse, UsersResponse } from './types'
 import {
   demoRepoId,
   mockBlameResponse,
@@ -20,8 +20,10 @@ export class OfflineError extends Error {
 }
 
 let csrfToken = ''
+export function currentCSRF() { return csrfToken }
+export function rememberCSRFToken(token?: string) { if (token) csrfToken = token }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response
   try {
     response = await fetch(path, {
@@ -46,6 +48,11 @@ const rememberCSRF = <T extends { csrf_token?: string }>(response: T) => {
   if (response.csrf_token) csrfToken = response.csrf_token
   return response
 }
+// Password login and invitation acceptance return the token under `csrf`, not `csrf_token`.
+const rememberCSRFField = <T extends { csrf?: string }>(response: T) => {
+  rememberCSRFToken(response.csrf)
+  return response
+}
 
 const repoPath = (repoId: string) => `/${encodeURIComponent(repoId)}/api`
 const demoOnly = (repoId: string) => repoId === demoRepoId
@@ -59,7 +66,8 @@ export const api = {
   capabilities: () => request<CapabilitiesResponse>('/api/v1/capabilities'),
   me: async () => rememberCSRF(await request<AuthMeResponse>('/api/v1/auth/me')),
   login: async (token: string) => rememberCSRF(await request<AuthSessionResponse>('/api/v1/auth/session', { method: 'POST', headers: { Authorization: `Bearer ${token}` } })),
-  bootstrap: async (bootstrapToken: string, username: string, displayName: string) => rememberCSRF(await request<BootstrapResponse>('/api/v1/auth/bootstrap', { method: 'POST', headers: { Authorization: `Bootstrap ${bootstrapToken}` }, body: JSON.stringify({ username, display_name: displayName }) })),
+  // Self-hosted only; rate limited. `password_change_required` stays true while the initial password is in force.
+  passwordLogin: async (username: string, password: string) => rememberCSRFField(await request<PasswordLoginResponse>('/api/v1/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) })),
   logout: async () => { await request<undefined>('/api/v1/auth/session', { method: 'DELETE' }); csrfToken = '' },
   tokens: () => request<TokensResponse>('/api/v1/auth/tokens'),
   createToken: (name: string, expiresInDays: number) => request<CreateTokenResponse>('/api/v1/auth/tokens', { method: 'POST', body: JSON.stringify({ name, expires_in_days: expiresInDays }) }),
@@ -74,6 +82,14 @@ export const api = {
     return { repos: showLocalDemoRepo ? [demoRepoId, ...repos.repos.filter((repo) => repo !== demoRepoId)] : repos.repos }
   },
   createRepo: (repoId: string) => request<CreateRepoResponse>('/repos', { method: 'POST', body: JSON.stringify({ repo_id: repoId }) }),
+  // Named projects with display names; older servers only expose /repos (bare ids), so
+  // RepoHome falls back to listRepos when this route answers 404.
+  listProjects: () => request<ProjectsResponse>('/api/v1/projects'),
+  // Managed only; self-hosted answers 409 single_org since it always has exactly one.
+  createOrg: (slug: string, displayName: string) => request<CreateOrgResponse>('/api/v1/orgs', { method: 'POST', body: JSON.stringify({ slug, display_name: displayName }) }),
+  invitation: (token: string) => request<InvitationResponse>(`/api/v1/invitations/${encodeURIComponent(token)}`),
+  acceptInvitation: async (token: string, body: { display_name: string; username?: string; password?: string }) => rememberCSRFField(await request<AcceptInvitationResponse>(`/api/v1/invitations/${encodeURIComponent(token)}/accept`, { method: 'POST', body: JSON.stringify(body) })),
+  approveDevice: (userCode: string) => request<undefined>('/api/v1/auth/device/approve', { method: 'POST', body: JSON.stringify({ user_code: userCode, approve: true }) }),
   sessions: (repoId: string) => demoOnly(repoId) ? Promise.resolve(mockSessionsResponse) : request<SessionsResponse>(`${repoPath(repoId)}/sessions`),
   log: (repoId: string, sessionId: string) => demoOnly(repoId) ? Promise.resolve({ ...mockLogResponse, session_id: sessionId }) : request<LogResponse>(`${repoPath(repoId)}/log?session=${encodeURIComponent(sessionId)}&limit=500`),
   transcript: (repoId: string, sessionId: string) => demoOnly(repoId) ? Promise.resolve({ ...mockTranscriptResponse, session: mockSessionsResponse.sessions.find((session) => session.session_id === sessionId) || mockTranscriptResponse.session }) : request<TranscriptResponse>(`${repoPath(repoId)}/transcript?session=${encodeURIComponent(sessionId)}`),

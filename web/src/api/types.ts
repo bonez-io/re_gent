@@ -4,11 +4,19 @@ import type { FileDiff } from '../components/FileDiffView'
 export type RepoListResponse = { repos: string[] }
 export type CreateRepoResponse = { repo_id: string; created: boolean }
 
+/** GET /api/v1/projects — the id/display-name project picker source; falls back to /repos on 404. */
+export type ProjectSummary = { id: string; display_name: string }
+export type ProjectsResponse = { projects: ProjectSummary[] }
+
+export type OnboardingState = 'admin_password' | 'connect' | 'users' | 'done'
+
 export type CapabilitiesResponse = {
   deployment: 'self-hosted' | 'managed'
   api_version: string
   auth_methods: string[]
-  bootstrap_required: boolean
+  auth_starts?: Record<string, string>
+  /** Self-hosted only; absent once onboarding is done. */
+  onboarding?: OnboardingState
   features: string[]
 }
 
@@ -22,9 +30,25 @@ export type AccessUser = {
 
 export type ProjectRole = 'owner' | 'admin' | 'writer' | 'reader'
 export type ProjectMember = AccessUser & { role: ProjectRole }
-export type AuthMeResponse = { viewer: AccessUser; capabilities: string[]; auth_method: string; csrf_token?: string }
+
+/** The RFC 0005 Appendix A shape returned by GET /api/v1/auth/me. */
+export type AuthUser = { id: string; username?: string; display_name: string; email?: string }
+export type AuthOrg = { slug: string; display_name: string; role: ProjectRole | string; onboarding?: OnboardingState }
+export type AuthMeResponse = {
+  user: AuthUser
+  /** Legacy alias for `user`, kept for older servers and existing UI reads. */
+  viewer?: AccessUser
+  orgs: AuthOrg[]
+  last_org?: string
+  capabilities?: string[]
+  auth_method?: string
+  csrf_token?: string
+}
 export type AuthSessionResponse = { viewer: AccessUser; csrf_token: string }
-export type BootstrapResponse = AuthSessionResponse & { token: string }
+export type PasswordLoginResponse = { user: AuthUser; csrf: string; password_change_required?: boolean }
+export type CreateOrgResponse = AuthOrg
+export type InvitationResponse = { org_display_name: string; email?: string; username?: string; methods: string[] }
+export type AcceptInvitationResponse = { user: AuthUser; csrf: string; org: AuthOrg }
 export type UsersResponse = { users: AccessUser[] }
 export type MembersResponse = { members: ProjectMember[] }
 export type CreateUserResponse = { user: AccessUser; initial_token: string }
