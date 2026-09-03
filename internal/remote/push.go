@@ -474,7 +474,7 @@ func fetchHistory(ctx context.Context, cache *store.Store, client Client, tip st
 	fetched := make(map[store.Hash]bool)
 
 	for current := tip; current != ""; {
-		n, err := fetchObject(ctx, cache, client, current, fetched)
+		n, err := FetchObject(ctx, cache, client, current, fetched)
 		objects += n
 		if err != nil {
 			return objects, steps, err
@@ -490,7 +490,7 @@ func fetchHistory(ctx context.Context, cache *store.Store, client Client, tip st
 		}
 
 		// The tree must be local before its entries can be enumerated.
-		n, err = fetchObject(ctx, cache, client, step.Tree, fetched)
+		n, err = FetchObject(ctx, cache, client, step.Tree, fetched)
 		objects += n
 		if err != nil {
 			return objects, steps, err
@@ -501,7 +501,7 @@ func fetchHistory(ctx context.Context, cache *store.Store, client Client, tip st
 			return objects, steps, err
 		}
 		for _, h := range list {
-			n, err := fetchObject(ctx, cache, client, h, fetched)
+			n, err := FetchObject(ctx, cache, client, h, fetched)
 			objects += n
 			if err != nil {
 				return objects, steps, err
@@ -533,7 +533,15 @@ func casLocalRef(cache *store.Store, refName string, tip store.Hash) error {
 	return nil
 }
 
-func fetchObject(ctx context.Context, cache *store.Store, client Client, h store.Hash, fetched map[store.Hash]bool) (int, error) {
+// FetchObject downloads one object from client into cache if cache does not
+// already have it, verifying its hash. fetched (may be nil-safe via an empty
+// map) dedupes repeated calls for the same hash within one logical fetch —
+// pass a fresh map per call when there is no such batch to dedupe against.
+// It is the single-object primitive uploadRange/fetchHistory build on, and is
+// exported so a caller that wants to hydrate a specific object without
+// pulling a whole ref's history (see internal/cli's workspace-sync parent
+// chaining) can reuse the exact same verified-write path.
+func FetchObject(ctx context.Context, cache *store.Store, client Client, h store.Hash, fetched map[store.Hash]bool) (int, error) {
 	if h == "" || fetched[h] {
 		return 0, nil
 	}

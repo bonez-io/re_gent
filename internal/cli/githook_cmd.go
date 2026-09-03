@@ -55,21 +55,22 @@ func GitHookCmd() *cobra.Command {
 }
 
 // runGitPostCommitHook is the post-commit behaviour: refresh the workspace
-// baseline, bounded, so the Files view reflects what a commit just changed
-// without a live agent turn having to touch those files first. It is
-// deliberately simpler than runGitPrePushHook: there is no server-mode queue
-// to drain here — the workspace sync's own delivery already handles that in
-// server mode (see runWorkspaceSyncServerMode) — so a commit's only job is to
-// keep the baseline current.
+// baseline and, in server mode, deliver it — bounded, so the Files view
+// reflects what a commit just changed without a live agent turn having to
+// touch those files first, and without waiting on an unreachable server.
 //
 // The installed script backgrounds this whole process (see
-// postCommitHookScript), so the bounded wait here is belt and braces: even if
-// something someday invokes this synchronously, `git commit` still cannot be
-// made to wait past workspaceSyncHookBudget.
+// postCommitHookScript), so `git commit` itself never waits on any of this —
+// but the process's own life still ends the moment this function returns
+// (see boundedRun's doc comment), which is why write and delivery share one
+// bounded window here rather than two: there is no "resume in the
+// background" beyond it.
 //
-// It writes at most one line, only when there is something worth saying
-// (a change was recorded); silence on every other outcome — no-op, timeout,
-// error — matches the pre-push hook's "silence never means failure" contract.
+// It writes at most one line, and only for the write succeeding — never
+// for delivery, success or failure: silence on delivery matches the
+// pre-push hook's "silence never means failure" contract, and a missed
+// delivery here is picked up by the very next post-commit, the next
+// pre-push, or `rgt sync --workspace`.
 func runGitPostCommitHook(out io.Writer, env func(string) (string, bool)) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -86,13 +87,11 @@ func runGitPostCommitHook(out io.Writer, env func(string) (string, bool)) {
 		return
 	}
 
-	res, ok, err := runWorkspaceSyncBounded(cwd, remote.Env(env), workspaceSyncHookBudget)
-	if !ok {
-		// Still running in the background; nothing to report yet, and nothing
-		// was lost — see runWorkspaceSyncBounded.
-		return
-	}
-	if err != nil || !res.Wrote {
+	var res workspaceSyncResult
+	finished := boundedRun(workspaceSyncHookBudget, func() {
+		res, _, _ = syncWorkspaceAndDeliver(cwd, remote.Env(env), workspaceSyncHookBudget)
+	})
+	if !finished || !res.Wrote {
 		return
 	}
 	fmt.Fprintf(out, "Regent: workspace baseline updated (%d file(s))\n", res.FileCount)
@@ -127,14 +126,17 @@ func runGitPrePushHook(out io.Writer, env func(string) (string, bool), now func(
 		return
 	}
 
-	// Refresh the workspace baseline before draining the queue: a push is as
-	// good a moment as a commit to notice the working tree moved, and unlike
-	// the delivery below this runs in local mode too — it resolves its own
-	// store regardless of server configuration, so it is not behind the
-	// cfg.Enabled() gate that follows. Bounded and best-effort: a failure or a
-	// timeout here must never turn into an output line, let alone abort the
-	// rest of this hook.
-	_, _, _ = runWorkspaceSyncBounded(cwd, remote.Env(env), workspaceSyncHookBudget)
+	// Refresh the workspace baseline — and, in server mode, deliver it — before
+	// draining the session queue below: a push is as good a moment as a commit
+	// to notice the working tree moved. This runs in local mode too (it
+	// resolves its own store regardless of server configuration), so it is not
+	// behind the cfg.Enabled() gate that follows. Bounded and silent: a
+	// failure or a timeout here must never turn into an output line, let
+	// alone abort the rest of this hook — see boundedRun's doc comment for
+	// what "bounded" actually guarantees for a process this short-lived.
+	_ = boundedRun(workspaceSyncHookBudget, func() {
+		_, _, _ = syncWorkspaceAndDeliver(cwd, remote.Env(env), workspaceSyncHookBudget)
+	})
 
 	cfg, err := remote.LoadConfigForCWD(remote.Env(env), cwd)
 	if err != nil || !cfg.Enabled() {

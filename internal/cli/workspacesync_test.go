@@ -6,7 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/bonez-io/re_gent/internal/capture"
+	"github.com/bonez-io/re_gent/internal/remote"
 	"github.com/bonez-io/re_gent/internal/remotetest"
 	"github.com/bonez-io/re_gent/internal/store"
 )
@@ -180,5 +183,101 @@ func TestSyncWorkspaceCommandDeliversInServerMode(t *testing.T) {
 	}
 	if srv.Ref("sync/workspace") == "" {
 		t.Fatal("server never received the workspace-sync ref")
+	}
+}
+
+// TestDeliverWorkspaceSyncServerMode_DeliversToServer is the fix's core
+// promise: rgt init/connect's first-run baseline (deliverWorkspaceSyncServerMode,
+// which runBaselineSync calls) must not just write the sync step into the
+// local cache — it must reach the server too. Before this fix it only did
+// the former, so the server's Files view stayed empty after connect even
+// though the local cache had a perfectly good baseline.
+func TestDeliverWorkspaceSyncServerMode_DeliversToServer(t *testing.T) {
+	srv := remotetest.New()
+	t.Cleanup(srv.Close)
+
+	cfg := remote.Config{ServerURL: srv.URL(), RepoID: "deliver-repo", CacheDir: t.TempDir(), Timeout: 5 * time.Second}
+	root := t.TempDir()
+	writeCliTestFile(t, root, "a.txt", "hello\n")
+
+	res, writeErr, deliverErr := deliverWorkspaceSyncServerMode(root, cfg, workspaceSyncHookBudget)
+	if writeErr != nil {
+		t.Fatalf("write: %v", writeErr)
+	}
+	if deliverErr != nil {
+		t.Fatalf("deliver: %v", deliverErr)
+	}
+	if !res.Wrote || res.FileCount != 1 {
+		t.Fatalf("result = %+v, want wrote=true fileCount=1", res)
+	}
+
+	serverTip := srv.Ref(capture.WorkspaceSyncRef)
+	if serverTip == "" {
+		t.Fatal("server never received refs/sync/workspace")
+	}
+	if string(serverTip) != res.StepHash {
+		t.Fatalf("server tip = %s, want %s", serverTip, res.StepHash)
+	}
+	if _, ok := srv.Objects()[serverTip]; !ok {
+		t.Fatal("server does not actually hold the step object it points at")
+	}
+}
+
+// TestDeliverWorkspaceSyncServerMode_SecondMachineChainsOntoFirst is the
+// convergence property the parent-hint mechanism exists for: two machines
+// that have never talked to each other before both deliver a baseline to the
+// same server, and the second one's step chains onto the first's instead of
+// rooting an incompatible history — so the second delivery succeeds rather
+// than diverging.
+func TestDeliverWorkspaceSyncServerMode_SecondMachineChainsOntoFirst(t *testing.T) {
+	srv := remotetest.New()
+	t.Cleanup(srv.Close)
+
+	cfg1 := remote.Config{ServerURL: srv.URL(), RepoID: "converge-repo", CacheDir: t.TempDir(), Timeout: 5 * time.Second}
+	root1 := t.TempDir()
+	writeCliTestFile(t, root1, "a.txt", "machine one\n")
+	res1, writeErr1, deliverErr1 := deliverWorkspaceSyncServerMode(root1, cfg1, workspaceSyncHookBudget)
+	if writeErr1 != nil || deliverErr1 != nil {
+		t.Fatalf("machine one: write=%v deliver=%v", writeErr1, deliverErr1)
+	}
+	if !res1.Wrote {
+		t.Fatal("machine one: expected a write")
+	}
+
+	// A second machine, with its own cache and its own (unrelated) working
+	// tree, never having synced with the first.
+	cfg2 := remote.Config{ServerURL: srv.URL(), RepoID: "converge-repo", CacheDir: t.TempDir(), Timeout: 5 * time.Second}
+	root2 := t.TempDir()
+	writeCliTestFile(t, root2, "b.txt", "machine two\n")
+	res2, writeErr2, deliverErr2 := deliverWorkspaceSyncServerMode(root2, cfg2, workspaceSyncHookBudget)
+	if writeErr2 != nil {
+		t.Fatalf("machine two write: %v", writeErr2)
+	}
+	if deliverErr2 != nil {
+		t.Fatalf("machine two deliver: %v (this is exactly the false-divergence bug this fix closes)", deliverErr2)
+	}
+	if !res2.Wrote {
+		t.Fatal("machine two: expected a write")
+	}
+
+	cacheDir2, err := remote.CacheDirFor(cfg2)
+	if err != nil {
+		t.Fatalf("CacheDirFor: %v", err)
+	}
+	cache2, err := store.Open(cacheDir2)
+	if err != nil {
+		t.Fatalf("open machine two's cache: %v", err)
+	}
+	step2, err := cache2.ReadStep(store.Hash(res2.StepHash))
+	if err != nil {
+		t.Fatalf("read machine two's step: %v", err)
+	}
+	if step2.Parent != store.Hash(res1.StepHash) {
+		t.Fatalf("machine two's Parent = %s, want machine one's delivered step %s (a fresh root would mean the two never converged)",
+			step2.Parent, res1.StepHash)
+	}
+
+	if srv.Ref(capture.WorkspaceSyncRef) != store.Hash(res2.StepHash) {
+		t.Fatalf("server tip = %s, want machine two's step %s", srv.Ref(capture.WorkspaceSyncRef), res2.StepHash)
 	}
 }

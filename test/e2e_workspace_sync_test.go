@@ -209,3 +209,46 @@ func createTestRepo(t *testing.T, ts *httptest.Server, repoID string) int {
 	_, _ = io.Copy(io.Discard, resp.Body)
 	return resp.StatusCode
 }
+
+// TestE2EConnectDeliversWorkspaceBaselineToServer is the regression test for
+// the gap closed by this fix: rgt connect's first-run baseline snapshot must
+// not just sit in the machine-local server-mode cache — it must reach the
+// server, so GET /{repo}/api/files (no params) lists it immediately, with no
+// agent ever having run a turn. Before the fix, runBaselineSync wrote the
+// sync step locally and stopped there: the server's Files view stayed empty
+// after connect, the exact symptom issue #106 is about. It runs at the real
+// binary / real server seam (see the doc comment atop e2e_server_test.go)
+// because that is the only place "did connect actually deliver it" can be
+// asked honestly.
+func TestE2EConnectDeliversWorkspaceBaselineToServer(t *testing.T) {
+	rgt := buildTestBinary(t)
+	srv := startTestServer(t)
+
+	project := filepath.Join(t.TempDir(), "baseline-project")
+	mustMkdirAll(t, project)
+	mustMkdirAll(t, filepath.Join(project, ".git"))
+	writeTestFile(t, project, "README.md", "hello\n")
+	writeTestFile(t, project, "main.go", "package main\n")
+
+	env := hermeticEnv(t, srv)
+	out := e2eRunEnv(t, rgt, project, env, nil, "connect", srv.URL, "--no-git-hook")
+	assertContains(t, out, "Baseline snapshot", "connect output")
+
+	key := repoIDOf(t, project)
+	if key == "" {
+		t.Fatalf("connect wrote no project identity into .regent/config.toml:\n%s", out)
+	}
+
+	var filesResp filesResponseE2E
+	getJSON(t, srv.URL+"/"+key+"/api/files", &filesResp)
+	if filesResp.Source != "sync" {
+		t.Fatalf("files response = %+v, want source=sync (the baseline reached the server)\nconnect output:\n%s", filesResp, out)
+	}
+	// >=2, not ==2: connect's own scaffolding (the bootstrap skill under
+	// .claude/skills/, etc.) is part of the same working tree the baseline
+	// snapshots, so the count legitimately exceeds the two files this test
+	// wrote. What matters here is that the server has *a* baseline at all.
+	if filesResp.TotalFiles < 2 {
+		t.Fatalf("files response = %+v, want at least 2 files", filesResp)
+	}
+}

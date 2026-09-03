@@ -55,10 +55,54 @@ const (
 // whether or not a new step was needed, so a caller can report the baseline's
 // size even on a no-op run.
 func WorkspaceSync(s *store.Store, cwd string) (stepHash store.Hash, wrote bool, fileCount int, err error) {
+	return workspaceSync(s, cwd, "")
+}
+
+// WorkspaceSyncOnto is WorkspaceSync, except the new step chains onto
+// parentHint instead of the local refs/sync/workspace tip, provided
+// parentHint's step object is actually present in s.
+//
+// It exists for server mode: every machine that has ever run `rgt
+// init`/`rgt connect` or fired a git hook otherwise roots its own
+// refs/sync/workspace chain locally, with no shared ancestor across
+// machines — harmless for the local ref itself (see the comment on
+// Spool.Status, internal/remote/spool.go, for why that ref is never
+// auto-delivered), but it means every subsequent explicit push conflicts
+// with whatever another machine already pushed. A server-mode caller
+// resolves the server's current tip first (fetching its step and tree with
+// remote.FetchObject if missing locally — see resolveServerSyncParent,
+// internal/cli/workspacesync.go) and passes it here, so the new step's own
+// Parent chains onto shared history instead of rooting yet another
+// incompatible one. The eventual push then succeeds because the pushed
+// step's ancestry already contains the tip the server reported.
+//
+// parentHint is used only to choose the new step's Parent; the CAS that
+// advances the *local* ref still compares against whatever the local ref
+// actually held, exactly as WorkspaceSync's did — a caller that mismeasured
+// or raced the server's tip only affects which lineage the next step
+// records itself onto, never the safety of the local ref update. When
+// parentHint's step is not present locally (network was down, or the
+// caller passed "" because it had nothing to offer), this behaves exactly
+// like WorkspaceSync.
+func WorkspaceSyncOnto(s *store.Store, cwd string, parentHint store.Hash) (stepHash store.Hash, wrote bool, fileCount int, err error) {
+	return workspaceSync(s, cwd, parentHint)
+}
+
+func workspaceSync(s *store.Store, cwd string, parentHint store.Hash) (stepHash store.Hash, wrote bool, fileCount int, err error) {
 	for attempt := 0; attempt < maxRefUpdateAttempts; attempt++ {
-		parentHash, readErr := s.ReadRef(WorkspaceSyncRef)
+		localTip, readErr := s.ReadRef(WorkspaceSyncRef)
 		if readErr != nil && !errors.Is(readErr, fs.ErrNotExist) {
 			return "", false, 0, fmt.Errorf("read workspace sync ref: %w", readErr)
+		}
+
+		parentHash := localTip
+		if parentHint != "" {
+			if _, hintErr := s.ReadStep(parentHint); hintErr == nil {
+				parentHash = parentHint
+			}
+			// parentHint named a step this store does not actually have
+			// (the caller's fetch failed, or never ran): fall back to the
+			// local tip, same as if no hint had been offered at all.
 		}
 
 		treeHash, snapErr := snapshotWorkspace(s, cwd)
@@ -100,7 +144,13 @@ func WorkspaceSync(s *store.Store, cwd string) (stepHash store.Hash, wrote bool,
 			LogHookError(s.Root, fmt.Sprintf("blame workspace sync step %s: %v", newStepHash, blameErr))
 		}
 
-		if updateErr := s.UpdateRef(WorkspaceSyncRef, parentHash, newStepHash); updateErr != nil {
+		// The local ref's own CAS always compares against what it actually
+		// held (localTip), not against parentHash: the step's lineage and
+		// the local ref's compare-and-swap are two different questions.
+		// Using parentHash here would spuriously conflict (or worse,
+		// silently fail to notice a real local race) whenever a server
+		// hint diverged from the local tip.
+		if updateErr := s.UpdateRef(WorkspaceSyncRef, localTip, newStepHash); updateErr != nil {
 			if errors.Is(updateErr, store.ErrRefConflict) {
 				time.Sleep(refUpdateBackoff(attempt))
 				continue

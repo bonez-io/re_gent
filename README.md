@@ -326,6 +326,11 @@ something to see immediately, and it stays current afterwards:
 - A `post-commit` git hook refreshes it automatically in the background after every commit.
 - The `pre-push` git hook refreshes it too, before draining the server-mode delivery queue.
 
+In server mode, each of these also delivers the baseline to the server right after writing it —
+bounded, and silent on failure in the two git hooks (the next commit, push, or `rgt sync --workspace`
+tries again). Every machine's baseline chains onto whatever the server already has instead of
+starting its own incompatible history, so this converges rather than conflicting across teammates.
+
 The baseline is a step like any other, chained onto its own ref (`refs/sync/workspace`) rather than
 a session's — `rgt sessions` and the sessions API never list it. Its `origin` is `sync`, so `rgt
 blame` and the Files/blame APIs can distinguish "outside an agent turn" from an agent's own work, and
