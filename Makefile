@@ -118,7 +118,7 @@ install-dist: dist
 # dependency. Remote deployment, TLS, and Terraform remain out of scope here;
 # see docker-compose.production.yml and docs/self-hosted.md for those.
 server:
-	docker compose up -d --build
+	RGT_VERSION=$(VERSION) docker compose up -d --build
 	@echo ""
 	@echo "re_gent server is up on http://localhost:$${REGENT_PORT:-7654} (health: /healthz)."
 	@echo "re_gent web UI is up on http://localhost:8080."

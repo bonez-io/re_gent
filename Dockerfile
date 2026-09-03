@@ -12,8 +12,12 @@ RUN go mod download
 
 COPY . .
 # Static, CGO-free binary (matches .goreleaser.yaml: CGO_ENABLED=0).
-RUN GOOS="$TARGETOS" GOARCH="$TARGETARCH" CGO_ENABLED=0 go build -trimpath -o /out/rgt ./cmd/rgt \
- && GOOS="$TARGETOS" GOARCH="$TARGETARCH" CGO_ENABLED=0 go build -trimpath -o /out/regent-server ./cmd/regent-server
+# Version stamp for `rgt version` and the server banner; `make server` passes
+# the git describe, a bare `docker compose up --build` reports "dev".
+ARG RGT_VERSION=dev
+ENV RGT_LDFLAGS="-X github.com/bonez-io/re_gent/internal/cli.Version=$RGT_VERSION"
+RUN GOOS="$TARGETOS" GOARCH="$TARGETARCH" CGO_ENABLED=0 go build -trimpath -ldflags "$RGT_LDFLAGS" -o /out/rgt ./cmd/rgt \
+ && GOOS="$TARGETOS" GOARCH="$TARGETARCH" CGO_ENABLED=0 go build -trimpath -ldflags "$RGT_LDFLAGS" -o /out/regent-server ./cmd/regent-server
 
 # Cross-compile per-OS/arch binaries so /install can hand every teammate a
 # runnable rgt, not only those matching the server's platform. Served from
@@ -21,7 +25,7 @@ RUN GOOS="$TARGETOS" GOARCH="$TARGETARCH" CGO_ENABLED=0 go build -trimpath -o /o
 RUN set -eu; mkdir -p /out/binaries; \
     for t in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64; do \
       os="${t%/*}"; arch="${t#*/}"; ext=""; [ "$os" = windows ] && ext=".exe"; \
-      GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -trimpath \
+      GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -ldflags "$RGT_LDFLAGS" \
         -o "/out/binaries/rgt_${os}_${arch}${ext}" ./cmd/rgt; \
     done
 

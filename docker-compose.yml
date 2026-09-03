@@ -21,7 +21,10 @@
 #   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 services:
   server:
-    build: .
+    build:
+      context: .
+      args:
+        RGT_VERSION: ${RGT_VERSION:-dev}
     image: regent-server:latest
     networks:
       default:
