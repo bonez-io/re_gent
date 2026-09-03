@@ -4,7 +4,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { api } from '../../api/client'
 import type { FeedStep } from '../../api/types'
 import { OnboardingLayout, OnboardingPending, OnboardingProblem } from './chrome'
-import { onboardingPathFor } from './path'
+import { dismissSetupGate, onboardingPathFor } from './path'
 import { useOnboardingBase } from './shared'
 
 const HELLO_FILE = /(^|\/)hello_world\.py$/i
@@ -79,6 +79,7 @@ export function TutorialScreen() {
   const goToFile = () => {
     if (!repoId || !stage3 || !targetPath) return
     writeTutorialStatus(repoId, 'completed')
+    dismissSetupGate(slug ?? '')
     navigate(`/repos/${encodeURIComponent(repoId)}/files?step=${encodeURIComponent(stage3.hash)}&path=${encodeURIComponent(targetPath)}`)
   }
   const goToFileRef = useRef(goToFile)

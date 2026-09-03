@@ -1093,6 +1093,15 @@ func changedFiles(st *store.Store, step *store.Step) []string {
 				}
 			}
 		}
+	} else if step.Origin != "sync" { // capture.SyncOrigin; the server package does not import capture
+		// A session's first step has no parent, so without a base it would
+		// report the whole workspace as changed. The workspace baseline
+		// (refs/sync/workspace) is the best available "before" for it.
+		if _, tree := loadSyncBaselineTree(st); tree != nil {
+			for _, entry := range tree.Entries {
+				previous[entry.Path] = entry
+			}
+		}
 	}
 	var out []string
 	for _, entry := range current.Entries {

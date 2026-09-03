@@ -27,3 +27,15 @@ export function onboardingPathFor(org: { slug: string; onboarding?: string }, de
 export function tutorialPathFor(org: { slug: string }, deployment: string): string {
   return `${baseFor(org, deployment)}/tutorial`
 }
+
+// Leaving the wizard on purpose (the tutorial's redirect into the captured file, or
+// "Go to re_gent") must not bounce the user straight back in while the organization's
+// onboarding state is still short of "done". Remembered per org in localStorage; the
+// wizard stays reachable by its URL and from Settings.
+const setupGateKey = (slug: string) => `regent:setup:dismissed:${slug || 'self-hosted'}`
+export function dismissSetupGate(slug: string) {
+  try { localStorage.setItem(setupGateKey(slug), '1') } catch { /* storage unavailable: the gate may bounce once more */ }
+}
+export function setupGateDismissed(slug: string): boolean {
+  try { return localStorage.getItem(setupGateKey(slug)) === '1' } catch { return false }
+}

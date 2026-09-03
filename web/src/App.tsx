@@ -14,7 +14,7 @@ import { ResizeHandle } from './components/ResizeHandle'
 import { SessionSearch } from './components/SessionSearch'
 import { TeamDashboard } from './components/TeamDashboard'
 import { usePersistentPanelSize } from './lib/panelSize'
-import { OnboardingRoutes, onboardingPathFor } from './screens/onboarding'
+import { OnboardingRoutes, onboardingPathFor, setupGateDismissed } from './screens/onboarding'
 import { SettingsScreen, type SettingsSection } from './screens/SettingsScreen'
 import { SkillsScreen } from './screens/SkillsScreen'
 
@@ -85,7 +85,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   // organization is still being set up by someone else.
   const canRunSetup = !orgs[0] || ['owner', 'admin'].includes(orgs[0].role ?? '')
   const onboardingState = caps.deployment === 'managed' ? orgs[0]?.onboarding : caps.onboarding
-  if (canRunSetup && onboardingState && onboardingState !== 'done' && !isSetupPath(location.pathname)) {
+  if (canRunSetup && onboardingState && onboardingState !== 'done' && !isSetupPath(location.pathname) && !setupGateDismissed(orgs[0]?.slug ?? '')) {
     const org = orgs[0]
     return <Navigate replace to={org ? onboardingPathFor(org, caps.deployment) : '/setup'} />
   }

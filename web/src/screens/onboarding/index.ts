@@ -1,2 +1,2 @@
 export { OnboardingRoutes } from './OnboardingRoutes'
-export { onboardingPathFor } from './path'
+export { onboardingPathFor, setupGateDismissed, dismissSetupGate } from './path'
