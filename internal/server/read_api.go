@@ -222,6 +222,8 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request, repoID string
 		s.handleAPIBlame(w, r, repoID, st)
 	case len(segs) == 3 && segs[2] == "diff":
 		s.handleAPIDiff(w, r, repoID, st)
+	case len(segs) == 3 && segs[2] == "feed":
+		s.handleAPIFeed(w, r, repoID, st)
 	case len(segs) == 5 && segs[2] == "commits" && segs[4] == "steps":
 		s.handleAPICommitSteps(w, r, repoID, st, segs[3])
 	default:

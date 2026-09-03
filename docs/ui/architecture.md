@@ -170,9 +170,18 @@ server at runtime, not from `VITE_*` build flags.
 
 ## Versioned API shape
 
-Existing `/repos`, `/{repo}/api/sessions`, and `/{repo}/api/log` endpoints are
-useful prototypes but are not the UI contract. Issue #49 should expose the
-read-only surface under `/api/v1`:
+Existing `/repos`, `/{repo}/api/sessions`, `/{repo}/api/log`, and
+`/{repo}/api/feed` endpoints are useful prototypes but are not the UI
+contract. `/{repo}/api/feed?since=<cursor>&timeout=<seconds>` (issue #107) is
+the interactive first-run tutorial's long-poll: with no `since` it reports the
+current cursor immediately; with `since` it returns any steps recorded across
+every session (and sync) ref tip after that cursor — each with its changed
+files and originating user prompt — or waits up to `timeout` seconds (default
+20, max 25) and returns an empty list on timeout. It is served by
+`internal/server` beside `/api/files` and `/api/blame` and inherits the same
+`history:read`/`history:write` classification as the rest of `/{project}/api/*`
+in the RFC 0003 route-policy matrix — no separate policy entry was needed.
+Issue #49 should expose the read-only surface under `/api/v1`:
 
 ```text
 GET /api/v1/meta
