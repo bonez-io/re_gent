@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
+import { api } from '../../api/client'
 import { onboardingApi, type AuthMethodSettings, type AuthMethodSettingsPatch, type Invitation, type InvitationOrgRole } from '../../api/onboarding'
 import { OnboardingLayout, OnboardingPending, OnboardingProblem } from './chrome'
 import { onboardingPathFor } from './path'
@@ -29,6 +30,9 @@ export function UsersScreen() {
   const authMethods = useQuery({ queryKey: ['onboarding-auth-methods', slug], queryFn: () => onboardingApi.authMethods(slug!), enabled: Boolean(slug) && deployment === 'self-hosted', retry: false })
   const connections = useQuery({ queryKey: ['onboarding-connections-snapshot', slug], queryFn: () => onboardingApi.connections(slug!), enabled: Boolean(slug), retry: false })
   const invitations = useQuery({ queryKey: ['onboarding-invitations', slug], queryFn: () => onboardingApi.invitations(slug!), enabled: Boolean(slug), retry: false })
+  // Managed only: whether the service provisions and operates GitHub/Google itself.
+  const capabilities = useQuery({ queryKey: ['onboarding-capabilities'], queryFn: api.capabilities, enabled: deployment === 'managed', retry: false })
+  const identityManaged = capabilities.data?.identity_managed === true
 
   const [draft, setDraft] = useState<AuthDraft>(emptyDraft)
   const draftInitialized = useRef(false)
@@ -54,13 +58,13 @@ export function UsersScreen() {
   const [inviteBy, setInviteBy] = useState<'email' | 'username'>('email')
   const [inviteValue, setInviteValue] = useState('')
   const [inviteRole, setInviteRole] = useState<InvitationOrgRole>('member')
-  const [lastInvite, setLastInvite] = useState<{ id: string; link: string }>()
+  const [lastInvite, setLastInvite] = useState<{ id: string; link: string; emailed: boolean }>()
   const [copiedId, setCopiedId] = useState<string>()
 
   const createInvitation = useMutation({
     mutationFn: () => onboardingApi.createInvitation(slug!, { ...(inviteBy === 'email' ? { email: inviteValue } : { username: inviteValue }), org_role: inviteRole, grants: defaultGrants }),
     onSuccess: async (response) => {
-      setLastInvite({ id: response.id, link: response.link })
+      setLastInvite({ id: response.id, link: response.link, emailed: response.emailed })
       setInviteValue('')
       await queryClient.invalidateQueries({ queryKey: ['onboarding-invitations', slug] })
     },
@@ -86,9 +90,9 @@ export function UsersScreen() {
       <h2 className="m-0 text-[12.5px] font-semibold">Sign-in methods</h2>
       {deployment === 'managed'
         ? <div className="mt-2 grid gap-1.5 rounded-[8px] border border-line bg-inset p-3 text-[11.5px]">
-          <div className="flex items-center justify-between"><span>GitHub</span><span className="text-ink-3">On · not configurable</span></div>
-          <div className="flex items-center justify-between"><span>Google</span><span className="text-ink-3">On · not configurable</span></div>
-          <p className="m-0 mt-1 text-[10.5px] text-ink-3">The service manages these OAuth apps. Verified domains come later.</p>
+          <div className="flex items-center justify-between"><span>GitHub</span><span className="text-ink-3">{identityManaged ? 'On · managed by re_gent' : 'On · not configurable'}</span></div>
+          <div className="flex items-center justify-between"><span>Google</span><span className="text-ink-3">{identityManaged ? 'On · managed by re_gent' : 'On · not configurable'}</span></div>
+          <p className="m-0 mt-1 text-[10.5px] text-ink-3">{identityManaged ? 're_gent provisions and operates these OAuth apps for you — nothing to configure.' : 'The service manages these OAuth apps. Verified domains come later.'}</p>
         </div>
         : authMethods.isPending ? <p className="mt-2 text-[11.5px] text-ink-3">Loading sign-in settings…</p>
           : authMethods.error ? <p role="alert" className="mt-2 text-[11.5px] text-red">{authMethods.error.message}</p>
@@ -142,6 +146,7 @@ export function UsersScreen() {
       {createInvitation.error && <p role="alert" className="mt-2 text-[11px] text-red">{createInvitation.error.message}</p>}
 
       {lastInvite && <div role="status" className="mt-3 flex items-center gap-2 overflow-hidden rounded-[8px] border border-green/30 bg-green/10 px-3 py-2">
+        {lastInvite.emailed && <span className="shrink-0 text-[10.5px] font-medium text-green">Email sent</span>}
         <span className="min-w-0 flex-1 truncate font-mono text-[11px]">{lastInvite.link}</span>
         <button type="button" onClick={() => void copyLink(lastInvite.id, lastInvite.link)} className="shrink-0 rounded-[4px] bg-field px-2.5 py-1 text-[10.5px] shadow-hairline hover:bg-hover-2">{copiedId === lastInvite.id ? 'Copied' : 'Copy link'}</button>
       </div>}

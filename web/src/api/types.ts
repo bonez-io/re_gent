@@ -18,6 +18,9 @@ export type CapabilitiesResponse = {
   /** Self-hosted only; absent once onboarding is done. */
   onboarding?: OnboardingState
   features: string[]
+  /** Managed only. When true, GitHub and Google sign-in are provisioned and operated by
+   *  re_gent itself — the org has nothing to configure. */
+  identity_managed?: boolean
 }
 
 export type AccessUser = {
