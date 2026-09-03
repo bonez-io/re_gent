@@ -1,4 +1,4 @@
-import type { AcceptInvitationResponse, AuthMeResponse, AuthSessionResponse, BlameResponse, CapabilitiesResponse, CreateOrgResponse, CreateRepoResponse, CreateTokenResponse, CreateUserResponse, FilesResponse, InvitationResponse, LogResponse, LogStep, MembersResponse, PasswordLoginResponse, ProjectRole, ProjectsResponse, RepoListResponse, SessionsResponse, StatusResponse, StepDiffResponse, TokensResponse, TranscriptResponse, UsersResponse } from './types'
+import type { AcceptInvitationResponse, AuthMeResponse, AuthSessionResponse, BlameResponse, CapabilitiesResponse, CreateOrgResponse, CreateRepoResponse, CreateTokenResponse, CreateUserResponse, FeedResponse, FilesResponse, InvitationResponse, LogResponse, LogStep, MembersResponse, PasswordLoginResponse, ProjectRole, ProjectsResponse, RepoListResponse, SessionsResponse, StatusResponse, StepDiffResponse, TokensResponse, TranscriptResponse, UsersResponse } from './types'
 import {
   demoRepoId,
   mockBlameResponse,
@@ -110,4 +110,14 @@ export const api = {
     return request<FilesResponse>(`${repoPath(repoId)}/files${query.size ? `?${query}` : ''}`)
   },
   blame: (repoId: string, step: string, path: string) => demoOnly(repoId) ? Promise.resolve({ ...mockBlameResponse, step_hash: step, path }) : request<BlameResponse>(`${repoPath(repoId)}/blame?step=${encodeURIComponent(step)}&path=${encodeURIComponent(path)}`),
+  // Long-pollable feed of newly captured steps: call once with no `since` to obtain a
+  // starting cursor, then pass that cursor back with a `timeout` (seconds) to hold the
+  // request open until a new step lands or the timeout elapses. Used by the onboarding
+  // tutorial; not available for the demo workspace.
+  feed: (repoId: string, since?: string, timeout?: number, signal?: AbortSignal) => {
+    const query = new URLSearchParams()
+    if (since) query.set('since', since)
+    if (timeout !== undefined) query.set('timeout', String(timeout))
+    return request<FeedResponse>(`${repoPath(repoId)}/feed${query.size ? `?${query}` : ''}`, { signal })
+  },
 }

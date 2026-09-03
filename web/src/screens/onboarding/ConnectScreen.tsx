@@ -3,7 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { onboardingApi, type Connection } from '../../api/onboarding'
 import { OnboardingLayout, OnboardingPending, OnboardingProblem } from './chrome'
-import { onboardingPathFor } from './path'
+import { onboardingPathFor, tutorialPathFor } from './path'
 import { useOnboardingBase } from './shared'
 
 function upsertConnections(existing: Connection[], incoming: Connection[]): Connection[] {
@@ -71,7 +71,13 @@ export function ConnectScreen() {
     mutationFn: () => onboardingApi.advance(slug!, 'users'),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['onboarding-org', slug] })
-      navigate(onboardingPathFor({ slug: slug!, onboarding: 'users' }, deployment))
+      // A repository actually connected: show the guided tutorial for it before Users.
+      // Nothing connected yet (e.g. "Skip for now" before running the command) skips
+      // straight to Users as before — there is nothing to demo against.
+      const repoId = connections[connections.length - 1]?.project_id
+      navigate(repoId
+        ? `${tutorialPathFor({ slug: slug! }, deployment)}?repo=${encodeURIComponent(repoId)}`
+        : onboardingPathFor({ slug: slug!, onboarding: 'users' }, deployment))
     },
   })
 

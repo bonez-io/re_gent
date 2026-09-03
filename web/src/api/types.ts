@@ -117,6 +117,11 @@ export type BlameResponse = {
   lines: Array<{ number: number; content: string; step_hash?: string; origin?: string; timestamp?: string }>
 }
 
+/** GET /<repo>/api/feed — a long-pollable stream of newly captured steps, used by the
+ *  onboarding tutorial to detect when a guided prompt has landed. */
+export type FeedStep = { hash: string; session_id: string; origin: string; turn_id: string; timestamp: string; files: string[]; prompt: string }
+export type FeedResponse = { cursor: string; steps: FeedStep[] }
+
 export type Conversation = {
   id: string
   title: string
