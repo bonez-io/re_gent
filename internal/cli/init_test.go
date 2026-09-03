@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/bonez-io/re_gent/internal/config"
@@ -384,4 +385,25 @@ func countCommand(commands []string, expected string) int {
 		}
 	}
 	return count
+}
+
+func TestEnsureOpenCodePackageWritesOnceAndKeepsExisting(t *testing.T) {
+	dir := t.TempDir()
+	if err := ensureOpenCodePackage(dir); err != nil {
+		t.Fatal(err)
+	}
+	first, err := os.ReadFile(filepath.Join(dir, "package.json"))
+	if err != nil || !strings.Contains(string(first), "\"private\": true") {
+		t.Fatalf("package.json not written as expected: %v %s", err, first)
+	}
+	custom := []byte("{\"name\":\"mine\"}")
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), custom, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureOpenCodePackage(dir); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "package.json")); string(got) != string(custom) {
+		t.Fatalf("existing package.json was overwritten: %s", got)
+	}
 }

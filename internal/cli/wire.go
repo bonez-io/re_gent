@@ -63,8 +63,10 @@ func wireAgentsTo(projectRoot string, targets []agentTarget, out io.Writer) ([]a
 			installed = append(installed, agentCodex)
 
 		case agentOpenCode:
+			// OpenCode's plugin needs npm and the registry; neither is a
+			// reason to leave Claude Code or Codex unwired. Report and go on.
 			if err := installOpenCodeHook(projectRoot); err != nil {
-				failures = append(failures, fmt.Errorf("configure OpenCode plugin: %w", err))
+				fmt.Fprintf(out, "  ⚠ OpenCode plugin not installed: %v\n    Re-run with --verbose for the npm output.\n", err)
 				continue
 			}
 			reportWiredTo(out, "OpenCode", filepath.Join(projectRoot, "opencode.jsonc"))

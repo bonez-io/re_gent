@@ -451,8 +451,24 @@ func installOpenCodeHook(projectRoot string) error {
 	return registerOpenCodePlugin(projectRoot)
 }
 
+// ensureOpenCodePackage gives .opencode its own package.json. Without one,
+// npm walks up to the nearest package.json and installs into the user's
+// project instead, which fails outright in pnpm workspaces ("catalog:") and
+// would otherwise rewrite their dependencies.
+func ensureOpenCodePackage(opencodeDir string) error {
+	path := filepath.Join(opencodeDir, "package.json")
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	}
+	manifest := "{\n  \"name\": \"regent-opencode-integration\",\n  \"private\": true,\n  \"description\": \"re_gent OpenCode plugin, managed by rgt connect\"\n}\n"
+	return os.WriteFile(path, []byte(manifest), 0o644)
+}
+
 func npmInstallOpenCodePlugin(opencodeDir string) error {
-	cmd := exec.Command("npm", "install", "--save", "@regent-vcs/opencode-plugin")
+	if err := ensureOpenCodePackage(opencodeDir); err != nil {
+		return fmt.Errorf("prepare .opencode: %w", err)
+	}
+	cmd := exec.Command("npm", "install", "--save", "--prefix", opencodeDir, "@regent-vcs/opencode-plugin")
 	cmd.Dir = opencodeDir
 	return runSetupCommand(cmd, "install OpenCode integration")
 }
