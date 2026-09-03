@@ -274,6 +274,12 @@ type installData struct {
 // from. The scheme honors X-Forwarded-Proto (set by a TLS-terminating proxy)
 // and otherwise defaults to http; the host is the request's Host header.
 func baseURL(r *http.Request) string {
+	// The operator's declared public address wins over anything inferred
+	// from the request: proxies drop ports and rewrite hosts, and a wrong
+	// base here sends every teammate's install to the wrong place.
+	if public := strings.TrimSpace(os.Getenv("REGENT_PUBLIC_URL")); public != "" {
+		return strings.TrimRight(public, "/")
+	}
 	scheme := "http"
 	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
 		// A forwarding proxy may send a comma-separated list; the first entry is
